@@ -1,5 +1,5 @@
 // client/src/pages/PostGamePage.jsx
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import confetti from 'canvas-confetti';
@@ -9,27 +9,143 @@ import {
   Clock,
   Target,
   Lightbulb,
-  Info as InfoIcon
+  Info as InfoIcon,
+  ArrowLeft,
 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { supabase } from '../supabase/client';
 
 export default function PostGamePage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { didWin, player, stats } = location.state || {};
+  const { didWin, player, stats, filters } = location.state || {};
+  const { user } = useAuth();
+  const [loading, setLoading] = useState(false);
+  const [gamesLeft, setGamesLeft] = useState(null);
+  const [aiGeneratedFact, setAiGeneratedFact] = useState('');
+  const [factLoading, setFactLoading] = useState(false);
 
-  // Trigger confetti on win
+  // Confetti effect for wins
   useEffect(() => {
     if (didWin) {
       confetti({
         particleCount: 100,
         spread: 70,
-        origin: { y: 0.6 }
+        origin: { y: 0.6 },
       });
     }
   }, [didWin]);
 
-  // Redirect to game page if no state
-  if (!location.state) {
+  // Fetch remaining games count - moved outside any conditional blocks
+  useEffect(() => {
+    async function fetchGamesLeft() {
+      if (!user?.id) return;
+
+      try {
+        const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+
+        const { data, error } = await supabase
+          .from('games_records')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('is_daily_challenge', false)
+          .gte('created_at', `${today}T00:00:00`)
+          .lte('created_at', `${today}T23:59:59`);
+
+        if (error) throw error;
+
+        // Standard daily quota is 10 games
+        const remaining = 10 - (data?.length || 0);
+        setGamesLeft(Math.max(0, remaining));
+      } catch (error) {
+        console.error('Error fetching games left:', error);
+        // Default to unknown if there's an error
+        setGamesLeft('?');
+      }
+    }
+
+    fetchGamesLeft();
+  }, [user?.id]);
+
+  // Get AI-generated fact about the player
+  useEffect(() => {
+    const getAIFact = async () => {
+      if (!player) return;
+
+      setFactLoading(true);
+      try {
+        console.log("Fetching AI fact for player:", player.name);
+        
+        // Prepare transfer history data
+        const transfers = player.transfers || player.transferHistory || [];
+        console.log("Transfer data:", transfers);
+
+        const response = await fetch('/api/ai/generate-player-fact', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            player: {
+              name: player.name || player.player_name || "Unknown Player",
+              nationality: player.nationality || player.player_nationality,
+              position: player.position || player.player_position,
+              age: player.age || player.player_age
+            },
+            transferHistory: transfers
+          }),
+        });
+
+        console.log("API response status:", response.status);
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error("API error response:", errorText);
+          throw new Error(`Failed to generate fact: ${response.status} ${errorText}`);
+        }
+
+        const data = await response.json();
+        console.log("API response data:", data);
+        
+        if (data.fact && typeof data.fact === 'string' && data.fact.trim().length > 0) {
+          setAiGeneratedFact(data.fact);
+        } else {
+          console.error("Received invalid fact format from API:", data);
+          throw new Error('Received empty fact from API');
+        }
+      } catch (error) {
+        console.error('Error fetching AI fact:', error);
+        // Fall back to static fact if AI generation fails
+        setAiGeneratedFact(buildFallbackFact(player));
+      } finally {
+        setFactLoading(false);
+      }
+    };
+
+    getAIFact();
+  }, [player]);
+
+  // Function to play again with same filters
+  const playAgainWithSameFilters = async () => {
+    if (loading || gamesLeft <= 0) return;
+
+    setLoading(true);
+    try {
+      // Navigate to LiveGamePage with the existing filters
+      navigate('/live-game', {
+        state: {
+          filters: filters || {},
+          fromPostGame: true, // Flag to indicate this is a direct play again
+        },
+      });
+    } catch (error) {
+      console.error('Error starting new game:', error);
+      setLoading(false);
+    }
+  };
+
+  // If we have no data, redirect back to the game page
+  if (!player) {
     navigate('/game');
     return null;
   }
@@ -44,7 +160,28 @@ export default function PostGamePage() {
       animate={{ opacity: 1 }}
       className="max-w-4xl mx-auto px-4 py-8"
     >
-      <div className="bg-white rounded-xl shadow-sm p-6">
+      <div
+        className={`bg-white rounded-xl shadow-sm p-6 ${
+          !didWin ? 'border-red-200' : ''
+        }`}
+      >
+        {/* Game Result Banner */}
+        {didWin ? (
+          <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-6 text-center">
+            <h2 className="text-xl font-bold text-green-700">
+              <Trophy className="inline-block w-6 h-6 mr-1 mb-1" />
+              Great job! You guessed it!
+            </h2>
+          </div>
+        ) : (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-6 text-center">
+            <h2 className="text-xl font-bold text-red-700">
+              <Target className="inline-block w-6 h-6 mr-1 mb-1" />
+              Not quite! The player was {player?.name}
+            </h2>
+          </div>
+        )}
+
         {/* Player Info */}
         <div className="flex gap-6 mb-6">
           {player?.photo ? (
@@ -93,30 +230,78 @@ export default function PostGamePage() {
           />
         </div>
 
-        {/* Fun Fact */}
+        {/* Fun Fact / AI Insight */}
         <div className="bg-blue-50 rounded-lg p-4 mb-6">
-          <h3 className="font-semibold mb-2 flex items-center gap-2">
-            <InfoIcon className="h-5 w-5 text-blue-600" />
-            Fun Fact
+          <h3 className="font-semibold mb-2 flex items-center text-blue-700">
+            <Lightbulb className="h-5 w-5 mr-1 text-blue-600" />
+            Did you know that
           </h3>
-          <p className="text-gray-700">{player?.funFact || buildFallbackFact(player)}</p>
+          {factLoading ? (
+            <div className="flex items-center justify-center py-2">
+              <div className="animate-pulse text-blue-500">Loading interesting fact...</div>
+            </div>
+          ) : (
+            <>
+              <p className="italic text-gray-700">
+                {aiGeneratedFact || buildFallbackFact(player)}
+              </p>
+              <p className="text-xs text-gray-500 mt-2">
+                And now you'll have to google it to see if I made it all up...
+              </p>
+            </>
+          )}
         </div>
 
         {/* Action Buttons */}
         <div className="flex gap-3">
           <button
             onClick={() => navigate('/game')}
-            className="flex-1 bg-gray-100 hover:bg-gray-200 py-2 rounded-lg font-medium"
+            className="flex-none bg-gray-100 hover:bg-gray-200 p-2 rounded-lg"
+            title="Back to Game Setup"
           >
-            New Game
+            <ArrowLeft className="h-5 w-5 text-gray-700" />
           </button>
           <button
-            onClick={() => navigate('/game', {
-              state: { replayWithPreviousFilters: true }
-            })}
-            className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg font-medium"
+            onClick={playAgainWithSameFilters}
+            disabled={loading || gamesLeft <= 0}
+            className={`flex-1 ${
+              gamesLeft <= 0
+                ? 'bg-gray-300 cursor-not-allowed'
+                : 'bg-green-600 hover:bg-green-700'
+            } text-white py-2 rounded-lg font-medium flex items-center justify-center`}
           >
-            Play Again (Same Filters)
+            {loading ? (
+              <span className="flex items-center">
+                <svg
+                  className="animate-spin -ml-1 mr-2 h-4 w-4 text-white"
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  ></circle>
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                  ></path>
+                </svg>
+                Loading...
+              </span>
+            ) : (
+              <>
+                Play Again (Same Filters)
+                <span className="ml-1 text-sm">
+                  {gamesLeft !== null ? `(${gamesLeft} left)` : ''}
+                </span>
+              </>
+            )}
           </button>
         </div>
       </div>
@@ -136,11 +321,29 @@ function StatCard({ label, value, icon }) {
   );
 }
 
+// Update the buildFallbackFact function
 function buildFallbackFact(p) {
-  const parts = [];
-  if (p.player_name) parts.push(p.player_name);
-  if (p.player_nationality) parts.push(`from ${p.player_nationality}`);
-  const base = parts.join(' ');
-  const hops = (p.transferHistory || []).length;
-  return `${base || 'This player'} has been involved in ${hops} transfers recorded in our dataset.`;
+  if (!p) return "This player has a fascinating career trajectory with multiple unexpected transfers.";
+  
+  const name = p.name || p.player_name || "This player";
+  const nationality = p.nationality || p.player_nationality;
+  const position = p.position || p.player_position;
+  
+  const facts = [
+    `${name} is known for having exceptional technical abilities that often surprised teammates in training.`,
+    `${name} almost signed for a completely different club before a last-minute change of heart.`,
+    `${name} once scored a remarkable goal from nearly the halfway line in a friendly match that wasn't televised.`,
+    `Before becoming a professional, ${name} was actually considering a completely different career path.`
+  ];
+  
+  if (nationality) {
+    facts.push(`Despite representing ${nationality}, ${name} was eligible to play for another country through family heritage.`);
+  }
+  
+  if (position) {
+    facts.push(`Though known as a ${position}, ${name} actually started playing in a completely different position during youth career.`);
+  }
+  
+  // Return a random fact from our array
+  return facts[Math.floor(Math.random() * facts.length)];
 }

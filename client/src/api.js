@@ -33,9 +33,21 @@ export const getCounts = (filters) =>
     },
     body: JSON.stringify(filters) 
   });
-export const getRandomPlayer = (filters) =>
-  jfetch('/random-player', { method: 'POST', body: JSON.stringify(filters) });
-export const getLimits = () => jfetch('/limits');
+export const getRandomPlayer = (filters, userId = null) => {
+  console.log('🎯 getRandomPlayer called with filters:', filters, 'userId:', userId);
+  
+  // Include userId in the filters object if provided
+  const filtersWithUser = userId ? { ...filters, userId } : filters;
+  
+  return jfetch('/random-player', { 
+    method: 'POST', 
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(filtersWithUser) 
+  });
+};
+export const getLimits = (userId) => jfetch(`/limits?userId=${userId}`);
 export const getDailyChallenge = () => jfetch('/daily');
 
 /* Optional extras used elsewhere */
@@ -54,3 +66,16 @@ export async function addGameRecord(gameRecord) {
     body: JSON.stringify(gameRecord)
   });
 }
+
+// Add this to client/src/api.js
+export const fetchTransfers = async (playerId) => {
+  try {
+    console.log('🔍 Fetching transfers for player ID:', playerId);
+    const response = await jfetch(`/transfers/${playerId}`);
+    console.log('📋 Transfers API response:', response);
+    return response.transfers || [];
+  } catch (error) {
+    console.error('❌ Error fetching transfers:', error);
+    return [];
+  }
+};

@@ -11,9 +11,11 @@ import {
   Star,
   Trash2,
   UsersRound,
-  Trophy,     // Added
-  User,       // Added
-  Calendar    // Added
+  Trophy,
+  User,
+  Calendar,
+  Clock,  // Add this
+  TrendingUp // Add this
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import SelectedChips from '../components/SelectedChips';
@@ -27,7 +29,10 @@ export default function ProfilePage() {
   const { user, refresh, signOut } = useAuth();
   const navigate = useNavigate();
   
-  // State declarations
+  // Add this state declaration 
+  const [localStats, setLocalStats] = useState({});
+  
+  // Rest of your existing state declarations...
   const [recentGames, setRecentGames] = useState([]);
   const [fullName, setFullName] = useState(
     user?.user_metadata?.full_name || 
@@ -105,27 +110,63 @@ export default function ProfilePage() {
     }
   }, [user]);
 
-  // Add this useEffect to fetch recent games
+  // Update the useEffect for fetching recent games and calculating statistics
   useEffect(() => {
     const fetchRecentGames = async () => {
+      if (!user?.id) return;
+      
       try {
-        const { data, error } = await supabase
-          .from('gamesRecords')
+        setLoading(true);
+        
+        // Get recent games
+        const { data: games, error } = await supabase
+          .from('games_records')
           .select('*')
-          .eq('user_id', user?.id)
-          .order('played_at', { ascending: false })
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
           .limit(20);
 
         if (error) throw error;
-        setRecentGames(data || []);
+        
+        console.log("Fetched recent games:", games);
+        setRecentGames(games || []);
+        
+        // Calculate statistics directly from all games, not just the recent ones
+        const { data: allGames, error: statsError } = await supabase
+          .from('games_records')
+          .select('points_earned, time_taken_seconds, guesses_attempted, won')
+          .eq('user_id', user.id);
+          
+        if (statsError) throw statsError;
+        
+        if (allGames && allGames.length > 0) {
+          const totalGames = allGames.length;
+          const wonGames = allGames.filter(game => game.won).length;
+          const totalPoints = allGames.reduce((sum, game) => sum + (game.points_earned || 0), 0);
+          const totalTime = allGames.reduce((sum, game) => sum + (game.time_taken_seconds || 0), 0);
+          
+          console.log("Stats calculation:", {
+            games_played: totalGames,
+            won_games: wonGames,
+            total_points: totalPoints,
+            total_time: totalTime
+          });
+          
+          setLocalStats({
+            games_played: totalGames,
+            total_points: totalPoints,
+            avg_time: totalGames > 0 ? Math.round(totalTime / totalGames) : 0,
+            success_rate: totalGames > 0 ? Math.round((wonGames / totalGames) * 100) : 0
+          });
+        }
       } catch (error) {
-        console.error('Error fetching recent games:', error);
+        console.error('Error fetching games data:', error);
+      } finally {
+        setLoading(false);
       }
     };
 
-    if (user?.id) {
-      fetchRecentGames();
-    }
+    fetchRecentGames();
   }, [user?.id]);
 
   // Load default filters on user change
@@ -365,12 +406,12 @@ export default function ProfilePage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen">
       <div className="max-w-5xl mx-auto px-4 pt-8 pb-6">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {/* Left column - Profile Info */}
           <div className="md:col-span-1">
-            <div className="bg-white rounded-xl shadow-sm p-6">
+            <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-6">
               <div className="flex flex-col items-center">
                 {/* Avatar with upload */}
                 <div className="relative group mb-4">
@@ -442,70 +483,97 @@ export default function ProfilePage() {
           {/* Right column - Stats and other content */}
           <div className="md:col-span-2 space-y-6">
             {/* Stats Card */}
-            <div className="bg-white rounded-xl shadow-sm p-6">
+            <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-6">
               <h2 className="text-xl font-semibold mb-4">Statistics</h2>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="border rounded-lg p-4">
-                  <div className="text-sm text-gray-600">Games Played</div>
-                  <div className="text-2xl font-semibold">{user?.games_played || 0}</div>
-                </div>
-                <div className="border rounded-lg p-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="border rounded-lg p-4 text-center">
+                  <div className="flex justify-center mb-2 text-yellow-500">
+                    <Trophy className="h-6 w-6" />
+                  </div>
+                  <div className="text-2xl font-semibold">
+                    {localStats.total_points || 0}
+                  </div>
                   <div className="text-sm text-gray-600">Total Points</div>
-                  <div className="text-2xl font-semibold">{user?.total_points || 0}</div>
+                </div>
+                <div className="border rounded-lg p-4 text-center">
+                  <div className="flex justify-center mb-2 text-green-500">
+                    <UsersRound className="h-6 w-6" />
+                  </div>
+                  <div className="text-2xl font-semibold">
+                    {localStats.games_played || 0}
+                  </div>
+                  <div className="text-sm text-gray-600">Games Played</div>
+                </div>
+                <div className="border rounded-lg p-4 text-center">
+                  <div className="flex justify-center mb-2 text-blue-500">
+                    <Clock className="h-6 w-6" />
+                  </div>
+                  <div className="text-2xl font-semibold">
+                    {localStats.avg_time ? `${localStats.avg_time}s` : '0s'}
+                  </div>
+                  <div className="text-sm text-gray-600">Average Time</div>
+                </div>
+                <div className="border rounded-lg p-4 text-center">
+                  <div className="flex justify-center mb-2 text-purple-500">
+                    <TrendingUp className="h-6 w-6" />
+                  </div>
+                  <div className="text-2xl font-semibold">
+                    {localStats.success_rate ? `${localStats.success_rate}%` : '0%'}
+                  </div>
+                  <div className="text-sm text-gray-600">Success Rate</div>
                 </div>
               </div>
             </div>
 
             {/* Recent Games Card */}
-            <div className="bg-white rounded-xl shadow-sm p-6">
+            <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-6">
               <h2 className="text-xl font-semibold mb-4">Recent Games</h2>
-              {loading ? (
-                <div className="text-center py-4">Loading...</div>
-              ) : (
-                <div className="divide-y divide-gray-200">
-                  {recentGames.length === 0 ? (
-                    <p className="text-gray-500 text-center py-4">No games played yet</p>
-                  ) : (
-                    recentGames.map((game) => (
+              <div className="h-96 overflow-y-auto pr-1">
+                {loading ? (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-700"></div>
+                  </div>
+                ) : recentGames.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                    <div className="mb-2">
+                      <Trophy className="h-12 w-12 opacity-30" />
+                    </div>
+                    <p>No games played yet</p>
+                    <p className="text-sm">Start playing to see your game history</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {recentGames.map((game) => (
                       <div
                         key={game.id}
-                        className="py-3 flex items-center justify-between"
+                        className="border rounded-lg p-3 hover:bg-gray-50 transition-colors"
                       >
-                        <div className="flex items-center space-x-3">
-                          <div className="flex-shrink-0">
-                            {game.is_daily ? (
-                              <Trophy className="h-5 w-5 text-yellow-500" />
-                            ) : (
-                              <User className="h-5 w-5 text-blue-500" />
-                            )}
-                          </div>
+                        <div className="flex justify-between items-center">
                           <div>
-                            <div className="font-medium">
-                              {game.is_daily ? 'Daily Challenge' : 'Practice Game'}
-                            </div>
-                            <div className="text-sm text-gray-500 flex items-center">
-                              <Calendar className="h-4 w-4 mr-1" />
-                              {new Date(game.played_at).toLocaleDateString()}
+                            <div className="font-medium">{game.player_name || "Unknown Player"}</div>
+                            <div className="text-sm text-gray-500">
+                              {new Date(game.created_at).toLocaleDateString()}
                             </div>
                           </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="font-semibold text-green-600">
-                            +{game.points} pts
-                          </div>
-                          <div className="text-sm text-gray-500">
-                            {game.guesses} {game.guesses === 1 ? 'guess' : 'guesses'}
+                          <div className="text-right">
+                            <div className={`font-bold ${game.won ? 'text-green-600' : 'text-red-600'}`}>
+                              {game.won ? `+${game.points_earned}` : '0'} pts
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              {game.guesses_attempted} {game.guesses_attempted === 1 ? 'guess' : 'guesses'} 
+                              {game.is_daily_challenge && ' • Daily Challenge'}
+                            </div>
                           </div>
                         </div>
                       </div>
-                    ))
-                  )}
-                </div>
-              )}
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Default Filters Card */}
-            <div className="rounded-xl border bg-green-50/60 p-4">
+            <div className="rounded-xl shadow-md transition-all hover:shadow-lg border bg-green-50/60 p-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Filter className="h-5 w-5 text-green-700" />
@@ -672,33 +740,23 @@ export default function ProfilePage() {
                       <input
                         type="number"
                         value={defaultMinApps}
-                        onChange={(e) => setDefaultMinApps(Math.max(0, e.target.valueAsNumber || 0))}
-                        placeholder="Enter minimum appearances"
-                        className="w-full px-3 py-2 border rounded-md"
+                        onChange={(e) => setDefaultMinApps(parseInt(e.target.value) || 0)}
+                        min="0"
+                        max="100"
+                        className="w-full px-3 py-2 border rounded-md text-center"
                       />
+                      <div className="text-xs text-gray-500 text-center mt-1">
+                        Minimum appearances in a season
+                      </div>
                     </div>
+                  </div>
+
+                  {/* Save Button */}
+                  <div className="flex justify-end mt-4">
+                    {saveFiltersButton}
                   </div>
                 </div>
               )}
-
-              {/* Save button - place this at the bottom of your filters section */}
-              <button
-                onClick={saveDefaultFilters}
-                disabled={isSaving || !hasChanges}
-                className={`w-full mt-6 px-4 py-2 rounded-md transition-colors ${
-                  !hasChanges 
-                    ? 'bg-gray-400 cursor-not-allowed text-white'
-                    : isSaving
-                    ? 'bg-yellow-500 cursor-wait text-white'
-                    : 'bg-green-600 hover:bg-green-700 text-white'
-                }`}
-              >
-                {isSaving 
-                  ? 'Saving...' 
-                  : hasChanges 
-                  ? 'Save Default Filters'
-                  : 'Filters Saved'}
-              </button>
             </div>
           </div>
         </div>

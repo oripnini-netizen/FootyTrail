@@ -10,6 +10,7 @@ import {
 } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { motion } from 'framer-motion';
 
 // lucide icons
 import {
@@ -37,6 +38,9 @@ export default function GamePage() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
+  // Add this state to track overall page loading
+  const [pageReady, setPageReady] = useState(false);
+
   // Initialize state with empty arrays/objects to prevent undefined
   const [daily, setDaily] = useState(null);
   const [loadingFilters, setLoadingFilters] = useState(true);
@@ -46,6 +50,7 @@ export default function GamePage() {
   const [selectedLeagueIds, setSelectedLeagueIds] = useState([]);
   const [selectedSeasons, setSelectedSeasons] = useState([]);
   const [minApps, setMinApps] = useState(0);
+  const [loadingCounts, setLoadingCounts] = useState(false); // Add this line
 
   // Add these new state declarations
   const [leagueTags, setLeagueTags] = useState([]);
@@ -67,6 +72,7 @@ export default function GamePage() {
 
   // Daily challenge state
   const [limits, setLimits] = useState({ gamesToday: 0, dailyPlayed: false });
+  const [gameLoading, setGameLoading] = useState(false); // <-- Add the missing state here
 
   // ---------- Load filters + limits + daily card ----------
   useEffect(() => {
@@ -75,13 +81,13 @@ export default function GamePage() {
     async function load() {
       try {
         setLoadingFilters(true);
+        setPageReady(false); // Ensure page shows loading state
 
         // leagues
-        const leaguesRes = await getLeagues(); // { groupedByCountry, tags }
+        const leaguesRes = await getLeagues();
         if (!cancelled) {
           setGroupedLeagues(leaguesRes.groupedByCountry || {});
           setLeagueTags(leaguesRes.tags || []);
-          // initialize collapse state (all collapsed)
           const initialCollapse = {};
           Object.keys(leaguesRes.groupedByCountry || {}).forEach((c) => {
             initialCollapse[c] = false;
@@ -90,18 +96,27 @@ export default function GamePage() {
         }
 
         // seasons
-        const seasonsRes = await getSeasons(); // { seasons: [2025, 2024, ...] }
+        const seasonsRes = await getSeasons();
         if (!cancelled) setAllSeasons(seasonsRes.seasons || []);
 
-        // user limits + daily
+        // user limits (only if user is available)
         if (user?.id) {
-          const lim = await getLimits(user.id);
-          if (!cancelled) setLimits(lim);
+          try {
+            const lim = await getLimits(user.id);
+            if (!cancelled) setLimits(lim || { gamesToday: 0, dailyPlayed: false, pointsToday: 0, pointsTotal: 0 });
+          } catch (limitsError) {
+            console.error('Error fetching limits:', limitsError);
+            if (!cancelled) setLimits({ gamesToday: 0, dailyPlayed: false, pointsToday: 0, pointsTotal: 0 });
+          }
+        } else {
+          if (!cancelled) setLimits({ gamesToday: 0, dailyPlayed: false, pointsToday: 0, pointsTotal: 0 });
         }
+
+        // daily challenge
         const d = await getDailyChallenge().catch(() => null);
         if (!cancelled) setDaily(d || null);
       } catch (e) {
-        console.error(e);
+        console.error('Error loading page data:', e);
       } finally {
         if (!cancelled) setLoadingFilters(false);
       }
@@ -113,40 +128,50 @@ export default function GamePage() {
     };
   }, [user?.id]);
 
-  // ---------- Recompute counts whenever filters change ----------
+  // Update the counts effect to manage pageReady state
   useEffect(() => {
     let cancelled = false;
 
     async function recalc() {
       try {
+        setLoadingCounts(true);
+        setPageReady(false); // Keep page in loading state while recalculating
+        
         const payload = {
           leagues: selectedLeagueIds,
           seasons: selectedSeasons,
           minAppearances: Number(minApps) || 0,
+          userId: user?.id
         };
-        
-        console.log('Sending filters for count:', payload); // Debug log
         
         const { poolCount: filteredCount, totalCount: dbTotal } = await getCounts(payload);
         
         if (!cancelled) {
-          // poolCount should be the filtered count (left side)
-          // totalCount should be the total database count (right side)
-          setPoolCount(filteredCount || 0);  // This is the filtered count
-          setTotalCount(dbTotal || 0);       // This is the total in DB
+          setPoolCount(filteredCount || 0);
+          setTotalCount(dbTotal || 0);
+          
+          // Now that everything is calculated, we can show the page
+          setPageReady(true);
         }
       } catch (e) {
         console.error('Error getting counts:', e);
         if (!cancelled) {
           setPoolCount(0);
           setTotalCount(0);
+          setPageReady(true); // Show page even if there's an error
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingCounts(false);
         }
       }
     }
 
     if (!loadingFilters) recalc();
+    else setPageReady(false); // Keep loading state while filters are loading
+    
     return () => { cancelled = true; };
-  }, [loadingFilters, selectedLeagueIds, selectedSeasons, minApps]);
+  }, [loadingFilters, selectedLeagueIds, selectedSeasons, minApps, user?.id]);
 
   // Build label map: league_id -> "Country - League Name"
   const leagueIdToLabel = useMemo(() => {
@@ -181,7 +206,7 @@ export default function GamePage() {
           leagues: selectedLeagueIds,
           seasons: selectedSeasons,
           minAppearances: Number(minApps) || 0,
-          potentialPoints,
+          potentialPoints:potentialPoints,
         },
         isDaily,
       },
@@ -191,16 +216,70 @@ export default function GamePage() {
   // ---------- Start regular game ----------
   const onStartGame = async () => {
     try {
-      const payload = {
+      setGameLoading(true);
+      
+      // Make sure we're using the current filter state
+      const currentFilters = {
         leagues: selectedLeagueIds,
         seasons: selectedSeasons,
         minAppearances: Number(minApps) || 0,
+        userId: user?.id  // Add this line
       };
-      const p = await getRandomPlayer(payload);
-      goToLiveGame(p, false);
-    } catch (e) {
-      alert(e.message || 'Failed to start game');
+      
+      // Pass user ID as second parameter
+      const randomPlayer = await getRandomPlayer(currentFilters, user?.id);
+      console.log('🎮 Received player:', randomPlayer);
+      
+      if (!randomPlayer) {
+        alert('No players found with current filters. Try adjusting your selection.');
+        return;
+      }
+
+      // Calculate potential points - Make sure this is working
+      const potentialPoints = poolCount * 5; // Direct calculation
+      console.log('🎮 Using direct calculation:', potentialPoints);
+      
+      if (!potentialPoints || potentialPoints <= 0) {
+        console.error('❌ Invalid potential points calculated:', potentialPoints);
+      }
+
+      const gameData = {
+        ...randomPlayer,
+        isDaily: false,
+        filters: {
+          ...currentFilters,
+          potentialPoints
+        },
+        potentialPoints
+      };
+
+      console.log('🎮 Final game data:', gameData);
+      console.log('🎮 About to navigate to /live');
+      console.log('🎮 Potential points being sent:', {
+      directPoints: potentialPoints, // Should be 6800
+      filtersPoints: currentFilters.potentialPoints, // This might be undefined
+      gameData: gameData // Check the entire object
+    });
+
+      navigate('/live', {
+        state: gameData,
+        replace: true 
+      });
+      
+      console.log('🎮 Navigation called successfully');
+      
+    } catch (error) {
+      console.error('Error starting game:', error);
+      alert('Failed to start game. Please try again.');
+    } finally {
+      setGameLoading(false);
     }
+  };
+
+  // Update calculatePotentialPoints function in GamePage.jsx
+  const calculatePotentialPoints = (filters) => {
+    // Use your poolCount * 5 formula directly
+    return poolCount * 5;
   };
 
   // ---------- UI pieces ----------
@@ -366,160 +445,200 @@ export default function GamePage() {
   const pointsToday = limits?.pointsToday ?? 0;
   const pointsTotal = limits?.pointsTotal ?? 0;
 
+  // Add this temporary debug function right before the "Start Game" button
+  const debugCurrentFilters = () => {
+    console.log('🔍 Current filter state:');
+    console.log('- selectedLeagueIds:', selectedLeagueIds);
+    console.log('- selectedSeasons:', selectedSeasons);
+    console.log('- minApps:', minApps);
+  };
+
+  // Add a loading spinner component
+  const LoadingSpinner = () => (
+    <div className="min-h-screen flex flex-col items-center justify-center">
+      <div className="mb-4">
+        <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-green-700"></div>
+      </div>
+      <p className="text-green-700 text-lg font-medium">Loading FootyTrail...</p>
+      <p className="text-gray-500 mt-2">Calculating player pool and preparing your challenge</p>
+    </div>
+  );
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="max-w-3xl mx-auto px-4 py-8 space-y-6">
-        {/* Daily Challenge Card */}
-        <div className="bg-white rounded-xl shadow-sm p-6 text-center">
-          <div className="flex justify-center mb-4">
-            <Star className="h-8 w-8 text-yellow-400" />
-          </div>
-          <h2 className="text-xl font-semibold mb-2">Daily Challenge</h2>
-          <p className="text-gray-600">
-            {daily ? daily.name : "Today's daily challenge is not available yet. Please check back later."}
-          </p>
-        </div>
-
-        {/* Progress Stats Card */}
-        <div className="bg-white rounded-xl shadow-sm p-6 grid grid-cols-3 gap-4">
-          <div className="text-center">
-            <div className="text-xl font-bold">
-              {limits.gamesToday || 0}/10
+    <div className="min-h-screen bg-gradient-to-b from-green-50 to-transparent">
+      {!pageReady ? (
+        <LoadingSpinner />
+      ) : (
+        <motion.div 
+          initial={{ opacity: 0 }} 
+          animate={{ opacity: 1 }} 
+          transition={{ duration: 0.4 }}
+          className="max-w-3xl mx-auto px-4 py-8 space-y-6"
+        >
+          {/* Daily Challenge Card */}
+          <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-6 text-center">
+            <div className="flex justify-center mb-4">
+              <Star className="h-8 w-8 text-yellow-400" />
             </div>
-            <div className="text-sm text-gray-600">Daily Progress</div>
+            <h2 className="text-xl font-semibold mb-2">Daily Challenge</h2>
+            <p className="text-gray-600">
+              {daily ? daily.name : "Today's daily challenge is not available yet. Please check back later."}
+            </p>
           </div>
-          <div className="text-center">
-            <div className="text-xl font-bold text-green-600">
-              {limits.pointsToday || 0}
-            </div>
-            <div className="text-sm text-gray-600">Daily Points</div>
-          </div>
-          <div className="text-center">
-            <div className="text-xl font-bold text-blue-600">
-              {limits.pointsTotal || 0}
-            </div>
-            <div className="text-sm text-gray-600">Total Points</div>
-          </div>
-        </div>
 
-        {/* Game Setup Card */}
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <div className="flex justify-center mb-6">
-            <UserSearch className="h-16 w-16 text-gray-400" />
-          </div>
-          <p className="text-center text-gray-600 mb-6">
-            Your next challenge is here. Calibrate your filters and start scouting.
-          </p>
-
-          {/* Player Pool Stats */}
-          <div className="bg-yellow-50 rounded-lg p-4 mb-6">
-            <div className="flex justify-between items-center">
-              <div>
-                <div className="text-lg font-semibold text-yellow-800">
-                  {potentialPoints}
-                </div>
-                <div className="text-sm text-yellow-600">
-                  Potential Points
-                </div>
+          {/* Progress Stats Card */}
+          <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-6 grid grid-cols-3 gap-4">
+            <div className="text-center">
+              <div className="text-xl font-bold">
+                {`${limits.gamesToday || 0}/10`}
               </div>
-              <div className="text-right">
-                <div className="text-lg font-semibold text-yellow-800">
-                  {poolCount} / {totalCount}
-                </div>
-                <div className="text-sm text-yellow-600">
-                  Player Pool
-                </div>
+              <div className="text-sm text-gray-600">Daily Progress</div>
+            </div>
+            <div className="text-center">
+              <div className="text-xl font-bold text-green-600">
+                {limits.pointsToday || 0}
               </div>
+              <div className="text-sm text-gray-600">Daily Points</div>
+            </div>
+            <div className="text-center">
+              <div className="text-xl font-bold text-blue-600">
+                {limits.pointsTotal || 0}
+              </div>
+              <div className="text-sm text-gray-600">Total Points</div>
             </div>
           </div>
 
-          {/* Start Game Button */}
-          <button
-            onClick={onStartGame}
-            disabled={loadingFilters || totalCount === 0}
-            className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-400 
-                       text-white rounded-lg py-3 font-semibold flex items-center 
-                       justify-center gap-2 mb-6"
-          >
-            <PlayCircle className="h-5 w-5" />
-            Start Game!
-          </button>
+          {/* Game Setup Card */}
+          <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-6">
+            <div className="flex justify-center mb-6">
+              <UserSearch className="h-16 w-16 text-gray-400" />
+            </div>
+            <p className="text-center text-gray-600 mb-6">
+              Your next challenge is here. Calibrate your filters and start scouting.
+            </p>
 
-          {/* Selected Filters Display */}
-          <div className="mb-4">
-            <div className="text-sm text-gray-600 mb-2">Leagues</div>
-            <SelectedChips
-              items={selectedLeagueIds}
-              onClear={() => setSelectedLeagueIds([])}
-              getLabel={(id) => leagueIdToLabel[id] || `Unknown League (${id})`}
-              onRemoveItem={(id) => setSelectedLeagueIds(prev => prev.filter(x => x !== id))}
-              hoverClose
-            />
-
-            <div className="text-sm text-gray-600 mt-3 mb-2">Seasons</div>
-            <SelectedChips
-              items={selectedSeasons}
-              onClear={() => setSelectedSeasons([])}
-              onRemoveItem={(season) => setSelectedSeasons(prev => prev.filter(x => x !== season))}
-              hoverClose
-            />
-          </div>
-
-          {/* Difficulty Filters Section */}
-          <div className="border rounded-xl">
-            <button
-              onClick={() => setCollapsed(!collapsed)}
-              className="w-full flex items-center justify-between p-4"
-            >
-              <div className="flex items-center gap-2">
-                <Filter className="h-5 w-5 text-gray-600" />
-                <span className="font-medium">Difficulty Filters</span>
-              </div>
-              {collapsed ? (
-                <ChevronDown className="h-5 w-5" />
-              ) : (
-                <ChevronUp className="h-5 w-5" />
-              )}
-            </button>
-
-            {!collapsed && (
-              <div className="p-4 border-t space-y-4">
-                {/* Keep your existing filter components here */}
-                <div className="mb-4">
-                  <div className="text-sm font-medium text-gray-700 mb-2">
-                    Select Seasons
+            {/* Player Pool Stats */}
+            <div className="bg-yellow-50 rounded-lg p-4 mb-6">
+              <div className="flex justify-between items-center">
+                <div>
+                  <div className="text-lg font-semibold text-yellow-800">
+                    {potentialPoints}
                   </div>
-                  <SeasonsPicker />
+                  <div className="text-sm text-yellow-600">
+                    Potential Points
+                  </div>
                 </div>
+                <div className="text-right">
+                  <div className="text-lg font-semibold text-yellow-800">
+                    {poolCount} / {totalCount}
+                  </div>
+                  <div className="text-sm text-yellow-600">
+                    Player Pool
+                  </div>
+                </div>
+              </div>
+            </div>
 
-                {/* Leagues picker (show if options available) */}
-                {Object.keys(groupedLeagues).length > 0 && (
+            {/* Replace the existing Start button with this centered, dark green version */}
+            <div className="flex justify-center mt-6">
+              <button
+                onClick={onStartGame}
+                disabled={gameLoading || poolCount === 0}
+                className={`relative overflow-hidden rounded-xl bg-gradient-to-r from-green-800 via-green-700 to-green-800 px-8 py-3 font-bold text-white shadow-lg transition-all hover:scale-105 hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-green-600 focus:ring-offset-2 ${
+                  gameLoading ? 'opacity-70' : 'opacity-100'
+                }`}
+              >
+                <div className="absolute inset-0 bg-white opacity-10 transition-opacity hover:opacity-20"></div>
+                <div className="flex items-center justify-center gap-2">
+                  {gameLoading ? (
+                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-100">
+                      <circle cx="11" cy="11" r="8"></circle>
+                      <path d="m21 21-4.3-4.3"></path>
+                    </svg>
+                  )}
+                  <span className="text-lg">{gameLoading ? 'Loading...' : 'Who are ya?!'}</span>
+                </div>
+              </button>
+            </div>
+
+            {/* Selected Filters Display */}
+            <div className="mb-4">
+              <div className="text-sm text-gray-600 mb-2">Leagues</div>
+              <SelectedChips
+                items={selectedLeagueIds}
+                onClear={() => setSelectedLeagueIds([])}
+                getLabel={(id) => leagueIdToLabel[id] || `Unknown League (${id})`}
+                onRemoveItem={(id) => setSelectedLeagueIds(prev => prev.filter(x => x !== id))}
+                hoverClose
+              />
+
+              <div className="text-sm text-gray-600 mt-3 mb-2">Seasons</div>
+              <SelectedChips
+                items={selectedSeasons}
+                onClear={() => setSelectedSeasons([])}
+                onRemoveItem={(season) => setSelectedSeasons(prev => prev.filter(x => x !== season))}
+                hoverClose
+              />
+            </div>
+
+            {/* Difficulty Filters Section */}
+            <div className="border rounded-xl">
+              <button
+                onClick={() => setCollapsed(!collapsed)}
+                className="w-full flex items-center justify-between p-4"
+              >
+                <div className="flex items-center gap-2">
+                  <Filter className="h-5 w-5 text-gray-600" />
+                  <span className="font-medium">Difficulty Filters</span>
+                </div>
+                {collapsed ? (
+                  <ChevronDown className="h-5 w-5" />
+                ) : (
+                  <ChevronUp className="h-5 w-5" />
+                )}
+              </button>
+
+              {!collapsed && (
+                <div className="p-4 border-t space-y-4">
+                  {/* Keep your existing filter components here */}
+                  <div className="mb-4">
+                    <div className="text-sm font-medium text-gray-700 mb-2">
+                      Select Seasons
+                    </div>
+                    <SeasonsPicker />
+                  </div>
+
+                  {/* Leagues picker (show if options available) */}
+                  {Object.keys(groupedLeagues).length > 0 && (
+                    <div>
+                      <div className="text-sm font-medium text-gray-700 mb-2">
+                        Select Leagues
+                      </div>
+                      <LeaguesPicker />
+                    </div>
+                  )}
+
+                  {/* Minimum appearances input */}
                   <div>
                     <div className="text-sm font-medium text-gray-700 mb-2">
-                      Select Leagues
+                      Minimum Appearances
                     </div>
-                    <LeaguesPicker />
+                    <input
+                      type="number"
+                      value={minApps}
+                      onChange={(e) => setMinApps(Math.max(0, Number(e.target.value)))}
+                      className="w-full p-2 border rounded-md focus:ring-1 focus:ring-green-500 focus:outline-none"
+                      min="0"
+                    />
                   </div>
-                )}
-
-                {/* Minimum appearances input */}
-                <div>
-                  <div className="text-sm font-medium text-gray-700 mb-2">
-                    Minimum Appearances
-                  </div>
-                  <input
-                    type="number"
-                    value={minApps}
-                    onChange={(e) => setMinApps(Math.max(0, Number(e.target.value)))}
-                    className="w-full p-2 border rounded-md focus:ring-1 focus:ring-green-500 focus:outline-none"
-                    min="0"
-                  />
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
-        </div>
-      </div>
+        </motion.div>
+      )}
     </div>
   );
 }

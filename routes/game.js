@@ -9,9 +9,14 @@ import { authRequired } from './middleware.js';
 
 // ---------- Env / Supabase ----------
 const supabaseUrl = process.env.SUPABASE_URL;
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY; // server-only
-const useRpcCounts = process.env.USE_RPC_COUNTS === '1';   // prefer RPCs
-const rapidKey = process.env.RAPIDAPI_KEY || '';
+const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const useRpcCounts = process.env.USE_RPC_COUNTS === '1';
+const rapidKey = process.env.RAPIDAPI_KEY || '';  // ✅ This should be correct
+
+// Add this debug log to verify the key is loaded
+console.log('🔑 Environment check in game.js:');
+console.log('- RAPIDAPI_KEY loaded:', rapidKey ? 'Yes' : 'No');
+console.log('- Key length:', rapidKey.length);
 
 if (!supabaseUrl || !serviceKey) {
   throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env');
@@ -57,13 +62,17 @@ const RAPID_API_BASE = `https://${RAPID_API_HOST}/v3`;
 const toNumArr = (v) =>
   Array.isArray(v) ? v.map((x) => Number(x)).filter((n) => !Number.isNaN(n)) : [];
 
-function normalizeFilters(src = {}) {
-  const leagues = Array.isArray(src.leagues)
-    ? src.leagues.map((x) => String(x)).filter(Boolean)
-    : [];
-  const seasons = toNumArr(src.seasons);
-  const minAppearances = Number(src.minAppearances || 0) || 0;
-  return { leagues, seasons, minAppearances };
+function normalizeFilters(raw) {
+  console.log('🔧 normalizeFilters input:', raw); // Debug log
+  
+  const result = {
+    leagues: Array.isArray(raw.leagues) ? raw.leagues.map(String) : [],
+    seasons: Array.isArray(raw.seasons) ? raw.seasons.map(Number) : [],
+    minAppearances: Number(raw.minAppearances) || 0,
+  };
+  
+  console.log('🔧 normalizeFilters output:', result); // Debug log
+  return result;
 }
 
 function applyFilters(q, { leagues = [], seasons = [], minAppearances = 0 }) {
@@ -83,7 +92,7 @@ async function fetchTransfers(playerId) {
   const res = await fetch(url, {
     headers: {
       'x-rapidapi-host': RAPID_API_HOST,
-      'x-rapidapi-key': rapidKey,
+      'x-rapidapi-key': rapidKey,  // ✅ Fix: use rapidKey instead of RAPIDAPI_KEY
     },
   });
   if (!res.ok) return [];
@@ -179,6 +188,25 @@ async function randomPlayerRPC({ leagues, seasons, minAppearances }) {
   return { id: row.player_id, name: row.player_name ?? null };
 }
 
+// Add this function to routes/game.js
+async function getDistinctPlayerIdsRPC({ leagues, seasons, minAppearances }) {
+  console.log('🔍 RPC: Getting player IDs with filters:', { leagues, seasons, minAppearances });
+  
+  const { data, error } = await supabase.rpc('rpc_get_player_ids', {
+    leagues: (leagues && leagues.length > 0) ? leagues.map(Number) : null,
+    seasons: (seasons && seasons.length > 0) ? seasons.map(Number) : null,
+    min_app: minAppearances || 0,
+  });
+  
+  if (error) {
+    console.error('RPC error getting player IDs:', error);
+    throw error;
+  }
+  
+  console.log('🔍 RPC returned:', data?.length, 'player IDs');
+  return data || [];
+}
+
 // ---------- Routes ----------
 
 // LEAGUES (unique by league_id, grouped by country)
@@ -249,38 +277,138 @@ router.get('/filters/seasons', async (_req, res) => {
 // Counts: pool + total (RPC preferred) — return { poolCount, totalCount }
 // Update the /counts route in routes/game.js
 router.post('/counts', async (req, res) => {
-  console.log('=== COUNTS ENDPOINT HIT ==='); // This should always show
+  console.log('=== COUNTS ENDPOINT HIT ===');
   console.log('Raw request body:', req.body);
   
   try {
     const filters = normalizeFilters(req.body);
-    console.log('Received filters:', req.body);
     console.log('Normalized filters:', filters);
-    console.log('useRpcCounts:', useRpcCounts);
+    
+    // Extract userId directly from req.body (NOT from filters)
+    const userId = req.body.userId;
+    console.log('👤 User ID from request:', userId);
+    
+    let poolCount, totalCount;
     
     if (useRpcCounts) {
       // Get filtered count
       console.log('Getting filtered count...');
-      const poolCount = await countDistinctPlayersRPC({
+      poolCount = await countDistinctPlayersRPC({
         leagues: filters.leagues,
         seasons: filters.seasons,
         minAppearances: filters.minAppearances
       });
+      console.log('Initial pool count:', poolCount);
       
       // Get total count with no filters
       console.log('Getting total count...');
-      const totalCount = await countDistinctPlayersRPC({
+      totalCount = await countDistinctPlayersRPC({
         leagues: null,
         seasons: null,
         minAppearances: 0
       });
       
+      // Add this explicit check for userId
+      if (userId) {
+        console.log('👤 Processing exclusions for user:', userId);
+        
+        // Calculate date 30 days ago
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const dateString = thirtyDaysAgo.toISOString();
+        console.log('👤 Excluding games played since:', dateString);
+        
+        // Check if player_id is numeric and adjust query accordingly
+        const { data: recentGames, error: recentError } = await supabase
+          .from('games_records')
+          .select('player_id')  // player_id is integer in database
+          .eq('user_id', userId)
+          .gte('created_at', dateString);
+        
+        if (recentError) {
+          console.error('👤 Error fetching recent games:', recentError);
+        } else {
+          console.log(`👤 Found ${recentGames?.length || 0} recent games:`, recentGames);
+          
+          if (recentGames && recentGames.length > 0) {
+            // Extract player IDs that aren't null
+            const recentPlayerIds = recentGames
+              .map(game => game.player_id)
+              .filter(Boolean);
+            
+            console.log(`👤 Extracted ${recentPlayerIds.length} valid player IDs:`, recentPlayerIds);
+            
+            if (recentPlayerIds.length > 0) {
+              // Get ALL player IDs that match current filters
+              const filteredIds = await getDistinctPlayerIdsRPC(filters);
+              
+              // Convert filteredIds to numbers for comparison with database integer IDs
+              const filteredIdsAsNumbers = filteredIds.map(id => 
+                typeof id === 'string' ? parseInt(id, 10) : id
+              );
+              
+              console.log('👤 Sample filtered IDs:', filteredIdsAsNumbers.slice(0, 3));
+              
+              // Find overlap - both should be numbers now
+              const recentInPool = recentPlayerIds.filter(recentId => 
+                filteredIdsAsNumbers.includes(recentId)
+              ).length;
+              
+              console.log(`👤 Found ${recentInPool} recent players in current pool`);
+              
+              // Subtract from pool count
+              if (recentInPool > 0) {
+                const oldCount = poolCount;
+                poolCount = Math.max(0, poolCount - recentInPool);
+                console.log(`👤 Adjusted pool count: ${oldCount} → ${poolCount}`);
+              }
+            }
+          } else {
+            console.log('👤 No recent games found for this user');
+          }
+        }
+      } else {
+        console.log('👤 No userId provided, skipping exclusions');
+      }
+      
       console.log('Final counts:', { poolCount, totalCount });
       return res.json({ poolCount, totalCount });
     } else {
-      // REST fallback
+      // REST fallback - similar logic with string conversion
       console.log('Using REST fallback...');
-      const poolIds = await getDistinctPlayerIdsREST(filters, 20000);
+      const allPoolIds = await getDistinctPlayerIdsREST(filters, 20000);
+      let poolIds = [...allPoolIds]; // Make a copy
+      
+      // Filter out recently played players for REST fallback
+      if (userId) {
+        console.log('👤 REST: Adjusting pool count for user:', userId);
+        
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        
+        const { data: recentGames } = await supabase
+          .from('games_records')
+          .select('player_id')
+          .eq('user_id', userId)
+          .gte('created_at', thirtyDaysAgo.toISOString());
+        
+        if (recentGames && recentGames.length > 0) {
+          const recentPlayerIds = recentGames
+            .map(game => game.player_id)
+            .filter(id => id !== null);
+          
+          if (recentPlayerIds.length > 0) {
+            // Convert string IDs to numbers for comparison
+            const poolIdsAsNumbers = poolIds.map(id => parseInt(id, 10));
+            
+            // Filter out recently played players
+            const originalCount = poolIds.length;
+            poolIds = poolIdsAsNumbers.filter(id => !recentPlayerIds.includes(id)).map(String);
+            console.log(`👤 REST: Excluded ${originalCount - poolIds.length} recently played players from count`);
+          }
+        }
+      }
+      
       const totalIds = await getDistinctPlayerIdsREST({}, 20000);
       const result = { poolCount: poolIds.length, totalCount: totalIds.length };
       console.log('REST result:', result);
@@ -295,46 +423,142 @@ router.post('/counts', async (req, res) => {
 // Random player (RPC preferred)
 router.post('/random-player', async (req, res) => {
   try {
+    console.log('🎲 Raw request body for random player:', req.body);
+    
     const filters = normalizeFilters(req.body);
-
-    let playerId = null;
-    let playerName = null;
-
+    console.log('🎲 Getting random player with filters:', filters);
+    
+    // Add this section right after normalizing filters
+    // Extract userId from filters
+    const userId = req.body.userId;
+    let playerIds;
+    
     if (useRpcCounts) {
-      const pick = await randomPlayerRPC(filters);
-      playerId = pick?.id ?? null;
-      playerName = pick?.name ?? null;
-    }
-
-    if (!playerId) {
-      const ids = await getDistinctPlayerIdsREST(filters, 20000);
-      if (!ids.length) {
-        return res.status(404).json({ error: 'No players found for the selected filters.' });
+      // Get ALL player IDs that match the filters
+      playerIds = await getDistinctPlayerIdsRPC(filters);
+      
+      // NEW CODE: Filter out recently played players
+      if (userId) {
+        console.log('🧠 User ID provided:', userId);
+        console.log('🧠 Excluding recently played players (30-day cooldown)');
+        
+        // Calculate date 30 days ago
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const dateString = thirtyDaysAgo.toISOString();
+        
+        // Get recently played player IDs for this user
+        const { data: recentGames, error } = await supabase
+          .from('games_records')
+          .select('player_id')
+          .eq('user_id', userId)
+          .gte('created_at', dateString);
+        
+        if (error) {
+          console.error('🧠 Error fetching recent games:', error);
+        } else {
+          console.log(`🧠 Found ${recentGames?.length || 0} recent games`);
+          
+          if (recentGames && recentGames.length > 0) {
+            // Extract player IDs that aren't null
+            const recentPlayerIds = recentGames
+              .map(game => game.player_id)
+              .filter(Boolean);
+            
+            console.log(`🧠 Extracted ${recentPlayerIds.length} player IDs:`, recentPlayerIds);
+            
+            if (recentPlayerIds.length > 0) {
+              console.log(`🧠 Found ${recentPlayerIds.length} recently played players to exclude`);
+              
+              // Convert playerIds to numbers for accurate comparison with database integers
+              const playerIdsAsNumbers = playerIds.map(id => 
+                typeof id === 'string' ? parseInt(id, 10) : id
+              );
+              
+              // Remove recently played players from the pool
+              const originalCount = playerIdsAsNumbers.length;
+              playerIds = playerIdsAsNumbers
+                .filter(id => !recentPlayerIds.includes(id))
+                .map(String); // Convert back to strings if your code expects strings
+              
+              console.log(`🧠 Filtered pool now has ${playerIds.length} players (removed ${originalCount - playerIds.length})`);
+            }
+          } else {
+            console.log('🧠 No recent games found for this user');
+          }
+        }
       }
-      playerId = ids[Math.floor(Math.random() * ids.length)];
+      
+      console.log('🎯 Found player IDs:', playerIds?.length, 'players');
+      
+      if (!playerIds || playerIds.length === 0) {
+        return res.status(400).json({ error: 'No players found with these filters.' });
+      }
+      
+      // Rest of your existing code
+      const randomId = playerIds[Math.floor(Math.random() * playerIds.length)];
+      console.log('🎪 Selected random player ID:', randomId);
+      
+      // Get the full player card for this ID
+      const card = await getPlayerCard(randomId);
+      if (!card) {
+        return res.status(500).json({ error: 'Failed to get player data.' });
+      }
+      
+      console.log('✅ Returning player:', card[PS.playerName], 'from leagues:', card.leagues);
+      
+      // Format the response
+      return res.json({
+        id: card[PS.playerId],
+        name: card[PS.playerName],
+        age: card[PS.playerAge],
+        nationality: card[PS.playerNationality], 
+        position: card[PS.playerPosition],
+        photo: card[PS.playerPhoto] || null,
+        transferHistory: card.transferHistory || []
+      });
     }
-
-    const card = await getPlayerCard(playerId);
-    const transfers = await fetchTransfers(playerId);
-
-    // NOTE: we still include name for validation on the client,
-    // but the client should NOT render it until the player is guessed.
-    return res.json({
-      id: playerId,
-      name: playerName || card?.[PS.playerName] || null, // keep for validation
-      age: card?.[PS.playerAge] || null,
-      nationality: card?.[PS.playerNationality] || null,
-      position: card?.[PS.playerPosition] || null,
-      photo: card?.[PS.playerPhoto] || null,
-      season_year: card?.[PS.seasonYear] || null,
-      league_id: card?.[PS.leagueId] || null,
-      transferHistory: transfers,
-    });
+    
+    // ALSO UPDATE THE REST FALLBACK PATH:
+    
+    // REST fallback
+    playerIds = await getDistinctPlayerIdsREST(filters, 20000);
+    
+    // NEW CODE: Filter out recently played players in REST path
+    if (userId) {
+      console.log('🧠 REST: User ID provided:', userId);
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      
+      const { data: recentGames } = await supabase
+        .from('games_records')
+        .select('player_id')
+        .eq('user_id', userId)
+        .gte('created_at', thirtyDaysAgo.toISOString());
+      
+      if (recentGames && recentGames.length > 0) {
+        const recentPlayerIds = recentGames
+          .map(game => game.player_id)
+          .filter(id => id !== null);
+        
+        if (recentPlayerIds.length > 0) {
+          console.log(`🧠 REST: Excluding ${recentPlayerIds.length} recently played players`);
+          playerIds = playerIds.filter(id => !recentPlayerIds.includes(id));
+          console.log(`🧠 REST: Pool now has ${playerIds.length} players`);
+        }
+      }
+    }
+    
+    console.log('🎯 REST: Found player IDs:', playerIds?.length, 'players');
+    
+    // Rest of your existing REST fallback code...
+    
   } catch (e) {
     console.error('POST /random-player error:', e);
-    res.status(500).json({ error: 'Failed to generate random player.' });
+    res.status(500).json({ error: 'Failed to get random player.' });
   }
 });
+
 
 // Autocomplete across ALL players (by player_norm_name)
 router.get('/names', async (req, res) => {
@@ -370,13 +594,69 @@ router.get('/names', async (req, res) => {
   }
 });
 
+
 // Daily + limits placeholders
 router.get('/daily', async (_req, res) => {
   res.json({ available: false, player: null, points: 10000 });
 });
 
-router.get('/limits', async (_req, res) => {
-  res.json({ maxDailyGames: 10, gamesToday: 0, dailyPlayed: false });
+router.get('/limits', authRequired, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    // Get today's games count
+    const today = new Date().toISOString().split('T')[0];
+    
+    const { data: todayGames, error: gamesError } = await supabase
+      .from('games_records')
+      .select('points_earned')
+      .eq('user_id', userId)
+      .gte('created_at', `${today}T00:00:00Z`)
+      .lt('created_at', `${today}T23:59:59Z`);
+    
+    if (gamesError) throw gamesError;
+    
+    // Get total points
+    const { data: totalPoints, error: totalError } = await supabase
+      .from('games_records')
+      .select('points_earned')
+      .eq('user_id', userId);
+    
+    if (totalError) throw totalError;
+    
+    // Calculate stats
+    const gamesToday = todayGames?.length || 0;
+    const pointsToday = todayGames?.reduce((sum, game) => sum + (game.points_earned || 0), 0) || 0;
+    const pointsTotal = totalPoints?.reduce((sum, game) => sum + (game.points_earned || 0), 0) || 0;
+    
+    // Check if daily challenge was played today
+    const { data: dailyGames, error: dailyError } = await supabase
+      .from('games_records')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('is_daily_challenge', true)
+      .gte('created_at', `${today}T00:00:00Z`)
+      .lt('created_at', `${today}T23:59:59Z`)
+      .limit(1);
+    
+    if (dailyError) throw dailyError;
+    
+    const dailyPlayed = (dailyGames?.length || 0) > 0;
+    
+    res.json({
+      gamesToday,
+      pointsToday,
+      pointsTotal,
+      dailyPlayed,
+      dailyBonus: dailyPlayed
+    });
+  } catch (error) {
+    console.error('Error fetching limits:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch user limits',
+      details: error.message 
+    });
+  }
 });
 
 // Add game record
@@ -406,5 +686,89 @@ router.post('/games', authRequired, async (req, res) => {
     });
   }
 });
+
+// Add this route to routes/game.js
+router.get('/transfers/:playerId', async (req, res) => {
+  try {
+    const { playerId } = req.params;
+    console.log('🔍 Fetching transfers for player:', playerId);
+    
+    // This should call your external API or database to get transfers
+    // You might need to implement this based on your transfer data source
+    const transfers = await getPlayerTransfers(playerId);
+    
+    res.json({ transfers: transfers || [] });
+  } catch (error) {
+    console.error('❌ Error fetching transfers:', error);
+    res.status(500).json({ error: 'Failed to fetch transfers', transfers: [] });
+  }
+});
+
+// Fix the getPlayerTransfers function in routes/game.js
+async function getPlayerTransfers(playerId) {
+  try {
+    console.log('🔍 Fetching transfers from API for player:', playerId);
+    console.log('🔑 Using API key:', rapidKey ? 'Key available' : 'No key found');
+    console.log('🔑 API key length:', rapidKey.length);
+    
+    // Use the correct RapidAPI format (not api-sports.io directly)
+    const response = await fetch(`https://api-football-v1.p.rapidapi.com/v3/transfers?player=${playerId}`, {
+      headers: {
+        'X-RapidAPI-Key': rapidKey,
+        'X-RapidAPI-Host': 'api-football-v1.p.rapidapi.com'  // ✅ Use the correct host
+      }
+    });
+    
+    console.log('🌐 API Response status:', response.status);
+    console.log('🌐 API Response headers:', Object.fromEntries(response.headers));
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('❌ API response not ok:', response.status, response.statusText);
+      console.error('❌ Error response body:', errorText);
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
+    }
+    
+    const data = await response.json();
+    console.log('📋 Raw API data:', JSON.stringify(data, null, 2));
+    
+    // Check if there's an error in the API response
+    if (data.errors && data.errors.length > 0) {
+      console.error('❌ API returned errors:', data.errors);
+      return [];
+    }
+    
+    const transfers = data.response?.[0]?.transfers || [];
+    console.log('📋 Extracted transfers:', transfers.length, 'transfers found');
+    
+    // Transform the data to match your expected format
+    const transformedTransfers = transfers.map(t => ({
+      date: t?.date || null,
+      type: t?.type || null,
+      in: { 
+        name: t?.teams?.in?.name || null, 
+        logo: t?.teams?.in?.logo || null 
+      },
+      out: { 
+        name: t?.teams?.out?.name || null, 
+        logo: t?.teams?.out?.logo || null 
+      },
+    }));
+    
+    // Sort by date (oldest first)
+    transformedTransfers.sort((a, b) => {
+      const dateA = Date.parse(a.date || 0);
+      const dateB = Date.parse(b.date || 0);
+      return dateA - dateB;
+    });
+    
+    console.log('✅ Returning transformed transfers:', transformedTransfers);
+    return transformedTransfers;
+    
+  } catch (error) {
+    console.error('❌ Error fetching transfers from external API:', error);
+    return [];
+  }
+}
 
 export default router;

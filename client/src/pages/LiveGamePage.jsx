@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { suggestNames, addGameRecord } from '../api';
 import { Clock, AlarmClock, Lightbulb, Trophy } from 'lucide-react';
@@ -23,37 +23,23 @@ function classNames(...s) {
   return s.filter(Boolean).join(' ');
 }
 
-const styles = {
-  '@keyframes vibrate': {
-    '0%': { transform: 'translateX(0)' },
-    '25%': { transform: 'translateX(5px)' },
-    '50%': { transform: 'translateX(-5px)' },
-    '75%': { transform: 'translateX(5px)' },
-    '100%': { transform: 'translateX(0)' }
-  },
-  wrongGuess: {
-    animation: 'vibrate 0.3s linear'
-  }
-};
-
 export default function LiveGamePage() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // game payload comes from navigation state
-  const game = location.state?.game || null; // { id, name, transferHistory, age, nationality, position, photo }
-  const filters = location.state?.filters || { potentialPoints: 0 };
-  const isDaily = !!location.state?.isDaily;
+  // All your existing hooks...
+  const [currentGuess, setCurrentGuess] = useState('');
+  const [guessesAttempted, setGuessesAttempted] = useState(0);
+  const [hintsUsed, setHintsUsed] = useState(0);
+  const [gameCompleted, setGameCompleted] = useState(false);
+  const [gameWon, setGameWon] = useState(false);
+  const [showingHints, setShowingHints] = useState({});
+  const [timeStarted, setTimeStarted] = useState(Date.now());
+  const inputRef = useRef(null);
+  const confettiCanvasRef = useRef(null);
 
-  // Redirect back if missing payload
-  useEffect(() => {
-    if (!game || !game.transferHistory) {
-      navigate('/');
-    }
-  }, [game, navigate]);
-
-  // ---- core state ----
-  const INITIAL_TIME = 180; // 3 minutes in seconds
+  // Game state
+  const INITIAL_TIME = 180;
   const [timeSec, setTimeSec] = useState(INITIAL_TIME);
   const [guessesLeft, setGuessesLeft] = useState(3);
   const [guess, setGuess] = useState('');
@@ -68,8 +54,53 @@ export default function LiveGamePage() {
   const [isWrongGuess, setIsWrongGuess] = useState(false);
   const [guessColor, setGuessColor] = useState('text-gray-700');
   const formRef = useRef(null);
+  const timerRef = useRef(null);
 
-  // multipliers map (only applied once per hint)
+  // Add state for transfer history loading
+  const [transferHistory, setTransferHistory] = useState([]);
+  const [loadingTransfers, setLoadingTransfers] = useState(true);
+
+  // Extract game data
+  const game = location.state || null;
+  const filters = location.state?.filters || { potentialPoints: 0 };
+  const isDaily = !!location.state?.isDaily;
+
+  console.log('🏃 LiveGamePage loaded with state:', location.state);
+  console.log('🏆 Starting with potential points:', filters?.potentialPoints);
+  console.log('🔍 Game data debug:', {
+  directPotentialPoints: game?.potentialPoints, // Should be 6800
+  filtersPotentialPoints: filters?.potentialPoints, // Should also be 6800
+  filtersObject: filters,
+  entireGameData: game
+});
+
+  // Add useEffect to fetch transfer history
+  useEffect(() => {
+    const fetchTransfers = async () => {
+      if (!game?.id) return;
+      
+      try {
+        setLoadingTransfers(true);
+        console.log('🔄 Fetching transfers for player:', game.id);
+        
+        // Import the fetchTransfers function
+        const { fetchTransfers: getTransfers } = await import('../api');
+        const transfers = await getTransfers(game.id);
+        
+        console.log('📋 Received transfers:', transfers);
+        setTransferHistory(transfers || []);
+      } catch (error) {
+        console.error('❌ Error fetching transfers:', error);
+        setTransferHistory([]); // Fallback to empty array
+      } finally {
+        setLoadingTransfers(false);
+      }
+    };
+
+    fetchTransfers();
+  }, [game?.id]);
+
+  // Multipliers map
   const multipliers = {
     age: 0.95,
     nationality: 0.9,
@@ -78,33 +109,28 @@ export default function LiveGamePage() {
     firstLetter: 0.25,
   };
 
-  // live points calculation
+  // Live points calculation
   const points = useMemo(() => {
-    let p = Number(filters?.potentialPoints || 0);
+    // Get potential points from either location
+    const potentialPoints = Number(game?.potentialPoints || filters?.potentialPoints || 0);
+    
+    console.log('🏆 Points calculation starting with:', potentialPoints);
+    
+    // Start with full potential points
+    let p = potentialPoints;
+    
+    // Apply hint multipliers
     Object.keys(usedHints).forEach((k) => {
       if (usedHints[k]) p = Math.floor(p * multipliers[k]);
     });
-    // small decay by time: 1% per 15 seconds (tunable)
-    const decay = Math.min(0.9, Math.floor(timeSec / 15) / 100);
-    p = Math.max(0, Math.floor(p * (1 - decay)));
+    
+    // Apply a very light time decay: 0.99 every second that has elapsed
+    const timeElapsed = INITIAL_TIME - timeSec; // Time that has passed
+    const timeDecay = Math.pow(0.99, timeElapsed); // 0.99^timeElapsed
+    p = Math.max(0, Math.floor(p * timeDecay));
+    
     return p;
-  }, [filters?.potentialPoints, usedHints, timeSec]);
-
-  // Timer effect - count down instead of up
-  const timerRef = useRef(null);
-  useEffect(() => {
-    timerRef.current = setInterval(() => {
-      setTimeSec((t) => {
-        if (t <= 0) {
-          clearInterval(timerRef.current);
-          endGame(false);
-          return 0;
-        }
-        return t - 1;
-      });
-    }, 1000);
-    return () => clearInterval(timerRef.current);
-  }, []);
+  }, [game?.potentialPoints, filters?.potentialPoints, usedHints, timeSec]);
 
   // Format time as MM:SS
   const formatTime = (seconds) => {
@@ -113,7 +139,57 @@ export default function LiveGamePage() {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // suggestions (debounced)
+  // Timer effect - count down
+  useEffect(() => {
+    // Only start timer if we have valid game data
+    if (!game?.id) return;
+    
+    console.log('🕐 Starting timer...');
+    
+    const handleTimeUp = async () => {
+      clearInterval(timerRef.current);
+      const gameData = await saveGameRecord(false);
+      navigate('/postgame', {
+        state: {
+          didWin: false,
+          player: game,
+          stats: {
+            pointsEarned: 0,
+            timeSec: INITIAL_TIME,
+            guessesUsed: 3 - guessesLeft,
+            usedHints
+          }
+        },
+        replace: true
+      });
+    };
+    
+    const interval = setInterval(() => {
+      setTimeSec((prevTime) => {
+        if (prevTime <= 1) {
+          console.log('⏰ Time up!');
+          clearInterval(interval);
+          handleTimeUp();
+          return 0;
+        }
+        return prevTime - 1;
+      });
+    }, 1000);
+
+    // Store interval reference
+    timerRef.current = interval;
+
+    // Cleanup function
+    return () => {
+      console.log('🛑 Cleaning up timer...');
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [game?.id]); // Only depend on game.id, not the entire game object
+
+  // Suggestions (debounced)
   useEffect(() => {
     let active = true;
     const id = setTimeout(async () => {
@@ -135,31 +211,34 @@ export default function LiveGamePage() {
     };
   }, [guess]);
 
-  const endGame = (didWin) => {
-    // In items 7–8 we’ll persist the full record & move to PostGamePage.
-    navigate('/post', {
-      state: {
-        didWin,
-        isDaily,
-        player: {
-          name: game.name,
-          photo: game.photo,
-          age: game.age,
-          nationality: game.nationality,
-          position: game.position,
-          funFact: game.funFact // if available
-        },
-        stats: {
-          timeSec,
-          guessesUsed: 3 - guessesLeft + (didWin ? 1 : 0),
-          pointsEarned: didWin ? points : 0,
-          usedHints,
-          filters,
-        },
-      },
-    });
-  };
+  // Validation effect
+  useEffect(() => {
+    if (!game || !game.id || !game.name) {
+      console.log('🏃 Invalid game data, redirecting to /game');
+      // Use setTimeout to prevent navigation during render
+      setTimeout(() => {
+        navigate('/game');
+      }, 0);
+      return;
+    }
+    console.log('🏃 Game data is valid, starting game...');
+  }, []); // Empty dependency array - only run once on mount
 
+  // Early return if no valid game data
+  if (!game || !game.id) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-red-600 mb-4">
+            No Game Data Found
+          </h1>
+          <p className="mb-4">Redirecting to game setup...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Game functions
   const submitGuess = async (value) => {
     if (!value?.trim()) return;
     
@@ -177,7 +256,7 @@ export default function LiveGamePage() {
             age: game.age,
             nationality: game.nationality,
             position: game.position,
-            funFact: game.funFact // if available
+            funFact: game.funFact
           },
           stats: {
             pointsEarned: points,
@@ -217,35 +296,11 @@ export default function LiveGamePage() {
     setGuess('');
   };
 
-  // Add effect for time running out
-  useEffect(() => {
-    if (timeSec <= 0) {
-      const handleTimeUp = async () => {
-        clearInterval(timerRef.current);
-        const gameData = await saveGameRecord(false);
-        navigate('/postgame', {
-          state: {
-            didWin: false,
-            player: game,
-            stats: {
-              pointsEarned: 0,
-              timeSec: INITIAL_TIME,
-              guessesUsed: 3 - guessesLeft,
-              usedHints
-            }
-          },
-          replace: true
-        });
-      };
-      handleTimeUp();
-    }
-  }, [timeSec]);
-
   const saveGameRecord = async (didWin) => {
     try {
       console.log('Saving game record...');
       const gameRecord = {
-        player_id: parseInt(game.id, 10),  // Convert to number
+        player_id: parseInt(game.id, 10),
         player_name: game.name,
         player_data: {
           age: game.age,
@@ -275,23 +330,27 @@ export default function LiveGamePage() {
     }
   };
 
-  // ----- Hint handlers (no hooks inside callbacks) -----
+  // Hint handlers
   const revealAge = () => {
     if (usedHints.age || !game?.age) return;
     setUsedHints((u) => ({ ...u, age: true }));
   };
+
   const revealNationality = () => {
     if (usedHints.nationality || !game?.nationality) return;
     setUsedHints((u) => ({ ...u, nationality: true }));
   };
+
   const revealPosition = () => {
     if (usedHints.position || !game?.position) return;
     setUsedHints((u) => ({ ...u, position: true }));
   };
+
   const revealPartialImage = () => {
     if (usedHints.partialImage) return;
     setUsedHints((u) => ({ ...u, partialImage: true }));
   };
+
   const revealFirstLetter = () => {
     if (usedHints.firstLetter || !game?.name) return;
     setUsedHints((u) => ({ ...u, firstLetter: true }));
@@ -314,8 +373,6 @@ export default function LiveGamePage() {
       replace: true
     });
   };
-
-  if (!game) return null;
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-6">
@@ -463,7 +520,15 @@ export default function LiveGamePage() {
         {/* Transfer History Card */}
         <div className="rounded-xl border bg-white shadow-sm p-6">
           <h3 className="text-lg font-semibold mb-4 text-center">Transfer History</h3>
-          <TransfersList transfers={game.transferHistory || []} />
+          {loadingTransfers ? (
+            <div className="text-center text-gray-500">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-2"></div>
+              Loading transfers...
+            </div>
+          ) : (
+            <TransfersList transfers={transferHistory} />
+          )
+          }
         </div>
       </div>
     </div>

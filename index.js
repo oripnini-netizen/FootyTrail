@@ -8,6 +8,7 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import gameRouter from './routes/game.js';
+import aiRoutes from './routes/ai.js'; // Import the AI routes
 
 // Add this in your index.js or wherever you start the server
 console.log('Environment check:');
@@ -30,6 +31,7 @@ app.use(express.json());
 
 // 5) Routes (now safe to import — env is loaded)
 app.use('/api', gameRouter);  // Changed from '/api/game' to '/api'
+app.use('/api/ai', aiRoutes); // Register the AI routes
 
 // 6) Static files (optional)
 const __filename = fileURLToPath(import.meta.url);

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { TableProperties, Aperture, Trophy, Info, Bell } from 'lucide-react';
+import { TableProperties, Aperture, Trophy, Info } from 'lucide-react';
 
 export default function Navbar() {
   const { user } = useAuth();
@@ -33,7 +33,7 @@ export default function Navbar() {
           </button>
         </div>
 
-        {/* Right: Navigation items + Bell + Avatar */}
+        {/* Right: Navigation items + Avatar */}
         <div className="flex items-center gap-5">
           <div className="flex items-center gap-5">
             {/* All navigation items with consistent styling */}
@@ -62,14 +62,6 @@ export default function Navbar() {
             >
               <Info className="h-5 w-5" />
               <span className="mt-1 hidden sm:block">About</span>
-            </button>
-
-            <button
-              onClick={() => {}}
-              className="flex flex-col items-center"
-              title="Notifications"
-            >
-              <Bell className="h-5 w-5 text-gray-700 hover:text-black" />
             </button>
 
             <button
