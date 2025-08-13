@@ -38,6 +38,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Add this with your other routes (before starting the server)
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
+
 // 7) Start server with automatic port fallback
 const desiredPort = Number(process.env.PORT) || 3000;
 

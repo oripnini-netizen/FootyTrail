@@ -1,9 +1,13 @@
 {
-  "name": "footytrail",
+  "name": "footytrail-backend",
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=16.0.0"
+  },
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "dependencies": {
     "@supabase/auth-helpers-react": "^0.5.0",

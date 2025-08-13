@@ -10,45 +10,90 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const getSessionAndUser = async () => {
       setLoading(true);
+      console.log('Getting session and user...');
 
-      const { data: { session } } = await supabase.auth.getSession();
-      const supabaseUser = session?.user;
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        console.log('Session:', session ? 'exists' : 'none');
+        
+        const supabaseUser = session?.user;
+        console.log('Supabase user:', supabaseUser ? 'exists' : 'none');
 
-      if (supabaseUser) {
-        // ננסה להביא את המשתמש מהטבלה שלנו
-        const { data: existingUser, error } = await supabase
-          .from('users')
-          .select('*')
-          .eq('id', supabaseUser.id)
-          .single();
-
-        if (!existingUser && !error) {
-          // משתמש חדש - יוצרים שורה בטבלת users
-          const { data: insertedUser } = await supabase
+        if (supabaseUser) {
+          // ננסה להביא את המשתמש מהטבלה שלנו
+          const { data: existingUser, error } = await supabase
             .from('users')
-            .insert([{
-              id: supabaseUser.id,
-              email: supabaseUser.email,
-              role: 'user',
-              has_completed_onboarding: false,
-            }])
-            .select()
+            .select('*')
+            .eq('id', supabaseUser.id)
             .single();
 
-          setUser(insertedUser);
-        } else {
-          setUser(existingUser);
-        }
-      } else {
-        setUser(null);
-      }
+          console.log('Database user:', existingUser ? 'exists' : 'none');
+          console.log('Query error:', error ? error.message : 'none');
 
-      setLoading(false);
+          if (!existingUser && !error) {
+            // משתמש חדש - יוצרים שורה בטבלת users
+            console.log('Creating new user record');
+            
+            try {
+              const { data: insertedUser, error: insertError } = await supabase
+                .from('users')
+                .insert([{
+                  id: supabaseUser.id,
+                  email: supabaseUser.email,
+                  role: 'user',
+                  has_completed_onboarding: false,
+                }])
+                .select()
+                .single();
+
+              if (insertError) {
+                console.error('Error inserting user:', insertError);
+                // Still set basic user info
+                setUser({
+                  id: supabaseUser.id,
+                  email: supabaseUser.email,
+                  has_completed_onboarding: false
+                });
+              } else {
+                setUser(insertedUser);
+              }
+            } catch (e) {
+              console.error('Exception inserting user:', e);
+              // Still set basic user info
+              setUser({
+                id: supabaseUser.id,
+                email: supabaseUser.email,
+                has_completed_onboarding: false
+              });
+            }
+          } else if (error && error.code !== 'PGRST116') {
+            // Handle error (but ignore "no rows returned" error)
+            console.error('Error fetching user:', error);
+            // Still set basic user info
+            setUser({
+              id: supabaseUser.id,
+              email: supabaseUser.email,
+              has_completed_onboarding: false
+            });
+          } else {
+            // User exists
+            setUser(existingUser);
+          }
+        } else {
+          setUser(null);
+        }
+      } catch (e) {
+        console.error('Exception in getSessionAndUser:', e);
+        setUser(null);
+      } finally {
+        setLoading(false);
+      }
     };
 
     getSessionAndUser();
 
-    const { data: listener } = supabase.auth.onAuthStateChange(() => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log('Auth state changed:', event);
       getSessionAndUser();
     });
 

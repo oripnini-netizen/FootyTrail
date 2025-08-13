@@ -23,7 +23,7 @@ export default function LoginPage() {
     await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${window.location.origin}/login`, // Supabase יחזור לכאן ואז ה-App ינווט
+        redirectTo: `${window.location.origin}/game`, // Change to redirect directly to game
         queryParams: { prompt: 'select_account' }       // מכריח בחירת חשבון
       },
     });
@@ -33,7 +33,7 @@ export default function LoginPage() {
     await supabase.auth.signInWithOAuth({
       provider: 'facebook',
       options: {
-        redirectTo: `${window.location.origin}/login`,
+        redirectTo: `${window.location.origin}/game`, // Change to redirect directly to game
       },
     });
   };

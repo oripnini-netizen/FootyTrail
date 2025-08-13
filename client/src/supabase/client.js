@@ -1,11 +1,21 @@
 // src/supabase/client.js
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+// Access environment variables using process.env (CRA way)
+const supabaseUrl = process.env.REACT_APP_SUPABASE_URL;
+const supabaseAnonKey = process.env.REACT_APP_SUPABASE_ANON_KEY;
 
-// Create and export a single Supabase client instance
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+console.log("Supabase URL configured:", supabaseUrl ? "Yes" : "No");
+console.log("Supabase Anon Key configured:", supabaseAnonKey ? "Yes" : "No");
+
+// Create the Supabase client
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: true
+  }
+});
 
 // Export avatar upload functionality
 export const uploadAvatar = async (file) => {
@@ -57,5 +67,3 @@ export const uploadAvatar = async (file) => {
     throw error;
   }
 };
-
-export { supabase };
