@@ -1,9 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabase';
 
-// Email/Password + שתי לחצנים ל-Google/Facebook (ללא GitHub)
-// הלחצן של Google מכריח חלון בחירת חשבון (select_account)
-
 export default function LoginPage() {
   const [session, setSession] = useState(null);
 
@@ -12,8 +9,6 @@ export default function LoginPage() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
       setSession(s);
       if (s?.user) {
-        // אם המשתמש כבר התחבר, ננווט בצד ה-App.jsx לפי has_completed_onboarding
-        // כאן לא עושים navigate – תשאיר לאפליקציה להחליט.
       }
     });
     return () => subscription.unsubscribe();

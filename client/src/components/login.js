@@ -16,8 +16,6 @@ const Login = () => {
     <div style={{ textAlign: 'center', marginTop: '100px' }}>
       <h2>Login to FootyTrail</h2>
       <button onClick={() => handleLoginWithProvider('google')}>Login with Google</button>
-      <br />
-      <button onClick={() => handleLoginWithProvider('facebook')}>Login with Facebook</button>
     </div>
   );
 };
