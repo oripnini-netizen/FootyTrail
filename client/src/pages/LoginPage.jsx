@@ -40,15 +40,6 @@ export default function LoginPage() {
     }
   };
 
-  const signInWithFacebook = async () => {
-    await supabase.auth.signInWithOAuth({
-      provider: 'facebook',
-      options: {
-        redirectTo: `${window.location.origin}/game`, // Change to redirect directly to game
-      },
-    });
-  };
-
   const handleEmailSignup = async (e) => {
     e.preventDefault();
     const email = e.target.email.value.trim();
@@ -87,9 +78,6 @@ export default function LoginPage() {
         {/* OAuth buttons */}
         <button onClick={signInWithGoogle} style={{ width:'100%', padding:10, borderRadius:8, border:'1px solid #ddd', marginBottom:8 }}>
           Continue with Google
-        </button>
-        <button onClick={signInWithFacebook} style={{ width:'100%', padding:10, borderRadius:8, border:'1px solid #ddd', marginBottom:16 }}>
-          Continue with Facebook
         </button>
 
         <hr style={{ margin:'16px 0' }} />
