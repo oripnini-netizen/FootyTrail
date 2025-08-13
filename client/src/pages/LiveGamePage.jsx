@@ -4,6 +4,7 @@ import { suggestNames, addGameRecord } from '../api';
 import { Clock, AlarmClock, Lightbulb, Trophy } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import confetti from 'canvas-confetti';
+import { useAuth } from '../context/AuthContext';
 
 /**
  * Live game page
@@ -26,6 +27,7 @@ function classNames(...s) {
 export default function LiveGamePage() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   // All your existing hooks...
   const [currentGuess, setCurrentGuess] = useState('');
@@ -296,40 +298,53 @@ export default function LiveGamePage() {
     setGuess('');
   };
 
-  const saveGameRecord = async (didWin) => {
+  const saveGameRecord = async (won) => {
+    if (!user?.id) {
+      console.log("No user ID, can't save game record");
+      return null;
+    }
+    
     try {
-      console.log('Saving game record...');
-      const gameRecord = {
-        player_id: parseInt(game.id, 10),
-        player_name: game.name,
-        player_data: {
-          age: game.age,
-          nationality: game.nationality,
-          position: game.position,
-          photo: game.photo,
-          transfer_history: game.transferHistory
+      console.log("Saving game record with data:", { won, game });
+      
+      // Send the data to your backend API
+      const response = await fetch('/api/game-completed', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
-        is_daily_challenge: Boolean(isDaily),
-        guesses_attempted: 3 - guessesLeft + (didWin ? 1 : 0),
-        time_taken_seconds: INITIAL_TIME - timeSec,
-        points_earned: didWin ? points : 0,
-        potential_points: Number(filters?.potentialPoints || 0),
-        hints_used: Object.keys(usedHints).filter(k => usedHints[k]).length,
-        completed: true,
-        won: didWin
-      };
-
-      console.log('Sending game record:', gameRecord);
-      const savedRecord = await addGameRecord(gameRecord);
-      console.log('Game record saved:', savedRecord);
-      return savedRecord;
-    } catch (error) {
-      console.error('Error saving game record:', error);
-      alert('Failed to save game record. Your progress may not be recorded.');
+        body: JSON.stringify({
+          userId: user.id,
+          playerData: {
+            id: game.player_id || game.id,
+            name: game.name || game.player_name
+          },
+          gameStats: {
+            won: won,
+            points: won ? points : 0,
+            timeTaken: INITIAL_TIME - timeSec,
+            guessesAttempted: 3 - guessesLeft + (won ? 1 : 0),
+            hintsUsed: Object.values(usedHints).filter(Boolean).length,
+            isDaily: !!game.isDaily
+          }
+        }),
+      });
+      
+      if (!response.ok) {
+        const result = await response.json();
+        console.error("Error from API:", result);
+        return null;
+      }
+      
+      const result = await response.json();
+      console.log("Game record saved successfully:", result);
+      return result;
+    } catch (err) {
+      console.error("Error in saveGameRecord:", err);
       return null;
     }
   };
-
+  
   // Hint handlers
   const revealAge = () => {
     if (usedHints.age || !game?.age) return;

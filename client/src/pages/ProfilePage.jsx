@@ -118,45 +118,51 @@ export default function ProfilePage() {
       try {
         setLoading(true);
         
-        // Get recent games
+        console.log("Fetching games for user ID:", user.id);
+        
+        // Log the SQL query that will be executed (for debugging)
+        console.log(`SQL equivalent: SELECT * FROM games_records WHERE user_id = '${user.id}' ORDER BY created_at DESC LIMIT 20`);
+        
+        // Get recent games with explicit columns
         const { data: games, error } = await supabase
           .from('games_records')
-          .select('*')
+          .select('id, player_name, won, points_earned, time_taken_seconds, guesses_attempted, hints_used, created_at')
           .eq('user_id', user.id)
           .order('created_at', { ascending: false })
           .limit(20);
 
-        if (error) throw error;
+        if (error) {
+          console.error("Error fetching games:", error);
+          throw error;
+        }
         
-        console.log("Fetched recent games:", games);
-        setRecentGames(games || []);
+        console.log("Fetched games:", games);
         
-        // Calculate statistics directly from all games, not just the recent ones
-        const { data: allGames, error: statsError } = await supabase
-          .from('games_records')
-          .select('points_earned, time_taken_seconds, guesses_attempted, won')
-          .eq('user_id', user.id);
+        if (games && games.length > 0) {
+          setRecentGames(games);
           
-        if (statsError) throw statsError;
-        
-        if (allGames && allGames.length > 0) {
-          const totalGames = allGames.length;
-          const wonGames = allGames.filter(game => game.won).length;
-          const totalPoints = allGames.reduce((sum, game) => sum + (game.points_earned || 0), 0);
-          const totalTime = allGames.reduce((sum, game) => sum + (game.time_taken_seconds || 0), 0);
-          
-          console.log("Stats calculation:", {
-            games_played: totalGames,
-            won_games: wonGames,
-            total_points: totalPoints,
-            total_time: totalTime
-          });
+          // Calculate statistics from these games
+          const totalGames = games.length;
+          const wonGames = games.filter(game => game.won).length;
+          const totalPoints = games.reduce((sum, game) => sum + (game.points_earned || 0), 0);
+          const totalTime = games.reduce((sum, game) => sum + (game.time_taken_seconds || 0), 0);
           
           setLocalStats({
             games_played: totalGames,
             total_points: totalPoints,
             avg_time: totalGames > 0 ? Math.round(totalTime / totalGames) : 0,
             success_rate: totalGames > 0 ? Math.round((wonGames / totalGames) * 100) : 0
+          });
+        } else {
+          console.log("No games found for this user.");
+          setRecentGames([]);
+          
+          // Show empty statistics
+          setLocalStats({
+            games_played: 0,
+            total_points: 0,
+            avg_time: 0,
+            success_rate: 0
           });
         }
       } catch (error) {

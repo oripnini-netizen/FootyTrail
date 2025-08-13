@@ -18,10 +18,9 @@ export default function LoginPage() {
     try {
       console.log("Starting Google sign in");
       
-      // Use the deployed URL for production, localhost for development
-      const redirectUrl = process.env.NODE_ENV === 'production' 
-        ? 'https://footy-trail.vercel.app/game'
-        : `${window.location.origin}/game`;
+      // Always use the current origin for redirects during development
+      const redirectUrl = window.location.origin + '/game';
+      console.log("Redirect URL:", redirectUrl);
       
       await supabase.auth.signInWithOAuth({
         provider: 'google',

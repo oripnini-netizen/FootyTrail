@@ -1,7 +1,7 @@
 // client/src/pages/PostGamePage.jsx
 import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
+import { motion, useAnimate } from 'framer-motion';
 import confetti from 'canvas-confetti';
 import {
   User as UserIcon,
@@ -24,6 +24,9 @@ export default function PostGamePage() {
   const [gamesLeft, setGamesLeft] = useState(null);
   const [aiGeneratedFact, setAiGeneratedFact] = useState('');
   const [factLoading, setFactLoading] = useState(false);
+  
+  // Add this for vibration effect
+  const [scope, animate] = useAnimate();
 
   // Confetti effect for wins
   useEffect(() => {
@@ -36,14 +39,31 @@ export default function PostGamePage() {
     }
   }, [didWin]);
 
+  // Add vibration effect for losses - MOVED UP BEFORE THE CONDITIONAL RETURN
+  useEffect(() => {
+    if (!didWin) {
+      // Vibration effect for losing
+      animate(scope.current, 
+        { x: [-5, 5, -5, 5, -3, 3, -2, 2, 0] }, 
+        { duration: 0.5, type: "spring" }
+      );
+    }
+  }, [didWin, animate]);
+
   // Fetch remaining games count - moved outside any conditional blocks
   useEffect(() => {
     async function fetchGamesLeft() {
       if (!user?.id) return;
 
       try {
-        const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
-
+        console.log("Fetching games left for user:", user.id);
+        
+        // Get today's date in YYYY-MM-DD format
+        const today = new Date().toISOString().split('T')[0];
+        
+        console.log("Today's date for query:", today);
+        
+        // Query games played today
         const { data, error } = await supabase
           .from('games_records')
           .select('id')
@@ -52,15 +72,20 @@ export default function PostGamePage() {
           .gte('created_at', `${today}T00:00:00`)
           .lte('created_at', `${today}T23:59:59`);
 
-        if (error) throw error;
+        if (error) {
+          console.error("Error querying games:", error);
+          throw error;
+        }
 
+        console.log("Games played today:", data?.length || 0);
+        
         // Standard daily quota is 10 games
         const remaining = 10 - (data?.length || 0);
         setGamesLeft(Math.max(0, remaining));
+        console.log("Games left:", remaining);
       } catch (error) {
         console.error('Error fetching games left:', error);
-        // Default to unknown if there's an error
-        setGamesLeft('?');
+        setGamesLeft(null); // Use null to indicate error
       }
     }
 
@@ -125,26 +150,52 @@ export default function PostGamePage() {
     getAIFact();
   }, [player]);
 
-  // Function to play again with same filters
+  // Update the playAgainWithSameFilters function
   const playAgainWithSameFilters = async () => {
     if (loading || gamesLeft <= 0) return;
 
     setLoading(true);
     try {
-      // Navigate to LiveGamePage with the existing filters
-      navigate('/live-game', {
-        state: {
-          filters: filters || {},
-          fromPostGame: true, // Flag to indicate this is a direct play again
+      console.log("Play again with filters:", filters);
+      
+      // Call the API to get a random player with these filters
+      const response = await fetch('/api/random-player', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
+        body: JSON.stringify({
+          leagues: filters?.leagues || [],
+          seasons: filters?.seasons || [],
+          minAppearances: filters?.minAppearances || 0,
+          userId: user?.id
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to get random player: ${response.status}`);
+      }
+
+      const gameData = await response.json();
+      
+      // Navigate to LiveGamePage with the player data
+      navigate('/live', {
+        state: {
+          ...gameData,
+          isDaily: false,
+          filters: filters || {},
+          fromPostGame: true,
+        },
+        replace: true
       });
     } catch (error) {
       console.error('Error starting new game:', error);
+      alert('Failed to start a new game. Please try again.');
       setLoading(false);
     }
   };
 
-  // If we have no data, redirect back to the game page
+  // If we have no player data, redirect back to the game page
   if (!player) {
     navigate('/game');
     return null;
@@ -161,6 +212,7 @@ export default function PostGamePage() {
       className="max-w-4xl mx-auto px-4 py-8"
     >
       <div
+        ref={scope}  // Add this ref for the vibration effect
         className={`bg-white rounded-xl shadow-sm p-6 ${
           !didWin ? 'border-red-200' : ''
         }`}

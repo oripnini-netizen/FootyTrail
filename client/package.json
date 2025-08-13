@@ -2,7 +2,7 @@
   "name": "footytrail-frontend",
   "version": "0.1.0",
   "private": true,
-  "homepage": "https://footy-trail.vercel.app",
+  "homepage": "http://localhost:3001/login",
   "main": "src/main.jsx",
   "dependencies": {
     "@supabase/auth-helpers-react": "^0.5.0",
@@ -45,5 +45,8 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
+  },
+  "devDependencies": {
+    "cross-env": "^10.0.0"
   }
 }

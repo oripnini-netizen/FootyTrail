@@ -7,6 +7,9 @@ import {
   getRandomPlayer,
   getDailyChallenge,
   getLimits,
+  getPlayerPoolCount,
+  getGamePrompt,
+  API_BASE // Import API_BASE here, along with other imports
 } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
@@ -27,7 +30,7 @@ import {
   Aperture,
   Bell,
   TableProperties,
-  UserSearch,  // Add this import
+  UserSearch,
 } from 'lucide-react';
 
 function classNames(...s) {
@@ -50,11 +53,18 @@ export default function GamePage() {
   const [selectedLeagueIds, setSelectedLeagueIds] = useState([]);
   const [selectedSeasons, setSelectedSeasons] = useState([]);
   const [minApps, setMinApps] = useState(0);
-  const [loadingCounts, setLoadingCounts] = useState(false); // Add this line
-
-  // Add these new state declarations
+  const [loadingCounts, setLoadingCounts] = useState(false);
   const [leagueTags, setLeagueTags] = useState([]);
   const [expandedCountries, setExpandedCountries] = useState({});
+  
+  // Add isLoading and error state
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [playerPoolCount, setPlayerPoolCount] = useState(0);
+
+  // New state variables for game prompt
+  const [gamePrompt, setGamePrompt] = useState("Your next challenge is here. Calibrate your filters and start scouting.");
+  const [isLoadingPrompt, setIsLoadingPrompt] = useState(true);
 
   // Initialize with user defaults when available
   useEffect(() => {
@@ -72,7 +82,7 @@ export default function GamePage() {
 
   // Daily challenge state
   const [limits, setLimits] = useState({ gamesToday: 0, dailyPlayed: false });
-  const [gameLoading, setGameLoading] = useState(false); // <-- Add the missing state here
+  const [gameLoading, setGameLoading] = useState(false);
 
   // ---------- Load filters + limits + daily card ----------
   useEffect(() => {
@@ -83,8 +93,11 @@ export default function GamePage() {
         setLoadingFilters(true);
         setPageReady(false); // Ensure page shows loading state
 
-        // leagues
+        console.log('🔍 Fetching leagues...');
         const leaguesRes = await getLeagues();
+        console.log('📊 Leagues response:', leaguesRes);
+        
+        // leagues
         if (!cancelled) {
           setGroupedLeagues(leaguesRes.groupedByCountry || {});
           setLeagueTags(leaguesRes.tags || []);
@@ -95,8 +108,11 @@ export default function GamePage() {
           setExpandedCountries(initialCollapse);
         }
 
-        // seasons
+        console.log('🔍 Fetching seasons...');
         const seasonsRes = await getSeasons();
+        console.log('📊 Seasons response:', seasonsRes);
+        
+        // seasons - use the already fetched seasons result
         if (!cancelled) setAllSeasons(seasonsRes.seasons || []);
 
         // user limits (only if user is available)
@@ -116,7 +132,7 @@ export default function GamePage() {
         const d = await getDailyChallenge().catch(() => null);
         if (!cancelled) setDaily(d || null);
       } catch (e) {
-        console.error('Error loading page data:', e);
+        console.error('❌ Error loading page data:', e);
       } finally {
         if (!cancelled) setLoadingFilters(false);
       }
@@ -144,7 +160,11 @@ export default function GamePage() {
           userId: user?.id
         };
         
-        const { poolCount: filteredCount, totalCount: dbTotal } = await getCounts(payload);
+        console.log('🔍 Fetching counts with payload:', payload);
+        const countsResult = await getCounts(payload);
+        console.log('📊 Counts response:', countsResult);
+        
+        const { poolCount: filteredCount, totalCount: dbTotal } = countsResult;
         
         if (!cancelled) {
           setPoolCount(filteredCount || 0);
@@ -154,7 +174,7 @@ export default function GamePage() {
           setPageReady(true);
         }
       } catch (e) {
-        console.error('Error getting counts:', e);
+        console.error('❌ Error getting counts:', e);
         if (!cancelled) {
           setPoolCount(0);
           setTotalCount(0);
@@ -276,9 +296,8 @@ export default function GamePage() {
     }
   };
 
-  // Update calculatePotentialPoints function in GamePage.jsx
+  // Calculate potential points function
   const calculatePotentialPoints = (filters) => {
-    // Use your poolCount * 5 formula directly
     return poolCount * 5;
   };
 
@@ -296,11 +315,11 @@ export default function GamePage() {
       <div className="mb-2">
         <div className="text-xs text-gray-600 mb-1">{title}</div>
         <div className="flex flex-wrap gap-2">
-          {items.map((t) => {
+          {items.map((t, index) => {
             const label = getLabel ? getLabel(t) : String(t);
             return (
               <span
-                key={String(t)}
+                key={`${String(t)}-${index}`} // Add index to ensure uniqueness
                 className={classNames(
                   'group relative inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800',
                   hoverClose && 'pr-6'
@@ -464,6 +483,79 @@ export default function GamePage() {
     </div>
   );
 
+  // Player pool count fetch - Using API from your module
+  useEffect(() => {
+    const fetchPlayerPoolCount = async () => {
+      try {
+        const data = await getPlayerPoolCount();
+        setPlayerPoolCount(data.count);
+      } catch (error) {
+        console.error("Failed to fetch player pool count:", error);
+        setPlayerPoolCount(64380); // Fallback value
+      }
+    };
+
+    fetchPlayerPoolCount();
+  }, []);
+
+  // Add this function for handling the Top 10 leagues button
+  const handleTop10Leagues = () => {
+    const top10Ids = ['39', '140', '78', '135', '61', '88', '94', '71', '128', '253'];
+    setSelectedLeagueIds(prev => {
+      const uniqueIds = new Set([...prev, ...top10Ids]);
+      return Array.from(uniqueIds);
+    });
+  };
+
+  // Add this function to toggle country expansion in the leagues list
+  const toggleCountry = (country) => {
+    setExpandedCountries(prev => ({
+      ...prev,
+      [country]: !prev[country]
+    }));
+  };
+
+  // Add this function for handling the Last 5 seasons button
+  const handleLast5Seasons = () => {
+    setSelectedSeasons(allSeasons.slice(0, 5));
+  };
+
+  // New useEffect for fetching the game prompt
+  useEffect(() => {
+    const fetchGamePrompt = async () => {
+      try {
+        setIsLoadingPrompt(true);
+        console.log("Fetching game prompt from API...");
+        
+        const response = await fetch(`${API_BASE}/ai/generate-game-prompt`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({}),
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Failed to fetch game prompt: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        console.log("Game prompt received:", data);
+        
+        if (data.prompt) {
+          setGamePrompt(data.prompt);
+        }
+      } catch (error) {
+        console.error('Error fetching game prompt:', error);
+        // Keep the default prompt in case of error
+      } finally {
+        setIsLoadingPrompt(false);
+      }
+    };
+    
+    fetchGamePrompt();
+  }, []);
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-green-50 to-transparent">
       {!pageReady ? (
@@ -514,7 +606,11 @@ export default function GamePage() {
               <UserSearch className="h-16 w-16 text-gray-400" />
             </div>
             <p className="text-center text-gray-600 mb-6">
-              Your next challenge is here. Calibrate your filters and start scouting.
+              {isLoadingPrompt ? (
+                <span className="inline-block animate-pulse">Getting ready for your challenge...</span>
+              ) : (
+                gamePrompt
+              )}
             </p>
 
             {/* Player Pool Stats */}
@@ -584,54 +680,191 @@ export default function GamePage() {
             </div>
 
             {/* Difficulty Filters Section */}
-            <div className="border rounded-xl">
-              <button
-                onClick={() => setCollapsed(!collapsed)}
-                className="w-full flex items-center justify-between p-4"
-              >
+            <div className="rounded-xl shadow-md transition-all hover:shadow-lg border bg-green-50/60 p-4">
+              <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Filter className="h-5 w-5 text-gray-600" />
-                  <span className="font-medium">Difficulty Filters</span>
+                  <Filter className="h-5 w-5 text-green-700" />
+                  <h3 className="text-lg font-semibold text-green-900">Difficulty Filters</h3>
                 </div>
-                {collapsed ? (
-                  <ChevronDown className="h-5 w-5" />
-                ) : (
-                  <ChevronUp className="h-5 w-5" />
-                )}
-              </button>
+                <button
+                  className="text-gray-600 hover:text-gray-800"
+                  onClick={() => setCollapsed(c => !c)}
+                >
+                  {collapsed ? (
+                    <ChevronDown className="h-5 w-5" />
+                  ) : (
+                    <ChevronUp className="h-5 w-5" />
+                  )}
+                </button>
+              </div>
 
-              {!collapsed && (
-                <div className="p-4 border-t space-y-4">
-                  {/* Keep your existing filter components here */}
-                  <div className="mb-4">
-                    <div className="text-sm font-medium text-gray-700 mb-2">
-                      Select Seasons
+              {!collapsed && !loadingFilters && (
+                <div className="mt-4 space-y-6">
+                  {/* Leagues Filter */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <Star className="h-4 w-4 text-green-700" />
+                        <span className="font-medium text-green-900">Leagues Filter</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={handleTop10Leagues}
+                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                        >
+                          <Star className="h-3 w-3 text-yellow-600" />
+                          Top 10
+                        </button>
+                        <button
+                          onClick={clearLeagues}
+                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                          Clear
+                        </button>
+                      </div>
                     </div>
-                    <SeasonsPicker />
+
+                    <SelectedChips
+                      title="Chosen leagues"
+                      items={selectedLeagueIds}
+                      onClear={clearLeagues}
+                      getLabel={(id) => leagueIdToLabel[id] || `Unknown League (${id})`}
+                      onRemoveItem={(id) => setSelectedLeagueIds(prev => prev.filter(x => x !== id))}
+                      hoverClose
+                    />
+
+                    <div className="max-h-96 overflow-y-auto pr-2">
+                      {Object.entries(groupedLeagues)
+                        .sort(([a], [b]) => a.localeCompare(b))
+                        .map(([country, leagues]) => (
+                          <div key={country} className="mb-2">
+                            <button
+                              onClick={(e) => {
+                                e.preventDefault(); // Prevent form submission
+                                toggleCountry(country);
+                              }}
+                              type="button" // Explicitly mark as button
+                              className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
+                            >
+                              <div className="flex items-center gap-2">
+                                <img
+                                  src={leagues[0].country_flag}
+                                  alt={country}
+                                  className="w-6 h-4 object-cover rounded"
+                                />
+                                <span>{country}</span>
+                                <span className="text-xs text-gray-500">
+                                  ({leagues.length})
+                                </span>
+                              </div>
+                              {expandedCountries[country] ? (
+                                <ChevronUp className="h-4 w-4" />
+                              ) : (
+                                <ChevronDown className="h-4 w-4" />
+                              )}
+                            </button>
+
+                            {expandedCountries[country] && (
+                              <div className="ml-8 space-y-2 mt-2">
+                                {leagues.map((league) => (
+                                  <label
+                                    key={league.league_id}
+                                    className="flex items-center gap-2 cursor-pointer"
+                                    onClick={(e) => e.stopPropagation()} // Prevent bubbling
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedLeagueIds.includes(league.league_id)}
+                                      onChange={() => toggleLeague(league.league_id)}
+                                      className="rounded"
+                                    />
+                                    <img
+                                      src={league.logo}
+                                      alt={league.league_name}
+                                      className="w-5 h-5 object-contain"
+                                    />
+                                    <span className="text-sm">{league.league_name}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                    </div>
                   </div>
 
-                  {/* Leagues picker (show if options available) */}
-                  {Object.keys(groupedLeagues).length > 0 && (
-                    <div>
-                      <div className="text-sm font-medium text-gray-700 mb-2">
-                        Select Leagues
+                  {/* Seasons Filter */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
+                    <div className="md:col-span-2">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <UsersRound className="h-4 w-4 text-green-700" />
+                          <span className="font-medium text-green-900">Season Filter</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={handleLast5Seasons}
+                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                          >
+                            Last 5
+                          </button>
+                          <button
+                            onClick={clearSeasons}
+                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            Clear
+                          </button>
+                        </div>
                       </div>
-                      <LeaguesPicker />
-                    </div>
-                  )}
 
-                  {/* Minimum appearances input */}
-                  <div>
-                    <div className="text-sm font-medium text-gray-700 mb-2">
-                      Minimum Appearances
+                      <SelectedChips
+                        title="Chosen seasons"
+                        items={selectedSeasons}
+                        onClear={clearSeasons}
+                      />
+
+                      <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-2">
+                        {allSeasons.map((season) => (
+                          <button
+                            key={season}
+                            onClick={() => {
+                              setSelectedSeasons(prev =>
+                                prev.includes(season) ? prev.filter(s => s !== season) : [...prev, season]
+                              );
+                            }}
+                            className={classNames(
+                              'px-2 py-1 text-sm rounded-md border',
+                              selectedSeasons.includes(season)
+                                ? 'bg-green-100 border-green-500 text-green-700'
+                                : 'bg-white hover:bg-gray-50'
+                            )}
+                          >
+                            {season}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                    <input
-                      type="number"
-                      value={minApps}
-                      onChange={(e) => setMinApps(Math.max(0, Number(e.target.value)))}
-                      className="w-full p-2 border rounded-md focus:ring-1 focus:ring-green-500 focus:outline-none"
-                      min="0"
-                    />
+
+                    {/* Minimum Appearances */}
+                    <div className="flex flex-col items-center">
+                      <div className="flex items-center gap-2 mb-2">
+                        <UsersRound className="h-4 w-4 text-green-700" />
+                        <span className="font-medium text-green-900">Minimum Appearances</span>
+                      </div>
+                      <input
+                        type="number"
+                        value={minApps}
+                        onChange={(e) => setMinApps(parseInt(e.target.value) || 0)}
+                        min="0"
+                        max="100"
+                        className="w-full px-3 py-2 border rounded-md text-center"
+                      />
+                      <div className="text-xs text-gray-500 text-center mt-1">
+                        Minimum appearances in a season
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}

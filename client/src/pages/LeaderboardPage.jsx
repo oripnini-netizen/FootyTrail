@@ -40,71 +40,90 @@ export default function LeaderboardPage() {
         
         // Fetch daily challenge champions for today
         const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-        const { data: dailyData, error: dailyError } = await supabase
-          .from('games_records')
-          .select('*, users(full_name, profile_photo_url)') // Correct join syntax
-          .eq('is_daily_challenge', true)
-          .gte('played_at', todayStart)
-          .eq('won', true)
-          .order('points_earned', { ascending: false })
-          .limit(10);
-          
-        if (dailyError) {
-          console.error('Error fetching daily champions:', dailyError);
-        } else {
-          console.log('Daily champions data:', dailyData);
-          setDailyChampions(dailyData || []);
-        }
-        
-        // Fetch user data with aggregations
-        let query = supabase.rpc('get_leaderboard');
-        
-        // Apply date filter if needed
-        if (startDateIso) {
-          query = query.gte('played_at', startDateIso);
-        }
-        
-        // Sort by appropriate column
-        const sortColumn = metric === 'Total Points' ? 'total_points' : 'avg_points';
-        query = query.order(sortColumn, { ascending: false });
-        
-        const { data, error } = await query;
-        
-        if (error) {
-          console.error('Leaderboard query error:', error);
-          
-          // Fallback approach if the RPC isn't available
-          console.log('Trying fallback approach...');
-          
-          // First get distinct users with their game stats
-          const { data: userData, error: userError } = await supabase
+        try {
+          // First get daily challenge games
+          const { data: dailyData, error: dailyError } = await supabase
             .from('games_records')
-            .select(`
-              user_id,
-              users(full_name, profile_photo_url, member_since)
-            `)
-            .eq('user_id', supabase.auth.user()?.id) // Just for testing with current user
+            .select('id, user_id, points_earned, player_name, created_at')
+            .eq('is_daily_challenge', true)
+            .gte('created_at', todayStart)
+            .eq('won', true)
+            .order('points_earned', { ascending: false })
+            .limit(10);
             
-          if (userError) throw userError;
-          
-          // For each user, get their stats
-          const enrichedUsers = [];
-          
-          for (const user of userData) {
-            // Get stats for this user
-            let statsQuery = supabase
-              .from('games_records')
-              .select('*')
-              .eq('user_id', user.user_id);
+          if (dailyError) {
+            console.error('Error fetching daily champions games:', dailyError);
+          } else if (dailyData && dailyData.length > 0) {
+            console.log('Found daily challenge winners:', dailyData.length);
+            
+            // Then get user details separately and combine the data
+            const userIds = dailyData.map(game => game.user_id);
+            const { data: usersData, error: usersError } = await supabase
+              .from('users')
+              .select('id, full_name, profile_photo_url')
+              .in('id', userIds);
               
-            if (startDateIso) {
-              statsQuery = statsQuery.gte('played_at', startDateIso);
+            if (usersError) {
+              console.error('Error fetching user details:', usersError);
+            } else {
+              console.log('Found user details:', usersData?.length || 0);
+              
+              // Map users to their games
+              const userMap = {};
+              usersData?.forEach(user => {
+                userMap[user.id] = user;
+              });
+              
+              // Combine the data
+              const enrichedDailyChampions = dailyData.map(game => ({
+                ...game,
+                user: userMap[game.user_id] || { full_name: 'Unknown Player' }
+              }));
+              
+              setDailyChampions(enrichedDailyChampions);
             }
+          } else {
+            console.log('No daily champions found for today');
+            setDailyChampions([]);
+          }
+        } catch (err) {
+          console.error('Error in daily champions processing:', err);
+          setDailyChampions([]);
+        }
+        
+        // Basic query to get all users with their game stats
+        const { data: userData, error: userError } = await supabase
+          .from('users')
+          .select('id, full_name, profile_photo_url, created_at'); // Use created_at instead of member_since
+          
+        if (userError) {
+          console.error('Error fetching users:', userError);
+          throw userError;
+        }
+        console.log('Got users:', userData?.length || 0);
+        
+        // For each user, get their stats
+        const enrichedUsers = [];
+        
+        for (const user of userData) {
+          // Get stats for this user
+          let statsQuery = supabase
+            .from('games_records')
+            .select('*')
+            .eq('user_id', user.id);
             
-            const { data: stats, error: statsError } = await statsQuery;
-            
-            if (statsError) continue;
-            
+          if (startDateIso) {
+            statsQuery = statsQuery.gte('created_at', startDateIso);
+          }
+          
+          const { data: stats, error: statsError } = await statsQuery;
+          
+          if (statsError) {
+            console.error('Error getting stats for user', user.id, statsError);
+            continue;
+          }
+          
+          if (stats && stats.length > 0) {
             // Calculate metrics
             const points = stats.reduce((sum, game) => sum + (game.points_earned || 0), 0);
             const gamesCount = stats.length;
@@ -112,10 +131,10 @@ export default function LeaderboardPage() {
             const totalTime = stats.reduce((sum, game) => sum + (game.time_taken_seconds || 0), 0);
             
             enrichedUsers.push({
-              userId: user.user_id,
-              name: user.users?.full_name || 'Unknown Player',
-              profilePhoto: user.users?.profile_photo_url,
-              memberSince: user.users?.member_since ? new Date(user.users.member_since).toLocaleDateString() : 'Unknown',
+              userId: user.id,
+              name: user.full_name || 'Unknown Player',
+              profilePhoto: user.profile_photo_url,
+              memberSince: user.created_at ? new Date(user.created_at).toLocaleDateString() : 'Unknown',
               points: points,
               gamesCount: gamesCount,
               avgTime: gamesCount > 0 ? Math.round(totalTime / gamesCount) : 0,
@@ -123,38 +142,20 @@ export default function LeaderboardPage() {
               avgPoints: gamesCount > 0 ? Math.round(points / gamesCount) : 0
             });
           }
-          
-          // Sort the users
-          enrichedUsers.sort((a, b) => {
-            if (metric === 'Total Points') {
-              return b.points - a.points;
-            } else {
-              return b.avgPoints - a.avgPoints;
-            }
-          });
-          
-          setLeaderboard(enrichedUsers);
-        } else {
-          console.log('Leaderboard data received:', data);
-          
-          // Transform the data to match our UI needs
-          const transformedData = (data || []).map(row => ({
-            userId: row.user_id,
-            name: row.full_name || 'Unknown Player',
-            profilePhoto: row.profile_photo_url,
-            memberSince: row.member_since ? new Date(row.member_since).toLocaleDateString() : 'Unknown',
-            points: row.total_points || 0,
-            gamesCount: row.games_count || 0, 
-            avgTime: row.avg_time || 0,
-            successRate: row.success_rate || 0,
-            avgPoints: row.avg_points || 0
-          }));
-          
-          setLeaderboard(transformedData);
         }
+        
+        // Sort the users
+        enrichedUsers.sort((a, b) => {
+          if (metric === 'Total Points') {
+            return b.points - a.points;
+          } else {
+            return b.avgPoints - a.avgPoints;
+          }
+        });
+        
+        setLeaderboard(enrichedUsers);
       } catch (error) {
         console.error('Error fetching leaderboard data:', error);
-        // Set empty leaderboard to avoid showing loading forever
         setLeaderboard([]);
       } finally {
         setLoading(false);
@@ -211,7 +212,7 @@ export default function LeaderboardPage() {
                     {index + 1}
                   </div>
                   <div>
-                    <div className="font-medium">{champion.users?.full_name || 'Unknown Player'}</div>
+                    <div className="font-medium">{champion.user?.full_name || 'Unknown Player'}</div>
                     <div className="text-sm text-yellow-700">{champion.points_earned} points</div>
                   </div>
                 </div>

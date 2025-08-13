@@ -4,8 +4,15 @@ import { supabase } from './supabase';
 // Single source of truth for API base URL.
 // Change REACT_APP_API_BASE in client/.env if your server runs elsewhere.
 
-const API_BASE =
-  process.env.REACT_APP_API_BASE?.replace(/\/+$/, '') || 'http://localhost:3000/api';
+// Check that your API_BASE is correctly set to port 3001
+
+export const API_BASE =
+  process.env.NODE_ENV === 'production'
+    ? process.env.REACT_APP_API_BASE?.replace(/\/+$/, '') || 'https://footytrail.up.railway.app/api'
+    : 'http://localhost:3001/api'; // Should be 3001
+
+// Add this debug line
+console.log('API_BASE:', API_BASE);
 
 async function jfetch(path, opts = {}) {
   const { data: { session }, error } = await supabase.auth.getSession();
@@ -79,3 +86,13 @@ export const fetchTransfers = async (playerId) => {
     return [];
   }
 };
+
+export const getGamePrompt = () => jfetch('/ai/generate-game-prompt', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({})
+});
+
+export const getPlayerPoolCount = () => jfetch('/player-pool-count');

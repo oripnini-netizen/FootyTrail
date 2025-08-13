@@ -1,8 +1,9 @@
 // src/App.jsx
 import React, { useEffect } from 'react';
-import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { supabase } from './supabase';
 import { useAuth } from './context/AuthContext';
+import ScrollToTop from './components/ScrollToTop';
 
 // Import your pages
 import LoginPage from './pages/LoginPage';
@@ -25,52 +26,31 @@ const App = () => {
   const navigate = useNavigate();
   const location = useLocation();
   
+  // Add ScrollToTop effect directly in App component
+  useEffect(() => {
+    window.scrollTo({ 
+      top: 0, 
+      behavior: 'smooth' 
+    });
+  }, [location.pathname]);
+  
   // Handle OAuth redirect
   useEffect(() => {
     if (window.location.hash && window.location.hash.includes('access_token')) {
       console.log('OAuth redirect detected, processing session');
-      console.log('Hash:', window.location.hash.substring(0, 20) + '...');
+      console.log('Current URL:', window.location.href);
       
       // Process the OAuth response
-      supabase.auth.getSession().then(({ data, error }) => {
-        if (error) {
-          console.error('Error getting session:', error);
-          return;
-        }
-        
-        console.log('Session after redirect:', data.session ? 'Exists' : 'None');
-        
-        // Navigate to the appropriate page after authentication
+      supabase.auth.getSession().then(({ data }) => {
         if (data.session) {
-          console.log('User authenticated:', data.session.user.email);
-          
-          // Check if user has completed onboarding
-          supabase
-            .from('users')
-            .select('has_completed_onboarding')
-            .eq('id', data.session.user.id)
-            .single()
-            .then(({ data: userData, error: userError }) => {
-              if (userError) {
-                console.error('Error fetching user data:', userError);
-                navigate('/game'); // Fallback to game page
-                return;
-              }
-              
-              console.log('User data:', userData);
-              
-              if (userData?.has_completed_onboarding) {
-                console.log('Navigating to game page');
-                navigate('/game');
-              } else {
-                console.log('Navigating to tutorial page');
-                navigate('/tutorial');
-              }
-            });
+          // Force the app to stay on localhost after login
+          const gamePageUrl = window.location.origin + '/game';
+          console.log('Navigating to:', gamePageUrl);
+          window.location.href = gamePageUrl;
         }
       });
     }
-  }, [navigate]);
+  }, []);
   
   if (loading) {
     return <div className="text-center mt-20 text-xl">Loading...</div>;
