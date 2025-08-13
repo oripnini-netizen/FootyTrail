@@ -70,8 +70,27 @@ export default function LoginPage() {
           <h2 style={{ margin:0 }}>Sign in to FootyTrail</h2>
         </div>
 
-        {/* OAuth buttons */}
-        <button onClick={signInWithGoogle} style={{ width:'100%', padding:10, borderRadius:8, border:'1px solid #ddd', marginBottom:8 }}>
+        {/* OAuth button with Google logo */}
+        <button 
+          onClick={signInWithGoogle} 
+          style={{ 
+            width:'100%', 
+            padding:'10px 16px', 
+            borderRadius:8, 
+            border:'1px solid #ddd', 
+            marginBottom:8,
+            background: '#fff',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px',
+            fontWeight: '500',
+            cursor: 'pointer'
+          }}
+        >
+          <svg width="18" height="18" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 488 512">
+            <path fill="#4285F4" d="M488 261.8C488 403.3 391.1 504 248 504 110.8 504 0 393.2 0 256S110.8 8 248 8c66.8 0 123 24.5 166.3 64.9l-67.5 64.9C258.5 52.6 94.3 116.6 94.3 256c0 86.5 69.1 156.6 153.7 156.6 98.2 0 135-70.4 140.8-106.9H248v-85.3h236.1c2.3 12.7 3.9 24.9 3.9 41.4z"/>
+          </svg>
           Continue with Google
         </button>
 
@@ -81,7 +100,7 @@ export default function LoginPage() {
         <form onSubmit={handleEmailSignin} style={{ marginBottom:12 }}>
           <input name="email" type="email" placeholder="Email" required style={{ width:'100%', padding:10, border:'1px solid #ddd', borderRadius:8, marginBottom:8 }} />
           <input name="password" type="password" placeholder="Password" required style={{ width:'100%', padding:10, border:'1px solid #ddd', borderRadius:8, marginBottom:8 }} />
-          <button type="submit" style={{ width:'100%', padding:10, borderRadius:8, background:'#16a34a', color:'#fff', border:'none' }}>
+          <button type="submit" style={{ width:'100%', padding:10, borderRadius:8, background:'#16a34a', color:'#fff', border:'none', cursor:'pointer' }}>
             Sign in
           </button>
         </form>
@@ -91,13 +110,13 @@ export default function LoginPage() {
           <input name="full_name" type="text" placeholder="Full name" required style={{ width:'100%', padding:10, border:'1px solid #ddd', borderRadius:8, marginBottom:8 }} />
           <input name="email" type="email" placeholder="Email" required style={{ width:'100%', padding:10, border:'1px solid #ddd', borderRadius:8, marginBottom:8 }} />
           <input name="password" type="password" placeholder="Password" required style={{ width:'100%', padding:10, border:'1px solid #ddd', borderRadius:8, marginBottom:8 }} />
-          <button type="submit" style={{ width:'100%', padding:10, borderRadius:8, background:'#2563eb', color:'#fff', border:'none' }}>
+          <button type="submit" style={{ width:'100%', padding:10, borderRadius:8, background:'#2563eb', color:'#fff', border:'none', cursor:'pointer' }}>
             Sign up
           </button>
         </form>
 
         {session?.user && (
-          <button onClick={signOut} style={{ width:'100%', marginTop:16, padding:10, borderRadius:8, border:'1px solid #ddd' }}>
+          <button onClick={signOut} style={{ width:'100%', marginTop:16, padding:10, borderRadius:8, border:'1px solid #ddd', cursor:'pointer' }}>
             Sign out
           </button>
         )}
