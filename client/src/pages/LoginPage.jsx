@@ -20,13 +20,24 @@ export default function LoginPage() {
   }, []);
 
   const signInWithGoogle = async () => {
-    await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${window.location.origin}/game`, // Change to redirect directly to game
-        queryParams: { prompt: 'select_account' }       // מכריח בחירת חשבון
-      },
-    });
+    try {
+      console.log("Starting Google sign in");
+      
+      // Use the deployed URL for production, localhost for development
+      const redirectUrl = process.env.NODE_ENV === 'production' 
+        ? 'https://footy-trail.vercel.app/game'
+        : `${window.location.origin}/game`;
+      
+      await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: redirectUrl,
+          queryParams: { prompt: 'select_account' }
+        }
+      });
+    } catch (e) {
+      console.error("Exception during Google sign in:", e);
+    }
   };
 
   const signInWithFacebook = async () => {
