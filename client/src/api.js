@@ -5,7 +5,7 @@ import { supabase } from './supabase';
 // Change REACT_APP_API_BASE in client/.env if your server runs elsewhere.
 
 const API_BASE =
-  process.env.REACT_APP_API_BASE?.replace(/\/+$/, '') || 'http://localhost:3000/api';
+  import.meta.env.VITE_API_BASE?.replace(/\/+$/, '') || 'http://localhost:3000/api';
 
 async function jfetch(path, opts = {}) {
   const { data: { session }, error } = await supabase.auth.getSession();
