@@ -1,7 +1,8 @@
 {
-  "name": "client",
+  "name": "footytrail-frontend",
   "version": "0.1.0",
   "private": true,
+  "homepage": "https://footytrail.vercel.app",
   "main": "src/main.jsx",
   "dependencies": {
     "@supabase/auth-helpers-react": "^0.5.0",

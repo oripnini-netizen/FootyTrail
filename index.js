@@ -21,8 +21,12 @@ const app = express();
 // 3) CORS (allow any localhost port; send cookies if needed)
 app.use(
   cors({
-    origin: [/^http:\/\/localhost:\d+$/],
-    credentials: true,
+    origin: [
+      'http://localhost:3000',         // Local development
+      'https://footytrail.vercel.app', // Your Vercel domain
+      // Add any other domains you need
+    ],
+    credentials: true
   })
 );
 
