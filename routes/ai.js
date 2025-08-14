@@ -15,36 +15,100 @@ const openai = new OpenAI({
 // Endpoint to generate player facts
 router.post('/generate-player-fact', async (req, res) => {
   try {
+    console.log("Generate player fact endpoint called");
     const { player, transferHistory } = req.body;
     
-    // Prepare context for the AI
-    let clubs = [];
-    if (Array.isArray(transferHistory)) {
-      clubs = transferHistory.map(t => t.club_name || t.club || '').filter(Boolean);
+    // Bail early if no player data
+    if (!player || !player.name) {
+      return res.status(400).json({ error: 'Player data required' });
     }
     
-    const clubsText = clubs.length ? `who played for these clubs: ${clubs.join(', ')}` : '';
+    console.log("Generating fact for player:", player.name);
     
-    // Prepare prompt based on available data
-    const prompt = `Generate an interesting and little-known fact about footballer ${player.name || 'this player'} ${clubsText}. 
-    Make it engaging and concise (max 2 sentences). If you don't have specific information, create a plausible and entertaining football-related fact.`;
+    // Process transfer history to a readable format
+    let transferHistorySummary = "";
+    if (transferHistory && transferHistory.length > 0) {
+      transferHistorySummary = transferHistory
+        .map(t => t.team_name || t.club_name || t.club)
+        .filter(Boolean)
+        .join(", ");
+    }
+    
+    // Check if OpenAI API key exists
+    if (!process.env.OPENAI_API_KEY) {
+      console.log("No OpenAI API key found - returning fallback fact");
+      return res.status(200).json({ 
+        fact: `${player.name} has had a career full of surprising moments that many fans don't know about.`
+      });
+    }
+    
+    // Create prompt for OpenAI
+    const prompt = `You are a football trivia expert. Your task is to provide a short, single-sentence 'Did you know...' style fun fact about a football player.
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        { role: "system", content: "You are a knowledgeable football expert who provides interesting facts about players." },
-        { role: "user", content: prompt }
-      ],
-      max_tokens: 100,
-      temperature: 0.7,
-    });
+Use the following data ONLY to verify you are talking about the correct player. DO NOT simply repeat this information.
 
-    const fact = completion.choices[0].message.content.trim();
-    console.log("Generated fact:", fact); // For debugging
-    res.json({ fact });
+Player Data for Verification:
+- Name: ${player.name}
+- Age: ${player.age || 'Unknown'}
+- Position: ${player.position || 'Unknown'}
+- Notable Clubs: ${transferHistorySummary || 'Unknown'}
+
+Now, find a NEW and INTERESTING fun fact about ${player.name} from your own knowledge or by searching the web. The fact could be about:
+- A famous nickname or unusual habit
+- A unique record they hold
+- A memorable goal or match moment
+- An interesting piece of personal trivia (e.g., family connections, hobbies, education)
+- Something surprising about their career path or background
+
+Example: "Did you know that his nickname is 'The Butcher of Amsterdam' due to his aggressive playing style?"
+
+CRITICAL INSTRUCTIONS:
+- Do NOT include any source URLs, links, or citations in parentheses
+- Do NOT include markdown links like [website](url)
+- Do NOT mention where you found the information
+- Provide ONLY the fun fact as a clean, single sentence
+- Start with "Did you know that" or similar phrasing
+
+Generate the fun fact now:`;
+
+    // Define fallback facts in case OpenAI fails
+    const fallbackFacts = [
+      `${player.name} has a pre-match ritual that many teammates find unusual but respect as part of their preparation.`,
+      `${player.name} almost pursued a completely different career before focusing on football professionally.`,
+      `${player.name} holds an interesting record that isn't widely known among casual football fans.`,
+      `${player.name} has an unexpected hobby outside of football that helps them maintain mental balance.`,
+      `In their youth career, ${player.name} played in a completely different position before finding their current role.`
+    ];
+    
+    try {
+      console.log("Sending request to OpenAI...");
+      const completion = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [
+          { role: "system", content: "You are a knowledgeable football/soccer trivia expert." },
+          { role: "user", content: prompt }
+        ],
+        max_tokens: 100,
+        temperature: 0.7,
+      });
+
+      const factText = completion.choices[0].message.content.trim();
+      console.log("Generated OpenAI fact:", factText);
+      
+      return res.json({ fact: factText });
+    } catch (openaiError) {
+      console.error('Error with OpenAI:', openaiError);
+      // Fall back to random pre-written fact
+      const randomFact = fallbackFacts[Math.floor(Math.random() * fallbackFacts.length)];
+      console.log("Using fallback fact:", randomFact);
+      return res.json({ fact: randomFact });
+    }
   } catch (error) {
-    console.error('Error generating player fact:', error);
-    res.status(500).json({ error: 'Failed to generate player fact', details: error.message });
+    console.error('General error in generate-player-fact:', error);
+    res.status(500).json({ 
+      error: 'Failed to generate player fact',
+      fact: `${req.body?.player?.name || 'This player'} has had a remarkable journey through their football career.`
+    });
   }
 });
 
@@ -75,7 +139,7 @@ router.post('/generate-game-prompt', async (req, res) => {
           model: "gpt-3.5-turbo",
           messages: [
             { role: "system", content: "You are an enthusiastic football expert who creates engaging game prompts." },
-            { role: "user", content: "Generate a short, engaging 1-2 sentence prompt to motivate someone to play a football player guessing game. Be enthusiastic and creative. Maximum 120 characters." }
+            { role: "user", content: "Generate a short, engaging 1-2 sentence prompt to motivate someone to play a football player guessing game by their transfer history. Be enthusiastic and creative. Maximum 120 characters." }
           ],
           max_tokens: 60,
           temperature: 0.8,

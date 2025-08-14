@@ -42,11 +42,20 @@ export default function PostGamePage() {
   // Add vibration effect for losses - MOVED UP BEFORE THE CONDITIONAL RETURN
   useEffect(() => {
     if (!didWin) {
-      // Vibration effect for losing
-      animate(scope.current, 
-        { x: [-5, 5, -5, 5, -3, 3, -2, 2, 0] }, 
-        { duration: 0.5, type: "spring" }
-      );
+      // Use a sequence of animations instead of one complex array
+      const sequence = async () => {
+        await animate(scope.current, { x: -5 }, { duration: 0.05, type: "tween" });
+        await animate(scope.current, { x: 5 }, { duration: 0.05, type: "tween" });
+        await animate(scope.current, { x: -5 }, { duration: 0.05, type: "tween" });
+        await animate(scope.current, { x: 5 }, { duration: 0.05, type: "tween" });
+        await animate(scope.current, { x: -3 }, { duration: 0.05, type: "tween" });
+        await animate(scope.current, { x: 3 }, { duration: 0.05, type: "tween" });
+        await animate(scope.current, { x: -2 }, { duration: 0.05, type: "tween" });
+        await animate(scope.current, { x: 2 }, { duration: 0.05, type: "tween" });
+        await animate(scope.current, { x: 0 }, { duration: 0.05, type: "tween" });
+      };
+      
+      sequence();
     }
   }, [didWin, animate]);
 
