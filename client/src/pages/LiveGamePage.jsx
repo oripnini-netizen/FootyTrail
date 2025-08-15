@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { suggestNames, addGameRecord } from '../api';
+import { suggestNames, addGameRecord, API_BASE, saveGameCompleted } from '../api';
 import { Clock, AlarmClock, Lightbulb, Trophy } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import confetti from 'canvas-confetti';
@@ -307,36 +307,30 @@ export default function LiveGamePage() {
     try {
       console.log("Saving game record with data:", { won, game });
       
-      // Send the data to your backend API
-      const response = await fetch('/api/game-completed', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          userId: user.id,
-          playerData: {
-            id: game.player_id || game.id,
-            name: game.name || game.player_name
-          },
-          gameStats: {
-            won: won,
-            points: won ? points : 0,
-            timeTaken: INITIAL_TIME - timeSec,
-            guessesAttempted: 3 - guessesLeft + (won ? 1 : 0),
-            hintsUsed: Object.values(usedHints).filter(Boolean).length,
-            isDaily: !!game.isDaily
+      const result = await saveGameCompleted({
+        userId: user.id,
+        playerData: {
+          id: parseInt(game.player_id || game.id, 10) || 0, // Convert to number, fallback to 0
+          name: game.name || game.player_name,
+          // Include full player data for the player_data field
+          data: {
+            nationality: game.nationality,
+            position: game.position,
+            age: game.age,
+            photo: game.photo
           }
-        }),
+        },
+        gameStats: {
+          won: won,
+          points: won ? points : 0,
+          potentialPoints: game.potentialPoints || filters?.potentialPoints || 10000, // Include potential points
+          timeTaken: INITIAL_TIME - timeSec,
+          guessesAttempted: 3 - guessesLeft + (won ? 1 : 0),
+          hintsUsed: Object.values(usedHints).filter(Boolean).length,
+          isDaily: !!game.isDaily
+        }
       });
       
-      if (!response.ok) {
-        const result = await response.json();
-        console.error("Error from API:", result);
-        return null;
-      }
-      
-      const result = await response.json();
       console.log("Game record saved successfully:", result);
       return result;
     } catch (err) {

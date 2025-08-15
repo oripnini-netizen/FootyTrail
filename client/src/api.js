@@ -74,6 +74,35 @@ export async function addGameRecord(gameRecord) {
   });
 }
 
+// Add game completed function
+export async function saveGameCompleted(gameData) {
+  console.log('Saving game with data:', gameData);
+  try {
+    const response = await fetch(`${API_BASE}/game-completed`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(gameData)
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => null);
+      console.error('Error response from server:', {
+        status: response.status,
+        statusText: response.statusText,
+        errorData
+      });
+      throw new Error(errorData?.error || errorData?.message || response.statusText || 'Error saving game record');
+    }
+    
+    return response.json();
+  } catch (error) {
+    console.error('Error in saveGameCompleted:', error);
+    throw error;
+  }
+}
+
 // Add this to client/src/api.js
 export const fetchTransfers = async (playerId) => {
   try {

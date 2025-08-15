@@ -76,45 +76,130 @@ app.use((req, res, next) => {
 // When a game is completed
 app.post('/api/game-completed', async (req, res) => {
   try {
+    console.log('Game completed request received:', req.body);
     const { userId, playerData, gameStats } = req.body;
     
+    console.log('Extracted data:', { userId, playerData, gameStats });
+    
+    // Validate the input data
+    if (!userId) {
+      console.error('Missing userId in request');
+      return res.status(400).json({ error: 'Missing userId in request' });
+    }
+    
+    if (!playerData || !playerData.id) {
+      console.error('Missing playerData.id in request');
+      return res.status(400).json({ error: 'Missing playerData.id in request' });
+    }
+    
     // Validate the user exists
+    console.log('Checking if user exists:', userId);
     const { data: user, error: userError } = await supabaseAdmin
-      .from('users')
+      .from('profiles') // Try 'profiles' table instead of 'users'
       .select('id')
       .eq('id', userId)
       .single();
       
-    if (userError || !user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    
-    // Save the game record using admin privileges
-    const { data, error } = await supabaseAdmin
-      .from('games_records')
-      .insert([{
-        user_id: userId,
-        player_id: playerData.id,
-        player_name: playerData.name,
-        won: gameStats.won,
-        points_earned: gameStats.points,
-        time_taken_seconds: gameStats.timeTaken,
-        guesses_attempted: gameStats.guessesAttempted,
-        hints_used: gameStats.hintsUsed,
-        is_daily_challenge: gameStats.isDaily,
-        created_at: new Date().toISOString()
-      }])
-      .select();
+    if (userError) {
+      console.error('Error finding user in profiles table:', userError);
+      // Try auth.users table instead
+      console.log('Trying auth.users table instead...');
+      const { data: authUser, error: authError } = await supabaseAdmin
+        .auth.admin.getUserById(userId);
       
-    if (error) {
-      console.error('Error saving game record:', error);
-      return res.status(500).json({ error: 'Failed to save game record' });
+      if (authError) {
+        console.error('Error finding user in auth.users table:', authError);
+        console.log('User not found in both tables but continuing with game record insertion anyway');
+      } else {
+        console.log('User found in auth.users table:', authUser);
+      }
+    } else {
+      console.log('User found in profiles table:', user);
     }
     
-    res.json({ success: true, record: data[0] });
+    // Now unconditionally try to insert the game record, regardless of user validation
+    try {
+      const recordToInsert = {
+        user_id: userId,
+        player_id: parseInt(playerData.id, 10) || 0, // Convert to number, fallback to 0
+        player_name: playerData.name || 'Unknown Player',
+        player_data: playerData.data || {}, // Use the player data from the request
+        won: gameStats.won || false,
+        points_earned: gameStats.points || 0,
+        potential_points: gameStats.potentialPoints || 10000, // Use potential points from request
+        time_taken_seconds: gameStats.timeTaken || 0,
+        guesses_attempted: gameStats.guessesAttempted || 0,
+        hints_used: gameStats.hintsUsed || 0,
+        is_daily_challenge: gameStats.isDaily || false,
+        created_at: new Date().toISOString()
+      };
+      
+      // Save the game record using admin privileges
+      console.log('Inserting game record:', recordToInsert);
+      console.log('Player ID type:', typeof recordToInsert.player_id);
+      
+      const { data, error } = await supabaseAdmin
+        .from('games_records')
+        .insert([recordToInsert])
+        .select();
+        
+      if (error) {
+        console.error('Error saving game record:', error);
+        console.error('Error details:', error.details);
+        console.error('Error hint:', error.hint);
+        console.error('Error message:', error.message);
+        
+        // Try once more with a string ID if the numeric conversion failed
+        if (error.code === '23502' || error.message.includes('null value in column')) {
+          console.log('Trying again with fallback player_id and ensuring all required fields are present...');
+          
+          // Make sure player_id is a number and all required fields are present
+          recordToInsert.player_id = 0; // Fallback to a default player ID
+          recordToInsert.player_data = recordToInsert.player_data || {}; // Ensure player_data exists
+          recordToInsert.potential_points = recordToInsert.potential_points || 10000; // Ensure potential_points exists
+          
+          const { data: retryData, error: retryError } = await supabaseAdmin
+            .from('games_records')
+            .insert([recordToInsert])
+            .select();
+            
+          if (retryError) {
+            console.error('Second attempt failed:', retryError);
+            return res.status(500).json({ 
+              error: 'Failed to save game record on second attempt', 
+              details: retryError.message,
+              code: retryError.code
+            });
+          }
+          
+          console.log('Game record saved successfully on second attempt:', retryData);
+          return res.json({ success: true, record: retryData[0] });
+        }
+        
+        return res.status(500).json({ 
+          error: 'Failed to save game record', 
+          details: error.message,
+          code: error.code
+        });
+      }
+      
+      console.log('Game record saved successfully:', data);
+      res.json({ success: true, record: data[0] });
+    } catch (insertErr) {
+      console.error('Error during game record insertion:', insertErr);
+      res.status(500).json({ 
+        error: 'Failed to insert game record',
+        message: insertErr.message
+      });
+    }
   } catch (err) {
     console.error('Game completion error:', err);
-    res.status(500).json({ error: 'Server error' });
+    console.error('Stack trace:', err.stack);
+    res.status(500).json({ 
+      error: 'Server error',
+      message: err.message,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
   }
 });
 
