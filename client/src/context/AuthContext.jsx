@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { supabase } from '../supabase'; // אתה אמרת שקובץ נקרא supabase.js
+import { supabase } from '../supabase.js'; // Make sure we have the .js extension
 
 const AuthContext = createContext();
 

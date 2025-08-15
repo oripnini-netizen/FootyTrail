@@ -1,7 +1,7 @@
 // src/App.jsx
 import React, { useEffect } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { supabase } from './supabase';
+import { supabase } from './supabase.js';
 import { useAuth } from './context/AuthContext';
 import ScrollToTop from './components/ScrollToTop';
 

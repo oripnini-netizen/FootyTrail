@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../supabase/client';
+import { getRandomPlayer } from '../api'; // Import the API function
 
 export default function PostGamePage() {
   const navigate = useNavigate();
@@ -159,7 +160,7 @@ export default function PostGamePage() {
     getAIFact();
   }, [player]);
 
-  // Update the playAgainWithSameFilters function
+  // Updated playAgainWithSameFilters function to use the API helper function
   const playAgainWithSameFilters = async () => {
     if (loading || gamesLeft <= 0) return;
 
@@ -167,25 +168,12 @@ export default function PostGamePage() {
     try {
       console.log("Play again with filters:", filters);
       
-      // Call the API to get a random player with these filters
-      const response = await fetch('/api/random-player', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          leagues: filters?.leagues || [],
-          seasons: filters?.seasons || [],
-          minAppearances: filters?.minAppearances || 0,
-          userId: user?.id
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to get random player: ${response.status}`);
-      }
-
-      const gameData = await response.json();
+      // Use the imported getRandomPlayer function which handles the API_BASE properly
+      const gameData = await getRandomPlayer({
+        leagues: filters?.leagues || [],
+        seasons: filters?.seasons || [],
+        minAppearances: filters?.minAppearances || 0
+      }, user?.id);
       
       // Navigate to LiveGamePage with the player data
       navigate('/live', {

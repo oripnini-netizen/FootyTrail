@@ -1,6 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { suggestNames, addGameRecord, API_BASE, saveGameCompleted } from '../api';
+import {      navigate('/postgame', {
+        state: {
+          didWin: false,
+          player: game,
+          stats: {
+            pointsEarned: 0,
+            timeSec: INITIAL_TIME - timeSec,
+            guessesUsed: 3 - guessesLeft,
+            usedHints
+          },
+          filters: filters  // Add filters here
+        },
+        replace: true
+      });, addGameRecord, API_BASE, saveGameCompleted } from '../api';
 import { Clock, AlarmClock, Lightbulb, Trophy } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import confetti from 'canvas-confetti';
@@ -160,8 +173,7 @@ export default function LiveGamePage() {
             timeSec: INITIAL_TIME,
             guessesUsed: 3 - guessesLeft,
             usedHints
-          },
-          filters: filters  // Add filters here
+          }
         },
         replace: true
       });
@@ -290,8 +302,7 @@ export default function LiveGamePage() {
             timeSec: INITIAL_TIME - timeSec,
             guessesUsed: 3,
             usedHints
-          },
-          filters: filters  // Add filters here
+          }
         },
         replace: true
       });
@@ -380,8 +391,7 @@ export default function LiveGamePage() {
           timeSec: INITIAL_TIME - timeSec,
           guessesUsed: 3 - guessesLeft,
           usedHints
-        },
-        filters: filters  // Add filters here
+        }
       },
       replace: true
     });
