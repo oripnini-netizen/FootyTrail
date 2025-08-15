@@ -1,6 +1,7 @@
 // src/App.jsx
 import React, { useEffect } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import AdminPage from './pages/AdminPage.jsx';
 import { supabase } from './supabase.js';
 import { useAuth } from './context/AuthContext';
 import ScrollToTop from './components/ScrollToTop';
@@ -86,6 +87,7 @@ const App = () => {
             <Route path="/about" element={<AboutPage />} />
             <Route path="/profile" element={<ProfilePage />} />
             <Route path="/postgame" element={<PostGamePage />} />
+              <Route path="/admin" element={<AdminPage />} />
             <Route path="*" element={<Navigate to="/game" replace />} />
           </>
         )}

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { TableProperties, Aperture, Trophy, Info } from 'lucide-react';
+import { TableProperties, Aperture, Trophy, Info, ShieldCheck } from 'lucide-react';
 
 export default function Navbar() {
   const { user } = useAuth();
@@ -54,6 +54,17 @@ export default function Navbar() {
                 />
                 <span className="text-xl font-bold text-green-800">FootyTrail</span>
               </Link>
+              {/* Admin logo, only for admin users */}
+              {user?.role === 'admin' && (
+                <button
+                  onClick={() => navigate('/admin')}
+                  className="ml-4 flex flex-col items-center text-blue-600 hover:text-blue-800"
+                  title="Admin"
+                >
+                  <ShieldCheck className="h-7 w-7" />
+                  <span className="text-xs mt-1 font-semibold">Admin</span>
+                </button>
+              )}
             </div>
 
             {/* Center: Play button */}

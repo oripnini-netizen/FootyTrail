@@ -573,9 +573,19 @@ export default function GamePage() {
               <Star className="h-8 w-8 text-yellow-400" />
             </div>
             <h2 className="text-xl font-semibold mb-2">Daily Challenge</h2>
-            <p className="text-gray-600">
+            <p className="text-gray-600 mb-4">
               {daily ? daily.name : "Today's daily challenge is not available yet. Please check back later."}
             </p>
+            {daily && (
+              <button
+                className="inline-flex items-center gap-2 px-6 py-2 rounded-xl bg-gradient-to-r from-yellow-500 to-yellow-700 text-white font-bold shadow hover:scale-105 transition-all"
+                onClick={() => goToLiveGame(daily, true)}
+                disabled={limits.dailyPlayed}
+              >
+                <Sparkles className="h-5 w-5" />
+                {limits.dailyPlayed ? "Already Played" : "Play Daily Challenge"}
+              </button>
+            )}
           </div>
 
           {/* Progress Stats Card */}
