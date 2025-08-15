@@ -19,7 +19,7 @@ import { getRandomPlayer } from '../api'; // Import the API function
 export default function PostGamePage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { didWin, player, stats, filters } = location.state || {};
+  const { didWin, player, stats, filters, isDaily } = location.state || {};
   const { user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [gamesLeft, setGamesLeft] = useState(null);
@@ -102,6 +102,28 @@ export default function PostGamePage() {
     fetchGamesLeft();
   }, [user?.id]);
 
+  function CountdownToTomorrow() {
+    const [timeLeft, setTimeLeft] = useState(getTimeLeft());
+  
+    useEffect(() => {
+      const interval = setInterval(() => setTimeLeft(getTimeLeft()), 1000);
+      return () => clearInterval(interval);
+    }, []);
+  
+    function getTimeLeft() {
+      const now = new Date();
+      const tomorrow = new Date(now);
+      tomorrow.setHours(24, 0, 0, 0);
+      const diff = tomorrow - now;
+      const hours = Math.floor(diff / 1000 / 60 / 60);
+      const minutes = Math.floor((diff / 1000 / 60) % 60);
+      const seconds = Math.floor((diff / 1000) % 60);
+      return `${hours}h ${minutes}m ${seconds}s`;
+    }
+  
+    return <span>{timeLeft}</span>;
+  }
+  
   // Get AI-generated fact about the player
   useEffect(() => {
     const getAIFact = async () => {
@@ -302,57 +324,84 @@ export default function PostGamePage() {
         </div>
 
         {/* Action Buttons */}
-        <div className="flex gap-3">
-          <button
-            onClick={() => navigate('/game')}
-            className="flex-none bg-gray-100 hover:bg-gray-200 p-2 rounded-lg"
-            title="Back to Game Setup"
-          >
-            <ArrowLeft className="h-5 w-5 text-gray-700" />
-          </button>
-          <button
-            onClick={playAgainWithSameFilters}
-            disabled={loading || gamesLeft <= 0}
-            className={`flex-1 ${
-              gamesLeft <= 0
-                ? 'bg-gray-300 cursor-not-allowed'
-                : 'bg-green-600 hover:bg-green-700'
-            } text-white py-2 rounded-lg font-medium flex items-center justify-center`}
-          >
-            {loading ? (
-              <span className="flex items-center">
-                <svg
-                  className="animate-spin -ml-1 mr-2 h-4 w-4 text-white"
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                >
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    strokeWidth="4"
-                  ></circle>
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                  ></path>
-                </svg>
-                Loading...
-              </span>
-            ) : (
-              <>
-                Play Again (Same Filters)
-                <span className="ml-1 text-sm">
-                  {gamesLeft !== null ? `(${gamesLeft} left)` : ''}
+        {!isDaily && (
+          <div className="flex gap-3">
+            <button
+              onClick={() => navigate('/game')}
+              className="flex-none bg-gray-100 hover:bg-gray-200 p-2 rounded-lg"
+              title="Back to Game Setup"
+            >
+              <ArrowLeft className="h-5 w-5 text-gray-700" />
+            </button>
+            <button
+              onClick={playAgainWithSameFilters}
+              disabled={loading || gamesLeft <= 0}
+              className={`flex-1 ${
+                gamesLeft <= 0
+                  ? 'bg-gray-300 cursor-not-allowed'
+                  : 'bg-green-600 hover:bg-green-700'
+              } text-white py-2 rounded-lg font-medium flex items-center justify-center`}
+            >
+              {loading ? (
+                <span className="flex items-center">
+                  <svg
+                    className="animate-spin -ml-1 mr-2 h-4 w-4 text-white"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    ></circle>
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    ></path>
+                  </svg>
+                  Loading...
                 </span>
-              </>
-            )}
-          </button>
-        </div>
+              ) : (
+                <>
+                  Play Again (Same Filters)
+                  <span className="ml-1 text-sm">
+                    {gamesLeft !== null ? `(${gamesLeft} left)` : ''}
+                  </span>
+                </>
+              )}
+            </button>
+          </div>
+        )}
+        {isDaily && (
+          <div className="mt-6 text-center">
+            <div className="text-xl font-bold text-yellow-700 mb-2">
+              This was today's Daily Challenge!
+            </div>
+            <div className="text-lg text-gray-700">
+              {didWin
+                ? <>
+                    Congratulations! You won the daily challenge and earned <span className="font-bold text-green-700">10,000 points</span>!
+                    <br />
+                    <span className="text-green-700 font-semibold">You also earned an extra game for today!</span>
+                  </>
+                : "Better luck next time! Try again tomorrow for another chance at 10,000 points."}
+            </div>
+            <div className="mt-2 text-sm text-gray-500">
+              Next daily challenge in <CountdownToTomorrow />
+            </div>
+            <button
+              onClick={() => navigate('/game')}
+              className="mt-4 bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg"
+            >
+              Back to Game Setup
+            </button>
+          </div>
+        )}
       </div>
     </motion.div>
   );

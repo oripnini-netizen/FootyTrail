@@ -37,6 +37,28 @@ function classNames(...s) {
   return s.filter(Boolean).join(' ');
 }
 
+function CountdownToTomorrow() {
+  const [timeLeft, setTimeLeft] = useState(getTimeLeft());
+
+  useEffect(() => {
+    const interval = setInterval(() => setTimeLeft(getTimeLeft()), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  function getTimeLeft() {
+    const now = new Date();
+    const tomorrow = new Date(now);
+    tomorrow.setHours(24, 0, 0, 0);
+    const diff = tomorrow - now;
+    const hours = Math.floor(diff / 1000 / 60 / 60);
+    const minutes = Math.floor((diff / 1000 / 60) % 60);
+    const seconds = Math.floor((diff / 1000) % 60);
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+
+  return <span>{timeLeft}</span>;
+}
+
 export default function GamePage() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -623,21 +645,40 @@ export default function GamePage() {
             </div>
             <h2 className="text-xl font-semibold mb-2">Daily Challenge</h2>
             <p className="text-gray-600 mb-4">
-              {daily ? (daily.name || daily.player_name) : "Today's daily challenge is not available yet. Please check back later."}
+              {!limits.dailyPlayed
+                ? "Today's Daily Challenge is live! Play now for a chance to win 10,000 points and an extra game!"
+                : daily
+                  ? `Daily Challenge: ${daily.player_name}`
+                  : "Today's daily challenge is not available yet. Please check back later."}
             </p>
             {daily && (
-              <button
-                className="inline-flex items-center gap-2 px-6 py-2 rounded-xl bg-gradient-to-r from-yellow-500 to-yellow-700 text-white font-bold shadow hover:scale-105 transition-all"
-                onClick={onStartDaily}
-                disabled={limits.dailyPlayed || dailyLoading}
-              >
-                <Sparkles className="h-5 w-5" />
-                {dailyLoading
-                  ? "Loading..."
-                  : limits.dailyPlayed
-                  ? "Already Played"
-                  : "Play Daily Challenge"}
-              </button>
+              <>
+                <button
+                  className={`inline-flex items-center gap-2 px-6 py-2 rounded-xl font-bold shadow transition-all ${
+                    limits.dailyPlayed
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      : 'bg-gradient-to-r from-yellow-500 to-yellow-700 text-white hover:scale-105'
+                  }`}
+                  onClick={onStartDaily}
+                  disabled={limits.dailyPlayed || dailyLoading}
+                >
+                  <Sparkles className="h-5 w-5" />
+                  {dailyLoading
+                    ? "Loading..."
+                    : limits.dailyPlayed
+                    ? "Already Played"
+                    : "Play Daily Challenge"}
+                </button>
+                {limits.dailyPlayed && (
+                  <div className="mt-4 text-sm text-gray-700">
+                    {limits.dailyWin
+                      ? <>You <span className="font-bold text-green-600">won</span> today's challenge!<br /></>
+                      : <>You <span className="font-bold text-red-600">lost</span> today's challenge.<br /></>}
+                    The player was <span className="font-bold">{daily.player_name}</span>.<br />
+                    Next challenge in <CountdownToTomorrow />
+                  </div>
+                )}
+              </>
             )}
           </div>
 

@@ -161,7 +161,8 @@ export default function LiveGamePage() {
             guessesUsed: 3 - guessesLeft,
             usedHints
           },
-          filters: filters  // Add filters here
+          filters: filters,
+          isDaily: isDaily,
         },
         replace: true
       });
@@ -267,7 +268,8 @@ export default function LiveGamePage() {
             guessesUsed: 3 - guessesLeft + 1,
             usedHints
           },
-          filters: filters  // Add filters here
+          filters: filters,
+          isDaily: isDaily,
         },
         replace: true
       });
@@ -291,7 +293,8 @@ export default function LiveGamePage() {
             guessesUsed: 3,
             usedHints
           },
-          filters: filters  // Add filters here
+          filters: filters,
+          isDaily: isDaily,
         },
         replace: true
       });
@@ -381,7 +384,8 @@ export default function LiveGamePage() {
           guessesUsed: 3 - guessesLeft,
           usedHints
         },
-        filters: filters  // Add filters here
+        filters: filters,
+        isDaily: isDaily,
       },
       replace: true
     });
