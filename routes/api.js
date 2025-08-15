@@ -200,7 +200,7 @@ router.post('/random-player', async (req, res) => {
     
     // Query Supabase for random player matching criteria
     const { data, error } = await supabase
-      .rpc('get_random_player', {
+      .rpc('rpc_random_player', {
         p_leagues: leagues || [],
         p_seasons: seasons || [],
         p_min_appearances: minAppearances || 0
@@ -242,6 +242,56 @@ router.get('/player/:playerId', async (req, res) => {
     res.json(card);
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Generate daily challenge
+router.post('/generate-daily-challenge', async (req, res) => {
+  try {
+    const { date, filters } = req.body;
+
+    // 1. Get filters from daily_challenge_settings if not provided
+    let challengeFilters = filters;
+    if (!challengeFilters || !challengeFilters.leagues || !challengeFilters.seasons) {
+      const { data: settings, error: settingsError } = await supabase
+        .from('daily_challenge_settings')
+        .select('leagues, seasons, appearances')
+        .eq('id', 1)
+        .single();
+      if (settingsError) throw settingsError;
+      challengeFilters = settings;
+    }
+
+    // 2. Get a random player using your RPC or query
+    const { data: playerData, error: playerError } = await supabase
+  .rpc('rpc_random_player', {
+    leagues: challengeFilters.leagues || [],
+    seasons: challengeFilters.seasons || [],
+    min_app: challengeFilters.appearances || 0
+  });
+
+    if (playerError) throw playerError;
+    if (!playerData || playerData.length === 0) {
+      return res.status(404).json({ success: false, error: 'No player found for these filters.' });
+    }
+    const player = playerData[0];
+
+    // 3. Insert into daily_challenges table
+    const { error: insertError } = await supabase
+      .from('daily_challenges')
+      .upsert({
+        challenge_date: date,
+        player_id: player.player_id,
+        player_name: player.player_name,
+        created_at: new Date().toISOString()
+      });
+
+    if (insertError) throw insertError;
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error generating daily challenge:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 

@@ -10,7 +10,6 @@ import { fileURLToPath } from 'url';
 import gameRouter from './routes/game.js';
 import apiRoutes from './routes/api.js';
 import aiRoutes from './routes/ai.js'; // Import the AI routes
-import adminRoutes from './routes/admin.js'; // <-- NEW
 import { createClient } from '@supabase/supabase-js';
 import morgan from 'morgan';
 
@@ -53,7 +52,6 @@ app.use(morgan('dev'));
 app.use('/api', gameRouter);  // Changed from '/api/game' to '/api'
 app.use('/api', apiRoutes);
 app.use('/api/ai', aiRoutes); // Register the AI routes
-app.use('/api/admin', adminRoutes); // <-- NEW
 
 // 6) Static files (optional)
 const __filename = fileURLToPath(import.meta.url);

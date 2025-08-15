@@ -131,3 +131,12 @@ export const getGamePrompt = () => jfetch('/ai/generate-game-prompt', {
 });
 
 export const getPlayerPoolCount = () => jfetch('/player-pool-count');
+
+export const generateDailyChallenge = async (payload) => {
+  const response = await fetch(`${API_BASE}/generate-daily-challenge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  return await response.json();
+};
