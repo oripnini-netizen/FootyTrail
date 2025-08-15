@@ -201,9 +201,9 @@ router.post('/random-player', async (req, res) => {
     // Query Supabase for random player matching criteria
     const { data, error } = await supabase
       .rpc('rpc_random_player', {
-        p_leagues: leagues || [],
-        p_seasons: seasons || [],
-        p_min_appearances: minAppearances || 0
+        leagues: leagues || [],
+        seasons: seasons || [],
+        min_app: minAppearances || 0
       });
       
     if (error) throw error;
