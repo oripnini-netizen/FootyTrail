@@ -66,7 +66,7 @@ function normalizeFilters(raw) {
   console.log('🔧 normalizeFilters input:', raw); // Debug log
   
   const result = {
-    leagues: Array.isArray(raw.leagues) ? raw.leagues.map(String) : [],
+    leagues: Array.isArray(raw.leagues) ? raw.leagues.map(Number) : [],
     seasons: Array.isArray(raw.seasons) ? raw.seasons.map(Number) : [],
     minAppearances: Number(raw.minAppearances) || 0,
   };
@@ -296,7 +296,7 @@ router.post('/counts', async (req, res) => {
       poolCount = await countDistinctPlayersRPC({
         leagues: filters.leagues,
         seasons: filters.seasons,
-        minAppearances: filters.minAppearances
+        min_app: filters.minAppearances
       });
       console.log('Initial pool count:', poolCount);
       
@@ -305,7 +305,7 @@ router.post('/counts', async (req, res) => {
       totalCount = await countDistinctPlayersRPC({
         leagues: null,
         seasons: null,
-        minAppearances: 0
+        min_app: 0
       });
       
       // Add this explicit check for userId
