@@ -76,26 +76,32 @@ router.get('/filters/seasons', async (req, res) => {
 // Get counts
 router.post('/counts', async (req, res) => {
   try {
-    const { leagues, seasons, minAppearances, userId } = req.body;
-    
-    // Perform count query to Supabase (this is a simplified example)
-    const { count: poolCount, error } = await supabase
-      .from('players')
-      .select('*', { count: 'exact', head: true })
-      .in('league_id', leagues || [])
-      .in('season', seasons || [])
-      .gte('appearances', minAppearances || 0);
-      
-    if (error) throw error;
-    
-    // Get total count for reference
-    const { count: totalCount, error: totalError } = await supabase
-      .from('players')
-      .select('*', { count: 'exact', head: true });
-      
+    const { leagues, seasons, minAppearances } = req.body;
+
+    // Use the RPC for filtered count
+    const { data: poolData, error: poolError } = await supabase
+      .rpc('rpc_count_players', {
+        leagues: leagues && leagues.length > 0 ? leagues.map(Number) : null,
+        seasons: seasons && seasons.length > 0 ? seasons.map(Number) : null,
+        min_app: minAppearances || 0,
+      });
+
+    if (poolError) throw poolError;
+
+    // Use the RPC for total count (no filters)
+    const { data: totalData, error: totalError } = await supabase
+      .rpc('rpc_count_players', {
+        leagues: null,
+        seasons: null,
+        min_app: 0,
+      });
+
     if (totalError) throw totalError;
-    
-    res.json({ poolCount: poolCount || 0, totalCount: totalCount || 0 });
+
+    res.json({
+      poolCount: typeof poolData === 'number' ? poolData : (poolData?.count ?? 0),
+      totalCount: typeof totalData === 'number' ? totalData : (totalData?.count ?? 0),
+    });
   } catch (error) {
     console.error('Error calculating counts:', error);
     res.status(500).json({ error: error.message });
@@ -106,21 +112,53 @@ router.post('/counts', async (req, res) => {
 router.get('/limits/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    
-    // Query Supabase for user game limits
-    const { data, error } = await supabase
-      .from('users')
-      .select('games_played_today, points_today, points_total, daily_played')
-      .eq('id', userId)
-      .single();
-      
-    if (error) throw error;
-    
+    const today = new Date().toISOString().split('T')[0];
+
+    // Get today's games
+    const { data: todayGames, error: gamesError } = await supabase
+      .from('games_records')
+      .select('points_earned')
+      .eq('user_id', userId)
+      .gte('created_at', `${today}T00:00:00Z`)
+      .lt('created_at', `${today}T23:59:59Z`);
+
+    if (gamesError) throw gamesError;
+
+    // Get total points
+    const { data: totalPoints, error: totalError } = await supabase
+      .from('games_records')
+      .select('points_earned')
+      .eq('user_id', userId);
+
+    if (totalError) throw totalError;
+
+    // Get today's daily challenge record
+    const { data: dailyGames, error: dailyError } = await supabase
+      .from('games_records')
+      .select('won, player_id, player_name, player_data')
+      .eq('user_id', userId)
+      .eq('is_daily_challenge', true)
+      .gte('created_at', `${today}T00:00:00Z`)
+      .lt('created_at', `${today}T23:59:59Z`)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (dailyError) throw dailyError;
+    const dailyGame = dailyGames && dailyGames.length > 0 ? dailyGames[0] : null;
+
+    const gamesToday = todayGames?.length || 0;
+    const pointsToday = todayGames?.reduce((sum, game) => sum + (game.points_earned || 0), 0) || 0;
+    const pointsTotal = totalPoints?.reduce((sum, game) => sum + (game.points_earned || 0), 0) || 0;
+
+    res.set('Cache-Control', 'no-store');
     res.json({
-      gamesToday: data.games_played_today || 0,
-      pointsToday: data.points_today || 0,
-      pointsTotal: data.points_total || 0,
-      dailyPlayed: data.daily_played || false
+      gamesToday,
+      pointsToday,
+      pointsTotal,
+      dailyPlayed: !!dailyGame,
+      dailyWin: dailyGame?.won ?? null,
+      dailyPlayerName: dailyGame?.player_name ?? null,
+      dailyPlayerPhoto: dailyGame?.player_data?.photo ?? null,
     });
   } catch (error) {
     console.error('Error fetching limits:', error);

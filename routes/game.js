@@ -594,65 +594,6 @@ router.get('/names', async (req, res) => {
   }
 });
 
-router.get('/limits', authRequired, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    
-    // Get today's games count
-    const today = new Date().toISOString().split('T')[0];
-    
-    const { data: todayGames, error: gamesError } = await supabase
-      .from('games_records')
-      .select('points_earned')
-      .eq('user_id', userId)
-      .gte('created_at', `${today}T00:00:00Z`)
-      .lt('created_at', `${today}T23:59:59Z`);
-    
-    if (gamesError) throw gamesError;
-    
-    // Get total points
-    const { data: totalPoints, error: totalError } = await supabase
-      .from('games_records')
-      .select('points_earned')
-      .eq('user_id', userId);
-    
-    if (totalError) throw totalError;
-    
-    // Calculate stats
-    const gamesToday = todayGames?.length || 0;
-    const pointsToday = todayGames?.reduce((sum, game) => sum + (game.points_earned || 0), 0) || 0;
-    const pointsTotal = totalPoints?.reduce((sum, game) => sum + (game.points_earned || 0), 0) || 0;
-    
-    // Check if daily challenge was played today
-    const { data: dailyGames, error: dailyError } = await supabase
-      .from('games_records')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('is_daily_challenge', true)
-      .gte('created_at', `${today}T00:00:00Z`)
-      .lt('created_at', `${today}T23:59:59Z`)
-      .limit(1);
-    
-    if (dailyError) throw dailyError;
-    
-    const dailyPlayed = (dailyGames?.length || 0) > 0;
-    
-    res.json({
-      gamesToday,
-      pointsToday,
-      pointsTotal,
-      dailyPlayed,
-      dailyBonus: dailyPlayed
-    });
-  } catch (error) {
-    console.error('Error fetching limits:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch user limits',
-      details: error.message 
-    });
-  }
-});
-
 // Add game record
 router.post('/games', authRequired, async (req, res) => {
   try {

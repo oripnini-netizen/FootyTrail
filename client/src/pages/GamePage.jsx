@@ -647,9 +647,8 @@ export default function GamePage() {
             <p className="text-gray-600 mb-4">
               {!limits.dailyPlayed
                 ? "Today's Daily Challenge is live! Play now for a chance to win 10,000 points and an extra game!"
-                : daily
-                  ? `Daily Challenge: ${daily.player_name}`
-                  : "Today's daily challenge is not available yet. Please check back later."}
+                : "Next challenge in "}
+              {limits.dailyPlayed && <CountdownToTomorrow />}
             </p>
             {daily && (
               <>
@@ -669,17 +668,25 @@ export default function GamePage() {
                     ? "Already Played"
                     : "Play Daily Challenge"}
                 </button>
-                {limits.dailyPlayed && (
+                {daily && limits.dailyPlayed && (
                   <div className="mt-4 text-sm text-gray-700">
                     {limits.dailyWin
                       ? <>You <span className="font-bold text-green-600">won</span> today's challenge!<br /></>
                       : <>You <span className="font-bold text-red-600">lost</span> today's challenge.<br /></>}
-                    The player was <span className="font-bold">{daily.player_name}</span>.<br />
-                    Next challenge in <CountdownToTomorrow />
-                  </div>
+                    The player was <span className="font-bold">{daily.player_name}</span>.
+                   </div>
                 )}
               </>
             )}
+            {daily && limits.dailyPlayed && limits.dailyPlayerPhoto && (
+  <div className="flex justify-center mb-2">
+    <img
+      src={limits.dailyPlayerPhoto}
+      alt={limits.dailyPlayerName || daily.player_name}
+      className="h-20 w-20 rounded-full border-4 border-yellow-400 object-cover shadow"
+    />
+  </div>
+)}
           </div>
 
           {/* Progress Stats Card */}

@@ -54,7 +54,13 @@ export const getRandomPlayer = (filters, userId = null) => {
     body: JSON.stringify(filtersWithUser) 
   });
 };
-export const getLimits = (userId) => jfetch(`/limits?userId=${userId}`);
+export async function getLimits(userId) {
+  const response = await fetch(`${API_BASE}/limits/${userId}?t=${Date.now()}`, {
+    cache: "no-store"
+  });
+  if (!response.ok) throw new Error("Failed to fetch limits");
+  return await response.json();
+}
 export const getDailyChallenge = () => jfetch('/daily');
 
 /* Optional extras used elsewhere */
