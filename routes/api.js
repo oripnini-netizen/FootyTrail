@@ -3,6 +3,7 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
+import { getPlayerCard } from './game.js';
 
 dotenv.config();
 
@@ -136,7 +137,7 @@ router.get('/daily', async (req, res) => {
     const { data, error } = await supabase
       .from('daily_challenges')
       .select('*')
-      .eq('date', today)
+      .eq('challenge_date', today)
       .single();
       
     if (error) {
@@ -188,6 +189,20 @@ router.get('/player-pool-count', async (req, res) => {
     res.json({ count: 64380 });
   } catch (error) {
     console.error('Error fetching player pool count:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get player data by ID (for daily challenge and regular games)
+router.get('/player/:playerId', async (req, res) => {
+  try {
+    const { playerId } = req.params;
+    const card = await getPlayerCard(playerId); // Use your helper
+    if (!card) {
+      return res.status(404).json({ error: 'Player not found' });
+    }
+    res.json(card);
+  } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });

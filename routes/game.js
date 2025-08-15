@@ -594,12 +594,6 @@ router.get('/names', async (req, res) => {
   }
 });
 
-
-// Daily + limits placeholders
-router.get('/daily', async (_req, res) => {
-  res.json({ available: false, player: null, points: 10000 });
-});
-
 router.get('/limits', authRequired, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -772,3 +766,4 @@ async function getPlayerTransfers(playerId) {
 }
 
 export default router;
+export { getPlayerCard };

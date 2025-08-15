@@ -9,7 +9,7 @@ import {
   getLimits,
   getPlayerPoolCount,
   getGamePrompt,
-  API_BASE // Import API_BASE here, along with other imports
+  API_BASE
 } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
@@ -66,6 +66,9 @@ export default function GamePage() {
   const [gamePrompt, setGamePrompt] = useState("Your next challenge is here. Calibrate your filters and start scouting.");
   const [isLoadingPrompt, setIsLoadingPrompt] = useState(true);
 
+  // Add loading state for daily challenge
+  const [dailyLoading, setDailyLoading] = useState(false);
+
   // Initialize with user defaults when available
   useEffect(() => {
     if (user) {
@@ -83,6 +86,52 @@ export default function GamePage() {
   // Daily challenge state
   const [limits, setLimits] = useState({ gamesToday: 0, dailyPlayed: false });
   const [gameLoading, setGameLoading] = useState(false);
+
+  // NEW: Start Daily Challenge game
+  const onStartDaily = async () => {
+    try {
+      setDailyLoading(true);
+
+      // 1. Get today's daily challenge record
+      const dailyChallenge = await getDailyChallenge();
+      if (!dailyChallenge || !dailyChallenge.player_id) {
+        alert("No daily challenge available for today.");
+        setDailyLoading(false);
+        return;
+      }
+
+      // 2. Fetch full player data (from backend)
+      const res = await fetch(`${API_BASE}/player/${dailyChallenge.player_id}`);
+      if (!res.ok) throw new Error('Failed to fetch player data');
+      const playerData = await res.json();
+
+      // 3. Map fields to expected names
+      const mappedPlayerData = {
+        id: playerData.player_id,
+        name: playerData.player_name,
+        age: playerData.player_age,
+        nationality: playerData.player_nationality,
+        position: playerData.player_position,
+        photo: playerData.player_photo,
+        // add any other fields you need
+      };
+
+      // 4. Always set potentialPoints to 10,000 for daily challenge
+      navigate('/live', {
+        state: {
+          ...mappedPlayerData,
+          isDaily: true,
+          filters: { potentialPoints: 10000 },
+          potentialPoints: 10000,
+        },
+        replace: true,
+      });
+    } catch (err) {
+      alert('Failed to start daily challenge. Please try again.');
+    } finally {
+      setDailyLoading(false);
+    }
+  };
 
   // ---------- Load filters + limits + daily card ----------
   useEffect(() => {
@@ -574,16 +623,20 @@ export default function GamePage() {
             </div>
             <h2 className="text-xl font-semibold mb-2">Daily Challenge</h2>
             <p className="text-gray-600 mb-4">
-              {daily ? daily.name : "Today's daily challenge is not available yet. Please check back later."}
+              {daily ? (daily.name || daily.player_name) : "Today's daily challenge is not available yet. Please check back later."}
             </p>
             {daily && (
               <button
                 className="inline-flex items-center gap-2 px-6 py-2 rounded-xl bg-gradient-to-r from-yellow-500 to-yellow-700 text-white font-bold shadow hover:scale-105 transition-all"
-                onClick={() => goToLiveGame(daily, true)}
-                disabled={limits.dailyPlayed}
+                onClick={onStartDaily}
+                disabled={limits.dailyPlayed || dailyLoading}
               >
                 <Sparkles className="h-5 w-5" />
-                {limits.dailyPlayed ? "Already Played" : "Play Daily Challenge"}
+                {dailyLoading
+                  ? "Loading..."
+                  : limits.dailyPlayed
+                  ? "Already Played"
+                  : "Play Daily Challenge"}
               </button>
             )}
           </div>
