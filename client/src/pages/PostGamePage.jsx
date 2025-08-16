@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../supabase/client';
-import { getRandomPlayer } from '../api';
+import { getRandomPlayer, API_BASE } from '../api'; // <-- import API_BASE
 
 export default function PostGamePage() {
   const navigate = useNavigate();
@@ -22,8 +22,11 @@ export default function PostGamePage() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [gamesLeft, setGamesLeft] = useState(null);
+
+  // LLM fact states (LLM-only: no fallback text)
   const [aiGeneratedFact, setAiGeneratedFact] = useState('');
   const [factLoading, setFactLoading] = useState(false);
+
   const [scope, animate] = useAnimate();
 
   useEffect(() => {
@@ -97,25 +100,29 @@ export default function PostGamePage() {
       setFactLoading(true);
       try {
         const transfers = player.transfers || player.transferHistory || [];
-        const response = await fetch('/api/ai/generate-player-fact', {
+
+        // IMPORTANT: use API_BASE so it hits the backend (3001) in dev
+        const response = await fetch(`${API_BASE}/ai/generate-player-fact`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             player: {
-              name: player.name || player.player_name || "Unknown Player",
-              nationality: player.nationality || player.player_nationality,
-              position: player.position || player.player_position,
-              age: player.age || player.player_age
+              name: player.name || player.player_name || 'Unknown Player',
+              nationality: player.nationality || player.player_nationality || '',
+              position: player.position || player.player_position || '',
+              age: player.age || player.player_age || ''
             },
             transferHistory: transfers
           }),
         });
+
         if (!response.ok) throw new Error(`Failed to generate fact: ${response.status}`);
         const data = await response.json();
-        setAiGeneratedFact(typeof data.fact === 'string' ? data.fact : '');
+        const fact = (data && typeof data.fact === 'string') ? data.fact.trim() : '';
+        setAiGeneratedFact(fact);
       } catch (error) {
         console.error('Error fetching AI fact:', error);
-        setAiGeneratedFact(buildFallbackFact(player));
+        setAiGeneratedFact(''); // show nothing if it fails
       } finally {
         setFactLoading(false);
       }
@@ -127,11 +134,14 @@ export default function PostGamePage() {
     if (loading || gamesLeft <= 0) return;
     setLoading(true);
     try {
-      const gameData = await getRandomPlayer({
-        leagues: filters?.leagues || [],
-        seasons: filters?.seasons || [],
-        minAppearances: filters?.minAppearances || 0
-      }, user?.id);
+      const gameData = await getRandomPlayer(
+        {
+          leagues: filters?.leagues || [],
+          seasons: filters?.seasons || [],
+          minAppearances: filters?.minAppearances || 0
+        },
+        user?.id
+      );
       navigate('/live', {
         state: {
           ...gameData,
@@ -197,30 +207,29 @@ export default function PostGamePage() {
             </div>
           </div>
 
+          {/* AI Fact (render only if LLM responded or loading) */}
+          {(factLoading || aiGeneratedFact) && (
+            <div className="bg-blue-50 rounded-lg p-4 mb-6">
+              <h3 className="font-semibold mb-2 flex items-center text-blue-700">
+                <Lightbulb className="h-5 w-5 mr-1 text-blue-600" />
+                Did you know…
+              </h3>
+              {factLoading ? (
+                <div className="flex items-center justify-center py-2">
+                  <div className="animate-pulse text-blue-500">Generating a fun fact…</div>
+                </div>
+              ) : (
+                <p className="italic text-gray-700">{aiGeneratedFact}</p>
+              )}
+            </div>
+          )}
+
           {/* Stats */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
             <StatCard label="Points Earned" value={stats?.pointsEarned} icon={<Trophy className="h-5 w-5 text-yellow-600" />} />
             <StatCard label="Time Taken" value={`${stats?.timeSec}s`} icon={<Clock className="h-5 w-5 text-blue-600" />} />
             <StatCard label="Guesses Used" value={stats?.guessesUsed} icon={<Target className="h-5 w-5 text-green-600" />} />
             <StatCard label="Hints Used" value={Object.values(stats?.usedHints || {}).filter(Boolean).length} icon={<Lightbulb className="h-5 w-5 text-amber-600" />} />
-          </div>
-
-          {/* AI/Fallback Fact */}
-          <div className="bg-blue-50 rounded-lg p-4 mb-6">
-            <h3 className="font-semibold mb-2 flex items-center text-blue-700">
-              <Lightbulb className="h-5 w-5 mr-1 text-blue-600" />
-              Did you know that
-            </h3>
-            {factLoading ? (
-              <div className="flex items-center justify-center py-2">
-                <div className="animate-pulse text-blue-500">Loading interesting fact...</div>
-              </div>
-            ) : (
-              <>
-                <p className="italic text-gray-700">{aiGeneratedFact || buildFallbackFact(player)}</p>
-                <p className="text-xs text-gray-500 mt-2">And now you'll have to google it to see if I made it all up...</p>
-              </>
-            )}
           </div>
 
           {/* Actions */}
@@ -266,20 +275,4 @@ function StatCard({ label, value, icon }) {
       <div className="text-xl font-semibold">{value}</div>
     </div>
   );
-}
-
-function buildFallbackFact(p) {
-  if (!p) return "This player has a fascinating career trajectory with multiple unexpected transfers.";
-  const name = p.name || p.player_name || "This player";
-  const nationality = p.nationality || p.player_nationality;
-  const position = p.position || p.player_position;
-  const facts = [
-    `${name} is known for having exceptional technical abilities that often surprised teammates in training.`,
-    `${name} almost signed for a completely different club before a last-minute change of heart.`,
-    `${name} once scored a remarkable goal from nearly the halfway line in a friendly match that wasn't televised.`,
-    `Before becoming a professional, ${name} was actually considering a completely different career path.`
-  ];
-  if (nationality) facts.push(`Despite representing ${nationality}, ${name} was eligible to play for another country through family heritage.`);
-  if (position) facts.push(`Though known as a ${position}, ${name} actually started playing in a completely different position during youth career.`);
-  return facts[Math.floor(Math.random() * facts.length)];
 }
