@@ -32,6 +32,7 @@ async function jfetch(path, opts = {}) {
 /* === Public API === */
 export const getLeagues = () => jfetch('/filters/leagues');
 export const getSeasons = () => jfetch('/filters/seasons');
+
 export const getCounts = (filters) =>
   jfetch('/counts', { 
     method: 'POST', 
@@ -40,7 +41,8 @@ export const getCounts = (filters) =>
     },
     body: JSON.stringify(filters) 
   });
-export const getRandomPlayer = (filters, userId = null) => {
+
+  export const getRandomPlayer = (filters, userId = null) => {
   console.log('🎯 getRandomPlayer called with filters:', filters, 'userId:', userId);
   
   // Include userId in the filters object if provided
@@ -70,15 +72,6 @@ export const updateProfile = async () => ({});
 export const uploadAvatar = async () => ({});
 export const saveGame = async () => ({});
 export const getGameById = async () => ({});
-export async function addGameRecord(gameRecord) {
-  return jfetch('/games', {  // Changed back to original path
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(gameRecord)
-  });
-}
 
 // Add game completed function
 export async function saveGameCompleted(gameData) {
@@ -130,7 +123,6 @@ export const getGamePrompt = () => jfetch('/ai/generate-game-prompt', {
   body: JSON.stringify({})
 });
 
-export const getPlayerPoolCount = () => jfetch('/player-pool-count');
 
 export const generateDailyChallenge = async (payload) => {
   const response = await fetch(`${API_BASE}/generate-daily-challenge`, {

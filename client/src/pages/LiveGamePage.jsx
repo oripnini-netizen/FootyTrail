@@ -1,24 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { suggestNames, addGameRecord, API_BASE, saveGameCompleted } from '../api';
+import { suggestNames, saveGameCompleted } from '../api';
 import { Clock, AlarmClock, Lightbulb, Trophy } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
-import confetti from 'canvas-confetti';
+import { motion } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
-
-/**
- * Live game page
- * - No player image shown
- * - Shows transfer history
- * - Input for guesses with suggestions (suggestNames)
- * - Timer + remaining guesses counter
- * - Live points with hint multipliers:
- *   1) Age x0.95
- *   2) Nationality x0.9
- *   3) Position x0.8
- *   4) Partial image (top half) x0.5   (kept as a placeholder text reveal, no actual image)
- *   5) First letter x0.25
- */
 
 function classNames(...s) {
   return s.filter(Boolean).join(' ');

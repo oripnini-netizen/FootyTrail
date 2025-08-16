@@ -1,13 +1,12 @@
 // index.js — Node server entry point (ESM)
 
-// 1) Preload .env BEFORE anything else (side‑effect import)
+// 1) Preload .env BEFORE anything else (side-effect import)
 import 'dotenv/config';
 
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import gameRouter from './routes/game.js';
 import apiRoutes from './routes/api.js';
 import aiRoutes from './routes/ai.js'; // Import the AI routes
 import { createClient } from '@supabase/supabase-js';
@@ -19,9 +18,8 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// Add this in your index.js or wherever you start the server
+// Basic environment check
 console.log('Environment check:');
-console.log('USE_RPC_COUNTS:', process.env.USE_RPC_COUNTS);
 console.log('SUPABASE_URL:', process.env.SUPABASE_URL ? 'Set' : 'Not set');
 
 // 2) Create app
@@ -49,7 +47,6 @@ app.use(express.json());
 app.use(morgan('dev'));
 
 // 5) Routes (now safe to import — env is loaded)
-app.use('/api', gameRouter);  // Changed from '/api/game' to '/api'
 app.use('/api', apiRoutes);
 app.use('/api/ai', aiRoutes); // Register the AI routes
 
@@ -58,7 +55,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Add this with your other routes (before starting the server)
+// Health check
 app.get('/health', (req, res) => {
   res.status(200).json({ 
     status: 'ok', 
@@ -67,7 +64,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Add this debugging middleware to verify requests are reaching the server
+// Debugging middleware to verify requests are reaching the server
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   next();
@@ -150,7 +147,7 @@ app.post('/api/game-completed', async (req, res) => {
         console.error('Error message:', error.message);
         
         // Try once more with a string ID if the numeric conversion failed
-        if (error.code === '23502' || error.message.includes('null value in column')) {
+        if (error.code === '23502' || (error.message || '').includes('null value in column')) {
           console.log('Trying again with fallback player_id and ensuring all required fields are present...');
           
           // Make sure player_id is a number and all required fields are present
@@ -203,26 +200,7 @@ app.post('/api/game-completed', async (req, res) => {
   }
 });
 
-// 7) Start server with automatic port fallback
-const desiredPort = Number(process.env.PORT) || 3000;
-
-function startOn(port) {
-  const server = app.listen(port, () => {
-    const actual = server.address().port;
-    console.log(`✅ Server running on http://localhost:${actual}`);
-  });
-
-  server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-      console.warn(`⚠️ Port ${port} in use, trying a random free port...`);
-      startOn(0); // 0 = pick any free port
-    } else {
-      console.error('Server error:', err);
-      process.exit(1);
-    }
-  });
-}
-
+// 7) Start server
 const server = app.listen(PORT, () => {
   const actualPort = server.address().port;
   console.log(`🚀 Server running on http://localhost:${actualPort}`);

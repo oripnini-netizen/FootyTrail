@@ -7,7 +7,6 @@ import {
   getRandomPlayer,
   getDailyChallenge,
   getLimits,
-  getPlayerPoolCount,
   getGamePrompt,
   API_BASE
 } from '../api';
@@ -82,7 +81,6 @@ export default function GamePage() {
   // Add isLoading and error state
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [playerPoolCount, setPlayerPoolCount] = useState(0);
 
   // New state variables for game prompt
   const [gamePrompt, setGamePrompt] = useState("Your next challenge is here. Calibrate your filters and start scouting.");
@@ -504,7 +502,7 @@ export default function GamePage() {
     if (!allSeasons.length) return <div className="text-sm text-gray-500">No seasons available.</div>;
     return (
       <div className="border rounded-md p-2 bg-white">
-        <div className="grid grid-cols-3 sm:grid-cols-6 md:grid-cols-8 gap-2">
+        <div className="grid grid-cols-3 sm:grid-cols-6 md:gridCols-8 gap-2">
           {allSeasons.map((y) => {
             const checked = selectedSeasons.includes(y);
             return (
@@ -530,8 +528,8 @@ export default function GamePage() {
     );
   };
 
-  // derive a max-games display (fallback 10)
-  const maxGames = 10 + (limits?.dailyBonus ? 1 : 0);
+  // derive a max-games display (11 if daily win, else 10)
+  const maxGames = limits?.dailyWin ? 11 : 10;
   const pointsToday = limits?.pointsToday ?? 0;
   const pointsTotal = limits?.pointsTotal ?? 0;
 
@@ -553,21 +551,6 @@ export default function GamePage() {
       <p className="text-gray-500 mt-2">Calculating player pool and preparing your challenge</p>
     </div>
   );
-
-  // Player pool count fetch - Using API from your module
-  useEffect(() => {
-    const fetchPlayerPoolCount = async () => {
-      try {
-        const data = await getPlayerPoolCount();
-        setPlayerPoolCount(data.count);
-      } catch (error) {
-        console.error("Failed to fetch player pool count:", error);
-        setPlayerPoolCount(64380); // Fallback value
-      }
-    };
-
-    fetchPlayerPoolCount();
-  }, []);
 
   // Add this function for handling the Top 10 leagues button
   const handleTop10Leagues = () => {
@@ -693,7 +676,7 @@ export default function GamePage() {
           <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-6 grid grid-cols-3 gap-4">
             <div className="text-center">
               <div className="text-xl font-bold">
-                {`${limits.gamesToday || 0}/10`}
+                {`${limits.gamesToday || 0}/${maxGames}`}
               </div>
               <div className="text-sm text-gray-600">Daily Progress</div>
             </div>

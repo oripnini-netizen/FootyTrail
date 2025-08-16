@@ -14,8 +14,8 @@ import {
   Trophy,
   User,
   Calendar,
-  Clock,  // Add this
-  TrendingUp // Add this
+  Clock, 
+  TrendingUp
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import SelectedChips from '../components/SelectedChips';
