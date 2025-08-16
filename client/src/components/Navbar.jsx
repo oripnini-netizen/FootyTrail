@@ -1,20 +1,47 @@
 // client/src/components/Navbar.jsx
 import React, { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { TableProperties, Aperture, Trophy, Info, ShieldCheck } from 'lucide-react';
+
+const SKIP_REDIRECT_KEY = 'skip_onboarding_redirect';
+const SKIP_UNTIL_KEY = 'skip_onboarding_redirect_until';
 
 export default function Navbar() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [scrolled, setScrolled] = useState(false);
 
-  // Redirect brand–new users into onboarding
+  // Onboarding gate with session "skip" + short grace window
   useEffect(() => {
-    if (user && user.has_completed_onboarding === false && window.location.pathname !== '/tutorial') {
+    if (!user) return;
+
+    // If we're on the tutorial page already, do nothing
+    if (location.pathname === '/tutorial') return;
+
+    const skip = sessionStorage.getItem(SKIP_REDIRECT_KEY) === '1';
+    const untilTs = parseInt(sessionStorage.getItem(SKIP_UNTIL_KEY) || '0', 10);
+    const grace = Number.isFinite(untilTs) && Date.now() < untilTs;
+
+    // Do not force redirect while skipping or during grace period
+    if (skip || grace) return;
+
+    // Enforce only when the user explicitly hasn't completed onboarding
+    if (user.has_completed_onboarding === false) {
       navigate('/tutorial', { replace: true });
     }
-  }, [user?.has_completed_onboarding, navigate]);
+  }, [user?.has_completed_onboarding, location.pathname, navigate]);
+
+  // When flag becomes true, clean up skip/grace (future sessions don't need them)
+  useEffect(() => {
+    if (user?.has_completed_onboarding) {
+      try {
+        sessionStorage.removeItem(SKIP_REDIRECT_KEY);
+        sessionStorage.removeItem(SKIP_UNTIL_KEY);
+      } catch {}
+    }
+  }, [user?.has_completed_onboarding]);
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 50);
@@ -67,7 +94,6 @@ export default function Navbar() {
 
             {/* Right: Navigation icons and avatar */}
             <div className="flex items-center">
-              {/* Navigation icons with text labels (icon + text are both clickable) */}
               <div className="flex items-center space-x-8 mr-8">
                 <button
                   onClick={() => navigate('/my-leagues')}
@@ -97,7 +123,6 @@ export default function Navbar() {
                 </button>
               </div>
 
-              {/* Avatar at far right */}
               <button
                 onClick={() => navigate('/profile')}
                 className="flex items-center justify-center transition-transform duration-200 hover:scale-110 ml-4"

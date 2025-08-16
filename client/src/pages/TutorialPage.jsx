@@ -10,11 +10,21 @@ function classNames(...s) { return s.filter(Boolean).join(' '); }
 
 const STEP_STORAGE_KEY = 'onboarding_step';
 
+// Persist filters so they don't clear if the component remounts mid-flow
+const LEAGUES_KEY = 'onboarding_leagueIds';
+const SEASONS_KEY = 'onboarding_seasons';
+const MINAPPS_KEY = 'onboarding_minApps';
+
 export default function TutorialPage() {
   const navigate = useNavigate();
-  const { user, refresh } = useAuth();
+  const { user } = useAuth();
 
-  // If already onboarded, send to game (do NOT clear session storage here to avoid a flash to step 1)
+  // If already onboarded, send to game
+  const [step, setStep] = useState(() => {
+    const saved = parseInt(sessionStorage.getItem(STEP_STORAGE_KEY) || '1', 10);
+    return saved >= 1 && saved <= 3 ? saved : 1;
+  });
+
   useEffect(() => {
     if (!user) return;
     if (user.has_completed_onboarding) {
@@ -22,11 +32,6 @@ export default function TutorialPage() {
     }
   }, [user?.has_completed_onboarding, navigate]);
 
-  // Persist step to survive remounts triggered by auth refresh
-  const [step, setStep] = useState(() => {
-    const saved = parseInt(sessionStorage.getItem(STEP_STORAGE_KEY) || '1', 10);
-    return saved >= 1 && saved <= 3 ? saved : 1;
-  });
   useEffect(() => {
     try { sessionStorage.setItem(STEP_STORAGE_KEY, String(step)); } catch {}
   }, [step]);
@@ -36,22 +41,38 @@ export default function TutorialPage() {
   const [avatar, setAvatar] = useState(user?.user_metadata?.avatar_url || user?.profile_photo_url || '');
   const [savingProfile, setSavingProfile] = useState(false);
 
-  // filters state
+  // filters state (with session persistence)
   const [groupedLeagues, setGroupedLeagues] = useState({});
   const [allSeasons, setAllSeasons] = useState([]);
   const [expandedCountries, setExpandedCountries] = useState({});
-  const [leagueIds, setLeagueIds] = useState(user?.default_leagues || []);
-  const [seasons, setSeasons] = useState(user?.default_seasons || []);
-  const [minApps, setMinApps] = useState(user?.default_min_appearances || 0);
-  const [loadingFilters, setLoadingFilters] = useState(false);
 
-  // prevent wizard flashing while finishing
-  const [finalizing, setFinalizing] = useState(false);
+  const [leagueIds, setLeagueIds] = useState(() => {
+    const saved = sessionStorage.getItem(LEAGUES_KEY);
+    return saved ? JSON.parse(saved) : (user?.default_leagues || []);
+  });
+  const [seasons, setSeasons] = useState(() => {
+    const saved = sessionStorage.getItem(SEASONS_KEY);
+    return saved ? JSON.parse(saved) : (user?.default_seasons || []);
+  });
+  const [minApps, setMinApps] = useState(() => {
+    const saved = sessionStorage.getItem(MINAPPS_KEY);
+    return saved ? parseInt(saved, 10) || 0 : (user?.default_min_appearances || 0);
+  });
 
+  useEffect(() => {
+    try { sessionStorage.setItem(LEAGUES_KEY, JSON.stringify(leagueIds)); } catch {}
+  }, [leagueIds]);
+  useEffect(() => {
+    try { sessionStorage.setItem(SEASONS_KEY, JSON.stringify(seasons)); } catch {}
+  }, [seasons]);
+  useEffect(() => {
+    try { sessionStorage.setItem(MINAPPS_KEY, String(minApps)); } catch {}
+  }, [minApps]);
+
+  // Load selectable filters
   useEffect(() => {
     async function loadFilters() {
       try {
-        setLoadingFilters(true);
         const leaguesRes = await getLeagues();
         setGroupedLeagues(leaguesRes.groupedByCountry || {});
         const initialCollapse = {};
@@ -62,8 +83,6 @@ export default function TutorialPage() {
         setAllSeasons(seasonsRes.seasons || []);
       } catch (e) {
         console.error('Error loading filters for tutorial:', e);
-      } finally {
-        setLoadingFilters(false);
       }
     }
     loadFilters();
@@ -122,16 +141,12 @@ export default function TutorialPage() {
     try {
       setSavingProfile(true);
       const publicUrl = await uploadAvatar(file);
-      // update auth metadata and users table
-      const currentMetadata = user?.user_metadata || {};
-      const { error: authError } = await supabase.auth.updateUser({
-        data: { ...currentMetadata, avatar_url: publicUrl, profile_photo_url: publicUrl }
-      });
-      if (authError) throw authError;
-      const { error: dbError } = await supabase.from('users').update({ profile_photo_url: publicUrl }).eq('id', user.id);
+      const { error: dbError } = await supabase
+        .from('users')
+        .update({ profile_photo_url: publicUrl })
+        .eq('id', user.id);
       if (dbError) throw dbError;
       setAvatar(publicUrl);
-      await refresh?.();
     } catch (e) {
       console.error('Avatar upload failed:', e);
     } finally {
@@ -139,52 +154,55 @@ export default function TutorialPage() {
     }
   };
 
+  // STEP 2 -> update DB and move to step 3 immediately (no auth refresh)
   const saveProfileStep = async () => {
     try {
       setSavingProfile(true);
-      const currentMetadata = user?.user_metadata || {};
-      const { error: authError } = await supabase.auth.updateUser({
-        data: { ...currentMetadata, full_name: fullName }
-      });
-      if (authError) throw authError;
-      const { error: dbError } = await supabase.from('users').update({ full_name: fullName }).eq('id', user.id);
-      if (dbError) throw dbError;
-
-      // Move to step 3 and persist immediately BEFORE refreshing auth state (which can remount the page)
-      setStep(3);
-      try { sessionStorage.setItem(STEP_STORAGE_KEY, '3'); } catch {}
-
-      await refresh?.();
+      if (fullName?.trim()) {
+        const { error } = await supabase
+          .from('users')
+          .update({ full_name: fullName.trim() })
+          .eq('id', user.id);
+        if (error) throw error;
+      }
     } catch (e) {
       console.error('Failed updating name:', e);
+      // allow proceeding anyway
     } finally {
       setSavingProfile(false);
+      setStep(3);
+      try { sessionStorage.setItem(STEP_STORAGE_KEY, '3'); } catch {}
     }
   };
 
+  // STEP 3 -> Await DB write, then hard-navigate to /game (full reload) so fresh user is fetched
+  const [finalizing, setFinalizing] = useState(false);
   const finishOnboarding = async () => {
+    if (finalizing) return;
+    setFinalizing(true);
     try {
-      setFinalizing(true);
-      // Keep step at 3 in storage to prevent any remount flicker back to 1
-      try { sessionStorage.setItem(STEP_STORAGE_KEY, '3'); } catch {}
-
-      const payload = {
-        default_leagues: leagueIds,
-        default_seasons: seasons,
-        default_min_appearances: minApps,
-        has_completed_onboarding: true
-      };
-      const { error } = await supabase.from('users').update(payload).eq('id', user.id);
+      const { error } = await supabase.from('users')
+        .update({
+          default_leagues: leagueIds,
+          default_seasons: seasons,
+          default_min_appearances: minApps,
+          has_completed_onboarding: true
+        })
+        .eq('id', user.id);
       if (error) throw error;
-
-      // Refresh user in context (now has_completed_onboarding === true)
-      await refresh?.();
-
-      // Navigate away; we purposely do NOT clear step here to avoid any flash if a remount happens
-      navigate('/game', { replace: true });
     } catch (e) {
-      console.error('Error finishing onboarding:', e);
-      setFinalizing(false);
+      console.error('Error finalizing onboarding:', e);
+      // continue to reload; user can adjust later in Profile
+    } finally {
+      // Clear persisted wizard state
+      try {
+        sessionStorage.removeItem(LEAGUES_KEY);
+        sessionStorage.removeItem(SEASONS_KEY);
+        sessionStorage.removeItem(MINAPPS_KEY);
+        sessionStorage.removeItem(STEP_STORAGE_KEY);
+      } catch {}
+      // Full reload to ensure fresh user (and navbar redirect to /game is honored)
+      window.location.replace('/game'); // hard navigation to the game page
     }
   };
 
@@ -197,10 +215,10 @@ export default function TutorialPage() {
         <div className="bg-white rounded-xl shadow-md p-6 relative">
           {/* Finalizing overlay */}
           {finalizing && (
-            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-white/70">
+            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-white/80">
               <div className="flex items-center gap-3">
                 <div className="h-6 w-6 animate-spin rounded-full border-2 border-green-600 border-t-transparent" />
-                <div className="text-green-800 font-semibold">Finishing…</div>
+                <div className="text-green-800 font-semibold">Saving your defaults…</div>
               </div>
             </div>
           )}
@@ -220,6 +238,7 @@ export default function TutorialPage() {
             <div className="text-sm text-gray-500">Step {step} of 3</div>
           </div>
 
+          {/* Step 1 */}
           {step === 1 && (
             <div>
               <h1 className="text-2xl font-bold text-green-900 mb-2">Welcome to FootyTrail</h1>
@@ -245,6 +264,7 @@ export default function TutorialPage() {
             </div>
           )}
 
+          {/* Step 2 */}
           {step === 2 && (
             <div>
               <h2 className="text-xl font-semibold text-green-900 mb-2">Set your profile</h2>
@@ -283,12 +303,13 @@ export default function TutorialPage() {
                   <ChevronLeft className="h-4 w-4" /> Back
                 </button>
                 <button onClick={saveProfileStep} disabled={savingProfile} className="inline-flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white font-semibold px-4 py-2 rounded">
-                  {savingProfile ? 'Saving...' : <>Save & Continue <ChevronRight className="h-4 w-4" /></>}
+                  {savingProfile ? 'Saving…' : <>Save & Continue <ChevronRight className="h-4 w-4" /></>}
                 </button>
               </div>
             </div>
           )}
 
+          {/* Step 3 */}
           {step === 3 && (
             <div>
               <h2 className="text-xl font-semibold text-green-900 mb-2">Default filters</h2>
