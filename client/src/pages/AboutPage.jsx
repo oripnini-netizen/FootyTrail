@@ -4,7 +4,10 @@ import { Trophy, Clock, Filter, Target, Users, Shield, Award, Lightbulb } from '
 
 export default function AboutPage() {
   return (
-    <div className="bg-gradient-to-b from-green-50 to-transparent min-h-screen pb-16">
+    <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent pb-16">
+      {/* fixed background so the area under the navbar is green too */}
+      <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
+
       <div className="mx-auto max-w-5xl px-4 py-8">
         <h1 className="text-4xl font-bold text-center text-green-900 mb-1">
           About <span className="text-yellow-500">FootyTrail</span>

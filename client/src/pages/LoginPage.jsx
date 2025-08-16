@@ -6,22 +6,13 @@ export default function LoginPage() {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
-      setSession(s);
-      if (s?.user) {
-      }
-    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
     return () => subscription.unsubscribe();
   }, []);
 
   const signInWithGoogle = async () => {
     try {
-      console.log("Starting Google sign in");
-      
-      // Always use the current origin for redirects during development
       const redirectUrl = window.location.origin + '/game';
-      console.log("Redirect URL:", redirectUrl);
-      
       await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
@@ -39,14 +30,8 @@ export default function LoginPage() {
     const email = e.target.email.value.trim();
     const password = e.target.password.value.trim();
     const full_name = e.target.full_name.value.trim();
-
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { full_name } },
-    });
-    if (error) alert(error.message);
-    else alert('Check your email to confirm your account.');
+    const { error } = await supabase.auth.signUp({ email, password, options: { data: { full_name } } });
+    if (error) alert(error.message); else alert('Check your email to confirm your account.');
   };
 
   const handleEmailSignin = async (e) => {
@@ -57,35 +42,20 @@ export default function LoginPage() {
     if (error) alert(error.message);
   };
 
-  const signOut = async () => {
-    await supabase.auth.signOut();
-  };
+  const signOut = async () => { await supabase.auth.signOut(); };
 
   return (
-    <div style={{ minHeight: '100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'#f5f5f5' }}>
-      <div style={{ width: 360, background:'#fff', padding:24, borderRadius:12, boxShadow:'0 10px 30px rgba(0,0,0,0.08)' }}>
-        <div style={{ textAlign:'center', marginBottom:16 }}>
-          <img src="/footytrail_logo.png" alt="FootyTrail" style={{ width:80, marginBottom:12 }} />
-          <h2 style={{ margin:0 }}>Sign in to FootyTrail</h2>
+    <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent flex items-center justify-center">
+      <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
+      <div className="w-[360px] bg-white p-6 rounded-2xl shadow-xl">
+        <div className="text-center mb-4">
+          <img src="/footytrail_logo.png" alt="FootyTrail" className="w-20 mx-auto mb-3" />
+          <h2 className="m-0 text-xl font-semibold">Sign in to FootyTrail</h2>
         </div>
 
-        {/* OAuth button with Google logo */}
-        <button 
-          onClick={signInWithGoogle} 
-          style={{ 
-            width:'100%', 
-            padding:'10px 16px', 
-            borderRadius:8, 
-            border:'1px solid #ddd', 
-            marginBottom:8,
-            background: '#fff',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '8px',
-            fontWeight: '500',
-            cursor: 'pointer'
-          }}
+        <button
+          onClick={signInWithGoogle}
+          className="w-full py-2.5 rounded-lg border border-gray-300 bg-white mb-2 flex items-center justify-center gap-2 font-medium"
         >
           <svg width="18" height="18" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 488 512">
             <path fill="#4285F4" d="M488 261.8C488 403.3 391.1 504 248 504 110.8 504 0 393.2 0 256S110.8 8 248 8c66.8 0 123 24.5 166.3 64.9l-67.5 64.9C258.5 52.6 94.3 116.6 94.3 256c0 86.5 69.1 156.6 153.7 156.6 98.2 0 135-70.4 140.8-106.9H248v-85.3h236.1c2.3 12.7 3.9 24.9 3.9 41.4z"/>
@@ -93,29 +63,23 @@ export default function LoginPage() {
           Continue with Google
         </button>
 
-        <hr style={{ margin:'16px 0' }} />
+        <hr className="my-4" />
 
-        {/* Email/Password – Sign In */}
-        <form onSubmit={handleEmailSignin} style={{ marginBottom:12 }}>
-          <input name="email" type="email" placeholder="Email" required style={{ width:'100%', padding:10, border:'1px solid #ddd', borderRadius:8, marginBottom:8 }} />
-          <input name="password" type="password" placeholder="Password" required style={{ width:'100%', padding:10, border:'1px solid #ddd', borderRadius:8, marginBottom:8 }} />
-          <button type="submit" style={{ width:'100%', padding:10, borderRadius:8, background:'#16a34a', color:'#fff', border:'none', cursor:'pointer' }}>
-            Sign in
-          </button>
+        <form onSubmit={handleEmailSignin} className="mb-3">
+          <input name="email" type="email" placeholder="Email" required className="w-full p-2.5 border border-gray-300 rounded-lg mb-2" />
+          <input name="password" type="password" placeholder="Password" required className="w-full p-2.5 border border-gray-300 rounded-lg mb-2" />
+          <button type="submit" className="w-full p-2.5 rounded-lg bg-green-600 text-white">Sign in</button>
         </form>
 
-        {/* Email/Password – Sign Up */}
         <form onSubmit={handleEmailSignup}>
-          <input name="full_name" type="text" placeholder="Full name" required style={{ width:'100%', padding:10, border:'1px solid #ddd', borderRadius:8, marginBottom:8 }} />
-          <input name="email" type="email" placeholder="Email" required style={{ width:'100%', padding:10, border:'1px solid #ddd', borderRadius:8, marginBottom:8 }} />
-          <input name="password" type="password" placeholder="Password" required style={{ width:'100%', padding:10, border:'1px solid #ddd', borderRadius:8, marginBottom:8 }} />
-          <button type="submit" style={{ width:'100%', padding:10, borderRadius:8, background:'#2563eb', color:'#fff', border:'none', cursor:'pointer' }}>
-            Sign up
-          </button>
+          <input name="full_name" type="text" placeholder="Full name" required className="w-full p-2.5 border border-gray-300 rounded-lg mb-2" />
+          <input name="email" type="email" placeholder="Email" required className="w-full p-2.5 border border-gray-300 rounded-lg mb-2" />
+          <input name="password" type="password" placeholder="Password" required className="w-full p-2.5 border border-gray-300 rounded-lg mb-2" />
+          <button type="submit" className="w-full p-2.5 rounded-lg bg-blue-600 text-white">Sign up</button>
         </form>
 
         {session?.user && (
-          <button onClick={signOut} style={{ width:'100%', marginTop:16, padding:10, borderRadius:8, border:'1px solid #ddd', cursor:'pointer' }}>
+          <button onClick={signOut} className="w-full mt-4 p-2.5 rounded-lg border border-gray-300">
             Sign out
           </button>
         )}

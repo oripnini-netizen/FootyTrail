@@ -133,7 +133,6 @@ export default function GamePage() {
         nationality: playerData.player_nationality,
         position: playerData.player_position,
         photo: playerData.player_photo,
-        // add any other fields you need
       };
 
       // 4. Always set potentialPoints to 10,000 for daily challenge
@@ -162,11 +161,7 @@ export default function GamePage() {
         setLoadingFilters(true);
         setPageReady(false); // Ensure page shows loading state
 
-        console.log('🔍 Fetching leagues...');
         const leaguesRes = await getLeagues();
-        console.log('📊 Leagues response:', leaguesRes);
-        
-        // leagues
         if (!cancelled) {
           setGroupedLeagues(leaguesRes.groupedByCountry || {});
           setLeagueTags(leaguesRes.tags || []);
@@ -177,11 +172,7 @@ export default function GamePage() {
           setExpandedCountries(initialCollapse);
         }
 
-        console.log('🔍 Fetching seasons...');
         const seasonsRes = await getSeasons();
-        console.log('📊 Seasons response:', seasonsRes);
-        
-        // seasons - use the already fetched seasons result
         if (!cancelled) setAllSeasons(seasonsRes.seasons || []);
 
         // user limits (only if user is available)
@@ -189,8 +180,7 @@ export default function GamePage() {
           try {
             const lim = await getLimits(user.id);
             if (!cancelled) setLimits(lim || { gamesToday: 0, dailyPlayed: false, pointsToday: 0, pointsTotal: 0 });
-          } catch (limitsError) {
-            console.error('Error fetching limits:', limitsError);
+          } catch {
             if (!cancelled) setLimits({ gamesToday: 0, dailyPlayed: false, pointsToday: 0, pointsTotal: 0 });
           }
         } else {
@@ -229,17 +219,12 @@ export default function GamePage() {
           userId: user?.id
         };
         
-        console.log('🔍 Fetching counts with payload:', payload);
         const countsResult = await getCounts(payload);
-        console.log('📊 Counts response:', countsResult);
-        
         const { poolCount: filteredCount, totalCount: dbTotal } = countsResult;
         
         if (!cancelled) {
           setPoolCount(filteredCount || 0);
           setTotalCount(dbTotal || 0);
-          
-          // Now that everything is calculated, we can show the page
           setPageReady(true);
         }
       } catch (e) {
@@ -250,14 +235,12 @@ export default function GamePage() {
           setPageReady(true); // Show page even if there's an error
         }
       } finally {
-        if (!cancelled) {
-          setLoadingCounts(false);
-        }
+        if (!cancelled) setLoadingCounts(false);
       }
     }
 
     if (!loadingFilters) recalc();
-    else setPageReady(false); // Keep loading state while filters are loading
+    else setPageReady(false);
     
     return () => { cancelled = true; };
   }, [loadingFilters, selectedLeagueIds, selectedSeasons, minApps, user?.id]);
@@ -295,7 +278,7 @@ export default function GamePage() {
           leagues: selectedLeagueIds,
           seasons: selectedSeasons,
           minAppearances: Number(minApps) || 0,
-          potentialPoints:potentialPoints,
+          potentialPoints: potentialPoints,
         },
         isDaily,
       },
@@ -306,68 +289,33 @@ export default function GamePage() {
   const onStartGame = async () => {
     try {
       setGameLoading(true);
-      
-      // Make sure we're using the current filter state
       const currentFilters = {
         leagues: selectedLeagueIds,
         seasons: selectedSeasons,
         minAppearances: Number(minApps) || 0,
-        userId: user?.id  // Add this line
+        userId: user?.id
       };
-      
-      // Pass user ID as second parameter
       const randomPlayer = await getRandomPlayer(currentFilters, user?.id);
-      console.log('🎮 Received player:', randomPlayer);
-      
       if (!randomPlayer) {
         alert('No players found with current filters. Try adjusting your selection.');
         return;
       }
-
-      // Calculate potential points - Make sure this is working
-      const potentialPoints = poolCount * 5; // Direct calculation
-      console.log('🎮 Using direct calculation:', potentialPoints);
-      
-      if (!potentialPoints || potentialPoints <= 0) {
-        console.error('❌ Invalid potential points calculated:', potentialPoints);
-      }
-
-      const gameData = {
-        ...randomPlayer,
-        isDaily: false,
-        filters: {
-          ...currentFilters,
-          potentialPoints
-        },
-        potentialPoints
-      };
-
-      console.log('🎮 Final game data:', gameData);
-      console.log('🎮 About to navigate to /live');
-      console.log('🎮 Potential points being sent:', {
-      directPoints: potentialPoints, // Should be 6800
-      filtersPoints: currentFilters.potentialPoints, // This might be undefined
-      gameData: gameData // Check the entire object
-    });
-
+      const pp = poolCount * 5;
       navigate('/live', {
-        state: gameData,
-        replace: true 
+        state: {
+          ...randomPlayer,
+          isDaily: false,
+          filters: { ...currentFilters, potentialPoints: pp },
+          potentialPoints: pp
+        },
+        replace: true
       });
-      
-      console.log('🎮 Navigation called successfully');
-      
     } catch (error) {
       console.error('Error starting game:', error);
       alert('Failed to start game. Please try again.');
     } finally {
       setGameLoading(false);
     }
-  };
-
-  // Calculate potential points function
-  const calculatePotentialPoints = (filters) => {
-    return poolCount * 5;
   };
 
   // ---------- UI pieces ----------
@@ -382,13 +330,13 @@ export default function GamePage() {
     if (!items?.length) return null;
     return (
       <div className="mb-2">
-        <div className="text-xs text-gray-600 mb-1">{title}</div>
+        {title && <div className="text-xs text-gray-600 mb-1">{title}</div>}
         <div className="flex flex-wrap gap-2">
           {items.map((t, index) => {
             const label = getLabel ? getLabel(t) : String(t);
             return (
               <span
-                key={`${String(t)}-${index}`} // Add index to ensure uniqueness
+                key={`${String(t)}-${index}`}
                 className={classNames(
                   'group relative inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800',
                   hoverClose && 'pr-6'
@@ -420,18 +368,11 @@ export default function GamePage() {
   };
 
   const LeaguesPicker = () => {
-    if (loadingFilters) {
-      return <div className="text-sm text-gray-500">Loading leagues…</div>;
-    }
+    if (loadingFilters) return <div className="text-sm text-gray-500">Loading leagues…</div>;
     const countries = Object.keys(groupedLeagues);
-    if (countries.length === 0) {
-      return <div className="text-sm text-gray-500">No leagues available.</div>;
-    }
+    if (countries.length === 0) return <div className="text-sm text-gray-500">No leagues available.</div>;
     return (
       <div className="border rounded-md">
-        {/* QUICK TAGS ROW REMOVED AS REQUESTED */}
-
-        {/* collapsible country list (default collapsed) */}
         <div className="max-h-64 overflow-auto divide-y">
           {countries.sort().map((country) => {
             const leagues = groupedLeagues[country] || [];
@@ -533,15 +474,7 @@ export default function GamePage() {
   const pointsToday = limits?.pointsToday ?? 0;
   const pointsTotal = limits?.pointsTotal ?? 0;
 
-  // Add this temporary debug function right before the "Start Game" button
-  const debugCurrentFilters = () => {
-    console.log('🔍 Current filter state:');
-    console.log('- selectedLeagueIds:', selectedLeagueIds);
-    console.log('- selectedSeasons:', selectedSeasons);
-    console.log('- minApps:', minApps);
-  };
-
-  // Add a loading spinner component
+  // Loading spinner
   const LoadingSpinner = () => (
     <div className="min-h-screen flex flex-col items-center justify-center">
       <div className="mb-4">
@@ -552,7 +485,7 @@ export default function GamePage() {
     </div>
   );
 
-  // Add this function for handling the Top 10 leagues button
+  // Helpers used in the filters box
   const handleTop10Leagues = () => {
     const top10Ids = ['39', '140', '78', '135', '61', '88', '94', '71', '128', '253'];
     setSelectedLeagueIds(prev => {
@@ -560,58 +493,41 @@ export default function GamePage() {
       return Array.from(uniqueIds);
     });
   };
-
-  // Add this function to toggle country expansion in the leagues list
   const toggleCountry = (country) => {
-    setExpandedCountries(prev => ({
-      ...prev,
-      [country]: !prev[country]
-    }));
+    setExpandedCountries(prev => ({ ...prev, [country]: !prev[country] }));
   };
-
-  // Add this function for handling the Last 5 seasons button
   const handleLast5Seasons = () => {
     setSelectedSeasons(allSeasons.slice(0, 5));
   };
 
-  // New useEffect for fetching the game prompt
+  // Fetch game prompt
   useEffect(() => {
     const fetchGamePrompt = async () => {
       try {
         setIsLoadingPrompt(true);
-        console.log("Fetching game prompt from API...");
-        
         const response = await fetch(`${API_BASE}/ai/generate-game-prompt`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({}),
         });
-        
-        if (!response.ok) {
-          throw new Error(`Failed to fetch game prompt: ${response.status}`);
-        }
-        
+        if (!response.ok) throw new Error(`Failed to fetch game prompt: ${response.status}`);
         const data = await response.json();
-        console.log("Game prompt received:", data);
-        
-        if (data.prompt) {
-          setGamePrompt(data.prompt);
-        }
+        if (data.prompt) setGamePrompt(data.prompt);
       } catch (error) {
         console.error('Error fetching game prompt:', error);
-        // Keep the default prompt in case of error
       } finally {
         setIsLoadingPrompt(false);
       }
     };
-    
     fetchGamePrompt();
   }, []);
 
+  // ********** ONLY CHANGE BELOW THIS COMMENT IS THE FIXED BACKGROUND LAYER **********
   return (
-    <div className="min-h-screen bg-gradient-to-b from-green-50 to-transparent">
+    <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
+      {/* Fixed, full-viewport gradient so there’s no gray strip under the navbar */}
+      <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
+
       {!pageReady ? (
         <LoadingSpinner />
       ) : (
@@ -662,14 +578,14 @@ export default function GamePage() {
               </>
             )}
             {daily && limits.dailyPlayed && limits.dailyPlayerPhoto && (
-  <div className="flex justify-center mb-2">
-    <img
-      src={limits.dailyPlayerPhoto}
-      alt={limits.dailyPlayerName || daily.player_name}
-      className="h-20 w-20 rounded-full border-4 border-yellow-400 object-cover shadow"
-    />
-  </div>
-)}
+              <div className="flex justify-center mb-2">
+                <img
+                  src={limits.dailyPlayerPhoto}
+                  alt={limits.dailyPlayerName || daily.player_name}
+                  className="h-20 w-20 rounded-full border-4 border-yellow-400 object-cover shadow"
+                />
+              </div>
+            )}
           </div>
 
           {/* Progress Stats Card */}
@@ -682,13 +598,13 @@ export default function GamePage() {
             </div>
             <div className="text-center">
               <div className="text-xl font-bold text-green-600">
-                {limits.pointsToday || 0}
+                {pointsToday}
               </div>
               <div className="text-sm text-gray-600">Daily Points</div>
             </div>
             <div className="text-center">
               <div className="text-xl font-bold text-blue-600">
-                {limits.pointsTotal || 0}
+                {pointsTotal}
               </div>
               <div className="text-sm text-gray-600">Total Points</div>
             </div>
@@ -729,7 +645,7 @@ export default function GamePage() {
               </div>
             </div>
 
-            {/* Replace the existing Start button with this centered, dark green version */}
+            {/* Start Game */}
             <div className="flex justify-center mt-6">
               <button
                 onClick={onStartGame}
@@ -835,10 +751,10 @@ export default function GamePage() {
                           <div key={country} className="mb-2">
                             <button
                               onClick={(e) => {
-                                e.preventDefault(); // Prevent form submission
+                                e.preventDefault();
                                 toggleCountry(country);
                               }}
-                              type="button" // Explicitly mark as button
+                              type="button"
                               className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
                             >
                               <div className="flex items-center gap-2">
@@ -865,7 +781,7 @@ export default function GamePage() {
                                   <label
                                     key={league.league_id}
                                     className="flex items-center gap-2 cursor-pointer"
-                                    onClick={(e) => e.stopPropagation()} // Prevent bubbling
+                                    onClick={(e) => e.stopPropagation()}
                                   >
                                     <input
                                       type="checkbox"

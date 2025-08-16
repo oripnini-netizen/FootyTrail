@@ -12,9 +12,7 @@ import {
   Trash2,
   UsersRound,
   Trophy,
-  User,
-  Calendar,
-  Clock, 
+  Clock,
   TrendingUp
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -28,21 +26,18 @@ function classNames(...s) {
 export default function ProfilePage() {
   const { user, refresh, signOut } = useAuth();
   const navigate = useNavigate();
-  
-  // Add this state declaration 
+
   const [localStats, setLocalStats] = useState({});
-  
-  // Rest of your existing state declarations...
   const [recentGames, setRecentGames] = useState([]);
   const [fullName, setFullName] = useState(
-    user?.user_metadata?.full_name || 
-    user?.full_name || 
+    user?.user_metadata?.full_name ||
+    user?.full_name ||
     ''
   );
   const [avatar, setAvatar] = useState(
-    user?.user_metadata?.avatar_url || 
-    user?.user_metadata?.profile_photo_url || 
-    user?.profile_photo_url || 
+    user?.user_metadata?.avatar_url ||
+    user?.user_metadata?.profile_photo_url ||
+    user?.profile_photo_url ||
     ''
   );
   const [loading, setLoading] = useState(false);
@@ -55,21 +50,16 @@ export default function ProfilePage() {
   const [defaultSeasons, setDefaultSeasons] = useState(user?.default_seasons || []);
   const [defaultMinApps, setDefaultMinApps] = useState(user?.default_min_appearances || 0);
   const [expandedCountries, setExpandedCountries] = useState({});
-
-  // Add these state declarations after your existing ones
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
 
-  // Single declaration of leagueIdToLabel
   const leagueIdToLabel = useMemo(() => {
     const mapping = {};
-    // Add mappings from grouped leagues
     Object.entries(groupedLeagues).forEach(([country, leagues]) => {
       leagues.forEach(league => {
         mapping[league.league_id] = `${country} - ${league.league_name}`;
       });
     });
-    // Add top 10 leagues mapping
     const top10 = [
       { id: 39, country: "England", name: "Premier League" },
       { id: 140, country: "Spain", name: "La Liga" },
@@ -88,7 +78,6 @@ export default function ProfilePage() {
     return mapping;
   }, [groupedLeagues]);
 
-  // Update handleTop10Leagues to use the same top10 array
   const handleTop10Leagues = () => {
     const top10Ids = [39, 140, 78, 135, 61, 88, 94, 71, 128, 253];
     setDefaultLeagueIds(prev => {
@@ -97,85 +86,72 @@ export default function ProfilePage() {
     });
   };
 
-  // Update both name and avatar when user data changes
   useEffect(() => {
     if (user) {
       setFullName(user.user_metadata?.full_name || user.full_name || '');
       setAvatar(
-        user.user_metadata?.avatar_url || 
+        user.user_metadata?.avatar_url ||
         user.user_metadata?.profile_photo_url ||
-        user.profile_photo_url || 
+        user.profile_photo_url ||
         ''
       );
     }
   }, [user]);
 
-  // Update the useEffect for fetching recent games and calculating statistics
+  // Fetch recent games (20) + ALL games (for stats)
   useEffect(() => {
-    const fetchRecentGames = async () => {
+    const fetchGames = async () => {
       if (!user?.id) return;
-      
       try {
         setLoading(true);
-        
-        console.log("Fetching games for user ID:", user.id);
-        
-        // Log the SQL query that will be executed (for debugging)
-        console.log(`SQL equivalent: SELECT * FROM games_records WHERE user_id = '${user.id}' ORDER BY created_at DESC LIMIT 20`);
-        
-        // Get recent games with explicit columns
-        const { data: games, error } = await supabase
+
+        // Recent 20 for the list
+        const { data: games, error: recentErr } = await supabase
           .from('games_records')
-          .select('id, player_name, won, points_earned, time_taken_seconds, guesses_attempted, hints_used, created_at')
+          .select('id, player_name, won, points_earned, time_taken_seconds, guesses_attempted, hints_used, created_at, is_daily_challenge')
           .eq('user_id', user.id)
           .order('created_at', { ascending: false })
           .limit(20);
 
-        if (error) {
-          console.error("Error fetching games:", error);
-          throw error;
-        }
-        
-        console.log("Fetched games:", games);
-        
-        if (games && games.length > 0) {
-          setRecentGames(games);
-          
-          // Calculate statistics from these games
-          const totalGames = games.length;
-          const wonGames = games.filter(game => game.won).length;
-          const totalPoints = games.reduce((sum, game) => sum + (game.points_earned || 0), 0);
-          const totalTime = games.reduce((sum, game) => sum + (game.time_taken_seconds || 0), 0);
-          
-          setLocalStats({
-            games_played: totalGames,
-            total_points: totalPoints,
-            avg_time: totalGames > 0 ? Math.round(totalTime / totalGames) : 0,
-            success_rate: totalGames > 0 ? Math.round((wonGames / totalGames) * 100) : 0
-          });
-        } else {
-          console.log("No games found for this user.");
-          setRecentGames([]);
-          
-          // Show empty statistics
-          setLocalStats({
-            games_played: 0,
-            total_points: 0,
-            avg_time: 0,
-            success_rate: 0
-          });
-        }
-      } catch (error) {
-        console.error('Error fetching games data:', error);
+        if (recentErr) throw recentErr;
+        setRecentGames(games || []);
+
+        // ALL games for stats (no limit)
+        const { data: allGames, error: allErr } = await supabase
+          .from('games_records')
+          .select('won, points_earned, time_taken_seconds')
+          .eq('user_id', user.id);
+
+        if (allErr) throw allErr;
+
+        const totalGames = allGames?.length || 0;
+        const wonGames = (allGames || []).filter(g => g.won).length;
+        const totalPoints = (allGames || []).reduce((sum, g) => sum + (g.points_earned || 0), 0);
+        const totalTime = (allGames || []).reduce((sum, g) => sum + (g.time_taken_seconds || 0), 0);
+
+        setLocalStats({
+          games_played: totalGames,
+          total_points: totalPoints,
+          avg_time: totalGames > 0 ? Math.round(totalTime / totalGames) : 0,
+          success_rate: totalGames > 0 ? Math.round((wonGames / totalGames) * 100) : 0
+        });
+      } catch (e) {
+        console.error('Error fetching profile stats:', e);
+        // Fall back to zeros on error
+        setLocalStats({
+          games_played: 0,
+          total_points: 0,
+          avg_time: 0,
+          success_rate: 0
+        });
+        setRecentGames([]);
       } finally {
         setLoading(false);
       }
     };
-
-    fetchRecentGames();
+    fetchGames();
   }, [user?.id]);
 
-  // Load default filters on user change
   useEffect(() => {
     if (user) {
       setDefaultLeagueIds(user.default_leagues || []);
@@ -184,30 +160,22 @@ export default function ProfilePage() {
     }
   }, [user]);
 
-  // Load filters data
+  // Load filters (for the "Default Filters" section)
   useEffect(() => {
     let cancelled = false;
 
     async function loadFilters() {
       try {
         setLoadingFilters(true);
-        
-        // Fetch leagues
         const leaguesRes = await getLeagues();
         if (!cancelled) {
           setGroupedLeagues(leaguesRes.groupedByCountry || {});
-          // Initialize collapse state
           const initialCollapse = {};
-          Object.keys(leaguesRes.groupedByCountry || {}).forEach((c) => {
-            initialCollapse[c] = false;
-          });
+          Object.keys(leaguesRes.groupedByCountry || {}).forEach((c) => (initialCollapse[c] = false));
           setExpandedCountries(initialCollapse);
         }
-
-        // Fetch seasons
         const seasonsRes = await getSeasons();
         if (!cancelled) setAllSeasons(seasonsRes.seasons || []);
-
       } catch (error) {
         console.error('Error loading filters:', error);
       } finally {
@@ -222,11 +190,11 @@ export default function ProfilePage() {
   const handleSignOut = async () => {
     try {
       setLoading(true);
-      await signOut(); // Call the signOut function from AuthContext
-      navigate('/login'); // Redirect to login page
-    } catch (error) {
-      console.error('Error signing out:', error);
-      setError(error.message);
+      await signOut();
+      navigate('/login');
+    } catch (e) {
+      console.error('Error signing out:', e);
+      setError(e.message);
     } finally {
       setLoading(false);
     }
@@ -237,33 +205,20 @@ export default function ProfilePage() {
     try {
       setError(null);
       setLoading(true);
-
-      // Get current user metadata first
       const currentMetadata = user?.user_metadata || {};
-
-      // Update auth metadata while preserving existing metadata
       const { error: authError } = await supabase.auth.updateUser({
-        data: { 
-          ...currentMetadata,  // Preserve existing metadata
-          full_name: fullName 
-        }
+        data: { ...currentMetadata, full_name: fullName }
       });
-
       if (authError) throw authError;
-
-      // Update users table
       const { error: dbError } = await supabase
         .from('users')
         .update({ full_name: fullName })
         .eq('id', user.id);
-
       if (dbError) throw dbError;
-
       await refresh();
-
-    } catch (error) {
-      console.error('Error updating name:', error);
-      setError(error.message);
+    } catch (e) {
+      console.error('Error updating name:', e);
+      setError(e.message);
     } finally {
       setLoading(false);
     }
@@ -276,57 +231,42 @@ export default function ProfilePage() {
     try {
       setError(null);
       setLoading(true);
-      
+
       const publicUrl = await uploadAvatar(file);
-      console.log('Upload successful, URL:', publicUrl);
-
-      // 1. Update auth user metadata
       const { error: authError } = await supabase.auth.updateUser({
-        data: { 
-          avatar_url: publicUrl,
-          profile_photo_url: publicUrl
-        }
+        data: { avatar_url: publicUrl, profile_photo_url: publicUrl }
       });
-
       if (authError) throw authError;
 
-      // 2. Update users table directly
       const { error: updateError } = await supabase
         .from('users')
         .update({ profile_photo_url: publicUrl })
         .eq('id', user.id);
-
       if (updateError) throw updateError;
 
-      // 3. Update local state and refresh user data
       setAvatar(publicUrl);
       await refresh();
-
-    } catch (error) {
-      console.error('Error:', error);
-      setError(error.message);
+    } catch (e) {
+      console.error('Error:', e);
+      setError(e.message);
     } finally {
       setLoading(false);
     }
   };
 
-  // Add this effect to track filter changes
   useEffect(() => {
     if (user) {
       const hasLeaguesChanged = JSON.stringify(defaultLeagueIds) !== JSON.stringify(user.default_leagues || []);
       const hasSeasonsChanged = JSON.stringify(defaultSeasons) !== JSON.stringify(user.default_seasons || []);
       const hasMinAppsChanged = defaultMinApps !== (user.default_min_appearances || 0);
-      
       setHasChanges(hasLeaguesChanged || hasSeasonsChanged || hasMinAppsChanged);
     }
   }, [defaultLeagueIds, defaultSeasons, defaultMinApps, user]);
 
-  // Update the saveDefaultFilters function
   const saveDefaultFilters = async () => {
     try {
       setIsSaving(true);
       setError(null);
-
       const { error: updateError } = await supabase
         .from('users')
         .update({
@@ -335,84 +275,38 @@ export default function ProfilePage() {
           default_min_appearances: defaultMinApps
         })
         .eq('id', user.id);
-
       if (updateError) throw updateError;
-      
-      // Refresh user data to get updated defaults
       await refresh();
       setHasChanges(false);
-
-    } catch (error) {
-      console.error('Error saving filters:', error);
-      setError(error.message);
+    } catch (e) {
+      console.error('Error saving filters:', e);
+      setError(e.message);
     } finally {
       setIsSaving(false);
     }
   };
 
-  // Save default filters
-  const saveFiltersButton = (
-    <button
-      onClick={saveDefaultFilters}
-      disabled={isSaving || !hasChanges}
-      className="w-full px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400"
-    >
-      {isSaving ? 'Saving...' : 'Save Filters'}
-    </button>
-  );
-
-  // Add this after your state declarations
   const leaguesWithCountry = useMemo(() => {
     const enrichedLeagues = {};
     Object.entries(groupedLeagues).forEach(([country, leagues]) => {
-      enrichedLeagues[country] = leagues.map(league => ({
-        ...league,
-        country_name: country
-      }));
+      enrichedLeagues[country] = leagues.map(league => ({ ...league, country_name: country }));
     });
     return enrichedLeagues;
   }, [groupedLeagues]);
 
-  // League handlers
-  const handleClearLeagues = () => {
-    setDefaultLeagueIds([]);
-  };
-
-  const toggleCountry = (country) => {
-    setExpandedCountries(prev => ({
-      ...prev,
-      [country]: !prev[country]
-    }));
-  };
-
-  const toggleLeague = (leagueId) => {
-    setDefaultLeagueIds(prev => 
-      prev.includes(leagueId)
-        ? prev.filter(id => id !== leagueId)
-        : [...prev, leagueId]
-    );
-  };
-
-  // Season handlers
-  const handleLast5Seasons = () => {
-    const last5 = allSeasons.slice(0, 5);
-    setDefaultSeasons(last5);
-  };
-
-  const handleClearSeasons = () => {
-    setDefaultSeasons([]);
-  };
-
-  const toggleSeason = (season) => {
-    setDefaultSeasons(prev =>
-      prev.includes(season)
-        ? prev.filter(s => s !== season)
-        : [...prev, season]
-    );
-  };
+  const handleClearLeagues = () => setDefaultLeagueIds([]);
+  const toggleCountry = (country) => setExpandedCountries(prev => ({ ...prev, [country]: !prev[country] }));
+  const toggleLeague = (leagueId) =>
+    setDefaultLeagueIds(prev => (prev.includes(leagueId) ? prev.filter(id => id !== leagueId) : [...prev, leagueId]));
+  const handleLast5Seasons = () => setDefaultSeasons(allSeasons.slice(0, 5));
+  const handleClearSeasons = () => setDefaultSeasons([]);
+  const toggleSeason = (season) =>
+    setDefaultSeasons(prev => (prev.includes(season) ? prev.filter(s => s !== season) : [...prev, season]));
 
   return (
-    <div className="min-h-screen">
+    <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
+      {/* fixed background so area under the navbar is also greenish */}
+      <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
       <div className="max-w-5xl mx-auto px-4 pt-8 pb-6">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {/* Left column - Profile Info */}
@@ -422,14 +316,11 @@ export default function ProfilePage() {
                 {/* Avatar with upload */}
                 <div className="relative group mb-4">
                   {avatar ? (
-                    <img 
-                      src={avatar} 
-                      alt="Profile" 
+                    <img
+                      src={avatar}
+                      alt="Profile"
                       className="h-24 w-24 rounded-full object-cover border-2 border-gray-200"
-                      onError={(e) => {
-                        console.log('Image failed to load:', avatar);
-                        setAvatar('');
-                      }}
+                      onError={() => setAvatar('')}
                     />
                   ) : (
                     <div className="h-24 w-24 rounded-full bg-gray-200 flex items-center justify-center border-2 border-gray-200">
@@ -438,20 +329,12 @@ export default function ProfilePage() {
                       </span>
                     </div>
                   )}
-                  
                   <label className="absolute inset-0 flex items-center justify-center rounded-full cursor-pointer bg-black/0 group-hover:bg-black/40 transition-colors">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={handleFileUpload}
-                      disabled={loading}
-                    />
+                    <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} disabled={loading} />
                     <ImagePlus className="h-6 w-6 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
                   </label>
                 </div>
 
-                {/* Name form */}
                 <div className="w-full space-y-2">
                   <input
                     type="text"
@@ -477,11 +360,7 @@ export default function ProfilePage() {
                   </button>
                 </div>
 
-                {error && (
-                  <div className="mt-2 text-sm text-red-600">
-                    {error}
-                  </div>
-                )}
+                {error && <div className="mt-2 text-sm text-red-600">{error}</div>}
               </div>
             </div>
           </div>
@@ -496,18 +375,14 @@ export default function ProfilePage() {
                   <div className="flex justify-center mb-2 text-yellow-500">
                     <Trophy className="h-6 w-6" />
                   </div>
-                  <div className="text-2xl font-semibold">
-                    {localStats.total_points || 0}
-                  </div>
+                  <div className="text-2xl font-semibold">{localStats.total_points || 0}</div>
                   <div className="text-sm text-gray-600">Total Points</div>
                 </div>
                 <div className="border rounded-lg p-4 text-center">
                   <div className="flex justify-center mb-2 text-green-500">
                     <UsersRound className="h-6 w-6" />
                   </div>
-                  <div className="text-2xl font-semibold">
-                    {localStats.games_played || 0}
-                  </div>
+                  <div className="text-2xl font-semibold">{localStats.games_played || 0}</div>
                   <div className="text-sm text-gray-600">Games Played</div>
                 </div>
                 <div className="border rounded-lg p-4 text-center">
@@ -566,7 +441,7 @@ export default function ProfilePage() {
                               {game.won ? `+${game.points_earned}` : '0'} pts
                             </div>
                             <div className="text-xs text-gray-500">
-                              {game.guesses_attempted} {game.guesses_attempted === 1 ? 'guess' : 'guesses'} 
+                              {game.guesses_attempted} {game.guesses_attempted === 1 ? 'guess' : 'guesses'}
                               {game.is_daily_challenge && ' • Daily Challenge'}
                             </div>
                           </div>
@@ -589,11 +464,7 @@ export default function ProfilePage() {
                   className="text-gray-600 hover:text-gray-800"
                   onClick={() => setFiltersCollapsed(c => !c)}
                 >
-                  {filtersCollapsed ? (
-                    <ChevronDown className="h-5 w-5" />
-                  ) : (
-                    <ChevronUp className="h-5 w-5" />
-                  )}
+                  {filtersCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
                 </button>
               </div>
 
@@ -649,35 +520,22 @@ export default function ProfilePage() {
                                   className="w-6 h-4 object-cover rounded"
                                 />
                                 <span>{country}</span>
-                                <span className="text-xs text-gray-500">
-                                  ({leagues.length})
-                                </span>
+                                <span className="text-xs text-gray-500">({leagues.length})</span>
                               </div>
-                              {expandedCountries[country] ? (
-                                <ChevronUp className="h-4 w-4" />
-                              ) : (
-                                <ChevronDown className="h-4 w-4" />
-                              )}
+                              {expandedCountries[country] ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                             </button>
 
                             {expandedCountries[country] && (
                               <div className="ml-8 space-y-2 mt-2">
                                 {leagues.map((league) => (
-                                  <label
-                                    key={league.league_id}
-                                    className="flex items-center gap-2 cursor-pointer"
-                                  >
+                                  <label key={league.league_id} className="flex items-center gap-2 cursor-pointer">
                                     <input
                                       type="checkbox"
                                       checked={defaultLeagueIds.includes(league.league_id)}
                                       onChange={() => toggleLeague(league.league_id)}
                                       className="rounded"
                                     />
-                                    <img
-                                      src={league.logo}
-                                      alt={league.league_name}
-                                      className="w-5 h-5 object-contain"
-                                    />
+                                    <img src={league.logo} alt={league.league_name} className="w-5 h-5 object-contain" />
                                     <span className="text-sm">{league.league_name}</span>
                                   </label>
                                 ))}
@@ -713,11 +571,7 @@ export default function ProfilePage() {
                         </div>
                       </div>
 
-                      <SelectedChips
-                        title="Chosen seasons"
-                        items={defaultSeasons}
-                        onClear={handleClearSeasons}
-                      />
+                      <SelectedChips title="Chosen seasons" items={defaultSeasons} onClear={handleClearSeasons} />
 
                       <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-2">
                         {allSeasons.map((season) => (
@@ -751,15 +605,18 @@ export default function ProfilePage() {
                         max="100"
                         className="w-full px-3 py-2 border rounded-md text-center"
                       />
-                      <div className="text-xs text-gray-500 text-center mt-1">
-                        Minimum appearances in a season
-                      </div>
+                      <div className="text-xs text-gray-500 text-center mt-1">Minimum appearances in a season</div>
                     </div>
                   </div>
 
-                  {/* Save Button */}
                   <div className="flex justify-end mt-4">
-                    {saveFiltersButton}
+                    <button
+                      onClick={saveDefaultFilters}
+                      disabled={isSaving || !hasChanges}
+                      className="w-full px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400"
+                    >
+                      {isSaving ? 'Saving...' : 'Save Filters'}
+                    </button>
                   </div>
                 </div>
               )}
