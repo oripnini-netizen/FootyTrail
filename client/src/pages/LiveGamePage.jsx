@@ -9,24 +9,40 @@ function classNames(...s) {
   return s.filter(Boolean).join(' ');
 }
 
+// Simple normalization: lowercases, strips accents, removes non-letters to help token matching
+function normalize(str) {
+  return (str || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+function tokenize(str) {
+  return normalize(str)
+    .replace(/[^a-z\s'-]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+}
+// Every query token must match the start of at least one candidate token
+function multiTokenStartsWithMatch(queryText, candidateName) {
+  const qTokens = tokenize(queryText);
+  const cTokens = tokenize(candidateName);
+  if (!qTokens.length || !cTokens.length) return false;
+  return qTokens.every(qt => cTokens.some(ct => ct.startsWith(qt)));
+}
+// Choose the longest token to query the server with (robust for inputs like "cole j" or "cole p")
+function longestToken(str) {
+  const t = tokenize(str).sort((a, b) => b.length - a.length);
+  return t[0] || '';
+}
+
 export default function LiveGamePage() {
   const location = useLocation();
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  // ====== CHANGED: 2 minutes instead of 3 ======
+  // 2 minutes timer
   const INITIAL_TIME = 120;
 
-  const [currentGuess, setCurrentGuess] = useState('');
-  const [guessesAttempted, setGuessesAttempted] = useState(0);
-  const [hintsUsed, setHintsUsed] = useState(0);
-  const [gameCompleted, setGameCompleted] = useState(false);
-  const [gameWon, setGameWon] = useState(false);
-  const [showingHints, setShowingHints] = useState({});
-  const [timeStarted, setTimeStarted] = useState(Date.now());
-  const inputRef = useRef(null);
-  const confettiCanvasRef = useRef(null);
-  const [timeSec, setTimeSec] = useState(INITIAL_TIME);
   const [guessesLeft, setGuessesLeft] = useState(3);
   const [guess, setGuess] = useState('');
   const [suggestions, setSuggestions] = useState([]);
@@ -38,18 +54,18 @@ export default function LiveGamePage() {
     firstLetter: false,
   });
   const [isWrongGuess, setIsWrongGuess] = useState(false);
-  const formRef = useRef(null);
-  const timerRef = useRef(null);
-  const [transferHistory, setTransferHistory] = useState([]);
-  const [loadingTransfers, setLoadingTransfers] = useState(true);
 
-  // guard to avoid double-saving when time runs out / blur / visibility / give up
+  const [timeSec, setTimeSec] = useState(INITIAL_TIME);
+  const timerRef = useRef(null);
   const endedRef = useRef(false);
 
   const game = location.state || null;
   const filters = location.state?.filters || { potentialPoints: 0 };
   const isDaily = !!location.state?.isDaily;
 
+  // Transfers panel (unchanged)
+  const [transferHistory, setTransferHistory] = useState([]);
+  const [loadingTransfers, setLoadingTransfers] = useState(true);
   useEffect(() => {
     const fetchTransfers = async () => {
       if (!game?.id) return;
@@ -68,17 +84,28 @@ export default function LiveGamePage() {
     fetchTransfers();
   }, [game?.id]);
 
+  // Hint multipliers
   const multipliers = { age: 0.95, nationality: 0.9, position: 0.8, partialImage: 0.5, firstLetter: 0.25 };
 
+  // ✅ Points now decrease by half for each wrong guess
   const points = useMemo(() => {
     const potentialPoints = Number(game?.potentialPoints || filters?.potentialPoints || 0);
     let p = potentialPoints;
+
+    // Apply hint penalties
     Object.keys(usedHints).forEach((k) => { if (usedHints[k]) p = Math.floor(p * multipliers[k]); });
+
+    // Apply time decay
     const timeElapsed = INITIAL_TIME - timeSec;
     const timeDecay = Math.pow(0.99, timeElapsed);
-    p = Math.max(0, Math.floor(p * timeDecay));
-    return p;
-  }, [game?.potentialPoints, filters?.potentialPoints, usedHints, timeSec]);
+    p = Math.floor(p * timeDecay);
+
+    // Apply wrong-guess halving (each wrong guess halves the points)
+    const wrongAttempts = Math.max(0, 3 - guessesLeft);
+    p = Math.floor(p * Math.pow(0.5, wrongAttempts));
+
+    return Math.max(0, p);
+  }, [game?.potentialPoints, filters?.potentialPoints, usedHints, timeSec, guessesLeft]);
 
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -86,35 +113,26 @@ export default function LiveGamePage() {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // ====== NEW: auto-forfeit when user leaves tab / page ======
+  // Anti-cheat: leaving/blur/hidden => auto-loss
   useEffect(() => {
     if (!game?.id) return;
 
-    const forfeitAndExit = async (reason = 'left-page') => {
+    const forfeitAndExit = async () => {
       if (endedRef.current) return;
       endedRef.current = true;
       try {
         clearInterval(timerRef.current);
         await saveGameRecord(false);
       } catch (e) {
-        // swallow; we'll still navigate away
+        // ignore
       } finally {
-        // Send them back to the Game page
         navigate('/game', { replace: true, state: { forfeited: true } });
       }
     };
 
-    const onVisibility = () => {
-      // If the tab becomes hidden, consider it cheating and forfeit
-      if (document.visibilityState === 'hidden') forfeitAndExit('hidden');
-    };
-    const onBlur = () => {
-      // Some browsers may not fire visibilitychange reliably; blur is a good backup
-      forfeitAndExit('blur');
-    };
-    const onPageHide = () => {
-      forfeitAndExit('pagehide');
-    };
+    const onVisibility = () => { if (document.visibilityState === 'hidden') forfeitAndExit(); };
+    const onBlur = () => { forfeitAndExit(); };
+    const onPageHide = () => { forfeitAndExit(); };
 
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('blur', onBlur);
@@ -125,9 +143,9 @@ export default function LiveGamePage() {
       window.removeEventListener('blur', onBlur);
       window.removeEventListener('pagehide', onPageHide);
     };
-  }, [game?.id, navigate]); // eslint-disable-line
+  }, [game?.id, navigate]);
 
-  // ====== Timer countdown (2 minutes) ======
+  // Timer (2 minutes)
   useEffect(() => {
     if (!game?.id) return;
     const handleTimeUp = async () => {
@@ -139,7 +157,7 @@ export default function LiveGamePage() {
         state: {
           didWin: false,
           player: game,
-          stats: { pointsEarned: 0, timeSec: INITIAL_TIME, guessesUsed: 3 - guessesLeft, usedHints },
+          stats: { pointsEarned: 0, timeSec: INITIAL_TIME, guessesUsed: 3, usedHints },
           filters,
           isDaily
         },
@@ -160,21 +178,31 @@ export default function LiveGamePage() {
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [game?.id]); // eslint-disable-line
 
-  // Suggestions debounce
+  // ✅ Improved suggestions: robust multi-word handling
   useEffect(() => {
     let active = true;
     const id = setTimeout(async () => {
-      const q = guess.trim();
-      if (!q) { if (active) setSuggestions([]); return; }
+      const raw = guess.trim();
+      if (!raw) { if (active) setSuggestions([]); return; }
+
+      // Query server using the LONGEST token to ensure we get candidates (e.g., "cole j" => "cole")
+      const serverQ = longestToken(raw);
+      if (serverQ.length < 2) { if (active) setSuggestions([]); return; }
+
       try {
-        const res = await suggestNames(q);
-        if (active) setSuggestions(res || []);
-      } catch { if (active) setSuggestions([]); }
+        const res = await suggestNames(serverQ); // expects array of { id, name, photo? } or similar
+        const list = Array.isArray(res) ? res : [];
+        // Local multi-token filter so every query token matches start of some token in the candidate
+        const filtered = list.filter(item => multiTokenStartsWithMatch(raw, item.name || item.displayName || ''));
+        if (active) setSuggestions(filtered.slice(0, 20));
+      } catch {
+        if (active) setSuggestions([]);
+      }
     }, 200);
     return () => { active = false; clearTimeout(id); };
   }, [guess]);
 
-  // Guard against missing game data
+  // Guard: if no game passed in navigation state
   useEffect(() => {
     if (!game || !game.id || !game.name) {
       setTimeout(() => navigate('/game'), 0);
@@ -182,23 +210,10 @@ export default function LiveGamePage() {
     }
   }, []); // eslint-disable-line
 
-  if (!game || !game.id) {
-    return (
-      <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
-        <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
-        <div className="container mx-auto px-4 py-8">
-          <div className="text-center">
-            <h1 className="text-2xl font-bold text-red-600 mb-4">No Game Data Found</h1>
-            <p className="mb-4">Redirecting to game setup...</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   const submitGuess = async (value) => {
     if (!value?.trim() || endedRef.current) return;
-    const correct = value.trim().toLowerCase() === game.name.trim().toLowerCase();
+    const correct = value.trim().toLowerCase() === (game.name || '').trim().toLowerCase();
+
     if (correct) {
       endedRef.current = true;
       clearInterval(timerRef.current);
@@ -214,15 +229,20 @@ export default function LiveGamePage() {
       });
       return;
     }
+
+    // Wrong guess feedback + reduce guessesLeft (which halves points via useMemo)
     setIsWrongGuess(true);
     setTimeout(() => setIsWrongGuess(false), 500);
+
     if (guessesLeft - 1 <= 0) {
+      // Out of guesses => loss
       endedRef.current = true;
       clearInterval(timerRef.current);
       await saveGameRecord(false);
       navigate('/postgame', {
         state: {
-          didWin: false, player: game,
+          didWin: false,
+          player: game,
           stats: { pointsEarned: 0, timeSec: INITIAL_TIME - timeSec, guessesUsed: 3, usedHints },
           filters, isDaily
         },
@@ -266,16 +286,30 @@ export default function LiveGamePage() {
   const revealPartialImage = () => { if (!usedHints.partialImage) setUsedHints(u => ({ ...u, partialImage: true })); };
   const revealFirstLetter = () => { if (!usedHints.firstLetter && game?.name) setUsedHints(u => ({ ...u, firstLetter: true })); };
 
-  // ====== NEW: timer color based on remaining time ======
+  // Timer colorization
   const timeColorClass = timeSec <= 30 ? 'text-red-600'
                         : timeSec <= 60 ? 'text-yellow-600'
                         : 'text-gray-900';
+
+  if (!game || !game.id) {
+    return (
+      <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
+        <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
+        <div className="container mx-auto px-4 py-8">
+          <div className="text-center">
+            <h1 className="text-2xl font-bold text-red-600 mb-4">No Game Data Found</h1>
+            <p className="mb-4">Redirecting to game setup...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
       <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
 
-      {/* ====== NEW: anti-cheat banner ====== */}
+      {/* Anti-cheat banner */}
       <div className="max-w-4xl mx-auto px-4 pt-6">
         <div className="rounded-lg bg-red-50 border border-red-200 text-red-800 font-bold px-4 py-2 text-center">
           Don’t leave this page while the round is active — leaving will immediately count as a loss.
@@ -288,7 +322,6 @@ export default function LiveGamePage() {
             <Clock className="h-5 w-5 text-gray-700" />
             <div>
               <div className="text-xs text-gray-500">Time Remaining</div>
-              {/* ====== CHANGED: dynamic color ====== */}
               <div className={classNames('text-lg font-semibold', timeColorClass)}>{formatTime(timeSec)}</div>
             </div>
           </div>
@@ -315,7 +348,6 @@ export default function LiveGamePage() {
           >
             <h3 className="text-lg font-semibold mb-3">Who are ya?!</h3>
             <form
-              ref={formRef}
               onSubmit={(e) => { e.preventDefault(); submitGuess(guess); }}
               className="space-y-4"
             >
@@ -359,7 +391,7 @@ export default function LiveGamePage() {
               <ul className="mt-3 border rounded divide-y max-h-56 overflow-auto">
                 {suggestions.map((sug) => (
                   <li
-                    key={sug.id}
+                    key={sug.id ?? sug.name}
                     className="px-3 py-2 hover:bg-gray-50 cursor-pointer text-sm"
                     onClick={() => { setGuess(sug.name); submitGuess(sug.name); }}
                   >
@@ -375,11 +407,19 @@ export default function LiveGamePage() {
                 Hints (reduce points)
               </h3>
               <div className="grid grid-cols-1 gap-3">
-                <HintButton label="Player's Age" multiplier="×0.95" disabled={usedHints.age || !game?.age} onClick={revealAge} valueShown={usedHints.age ? String(game?.age) : null} />
-                <HintButton label="Player's Nationality" multiplier="×0.90" disabled={usedHints.nationality || !game?.nationality} onClick={revealNationality} valueShown={usedHints.nationality ? String(game?.nationality) : null} />
-                <HintButton label="Player's Position" multiplier="×0.80" disabled={usedHints.position || !game?.position} onClick={revealPosition} valueShown={usedHints.position ? String(game?.position) : null} />
-                <HintButton label="Player's Image" multiplier="×0.50" disabled={usedHints.partialImage || !game?.photo} onClick={revealPartialImage} valueShown={usedHints.partialImage ? (<img src={game?.photo} alt="Player Hint" className="w-20 h-20 object-cover object-top" style={{ clipPath: 'inset(0 0 50% 0)' }} />) : null} />
-                <HintButton label="Player's First Letter" multiplier="×0.25" disabled={usedHints.firstLetter || !game?.name} onClick={revealFirstLetter} valueShown={usedHints.firstLetter ? game?.name?.charAt(0) : null} />
+                <HintButton label="Player's Age" multiplier="×0.95" disabled={usedHints.age || !game?.age} onClick={() => setUsedHints(u => ({ ...u, age: true }))} valueShown={usedHints.age ? String(game?.age) : null} />
+                <HintButton label="Player's Nationality" multiplier="×0.90" disabled={usedHints.nationality || !game?.nationality} onClick={() => setUsedHints(u => ({ ...u, nationality: true }))} valueShown={usedHints.nationality ? String(game?.nationality) : null} />
+                <HintButton label="Player's Position" multiplier="×0.80" disabled={usedHints.position || !game?.position} onClick={() => setUsedHints(u => ({ ...u, position: true }))} valueShown={usedHints.position ? String(game?.position) : null} />
+                <HintButton
+                  label="Player's Image"
+                  multiplier="×0.50"
+                  disabled={usedHints.partialImage || !game?.photo}
+                  onClick={() => setUsedHints(u => ({ ...u, partialImage: true }))}
+                  valueShown={usedHints.partialImage ? (
+                    <img src={game?.photo} alt="Player Hint" className="w-20 h-20 object-cover object-top" style={{ clipPath: 'inset(0 0 50% 0)' }} />
+                  ) : null}
+                />
+                <HintButton label="Player's First Letter" multiplier="×0.25" disabled={usedHints.firstLetter || !game?.name} onClick={() => setUsedHints(u => ({ ...u, firstLetter: true }))} valueShown={usedHints.firstLetter ? game?.name?.charAt(0) : null} />
               </div>
             </div>
           </motion.div>
