@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../supabase/client';
-import { getRandomPlayer, API_BASE } from '../api'; // <-- import API_BASE
+import { getRandomPlayer, API_BASE } from '../api';
 
 export default function PostGamePage() {
   const navigate = useNavigate();
@@ -23,9 +23,11 @@ export default function PostGamePage() {
   const [loading, setLoading] = useState(false);
   const [gamesLeft, setGamesLeft] = useState(null);
 
-  // LLM fact states (LLM-only: no fallback text)
+  // LLM-only fact
   const [aiGeneratedFact, setAiGeneratedFact] = useState('');
-  const [factLoading, setFactLoading] = useState(false);
+
+  // Gate the entire page until fact is ready (no "generating..." on screen)
+  const [pageReady, setPageReady] = useState(false);
 
   const [scope, animate] = useAnimate();
 
@@ -35,9 +37,14 @@ export default function PostGamePage() {
     }
   }, [didWin]);
 
+  // ✅ Run the shake animation ONLY after the card is mounted (pageReady) and the ref exists
   useEffect(() => {
-    if (!didWin) {
-      const sequence = async () => {
+    if (didWin) return;
+    if (!pageReady) return;
+    if (!scope.current) return;
+
+    const sequence = async () => {
+      try {
         await animate(scope.current, { x: -5 }, { duration: 0.05 });
         await animate(scope.current, { x: 5 }, { duration: 0.05 });
         await animate(scope.current, { x: -5 }, { duration: 0.05 });
@@ -47,10 +54,13 @@ export default function PostGamePage() {
         await animate(scope.current, { x: -2 }, { duration: 0.05 });
         await animate(scope.current, { x: 2 }, { duration: 0.05 });
         await animate(scope.current, { x: 0 }, { duration: 0.05 });
-      };
-      sequence();
-    }
-  }, [didWin, animate, scope]);
+      } catch (e) {
+        // no-op: guard against StrictMode double-invoke during dev
+        console.debug('shake animation skipped:', e?.message);
+      }
+    };
+    sequence();
+  }, [didWin, pageReady, animate, scope]);
 
   useEffect(() => {
     async function fetchGamesLeft() {
@@ -96,12 +106,12 @@ export default function PostGamePage() {
 
   useEffect(() => {
     const getAIFact = async () => {
-      if (!player) return;
-      setFactLoading(true);
+      if (!player) {
+        navigate('/game', { replace: true });
+        return;
+      }
       try {
         const transfers = player.transfers || player.transferHistory || [];
-
-        // IMPORTANT: use API_BASE so it hits the backend (3001) in dev
         const response = await fetch(`${API_BASE}/ai/generate-player-fact`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -124,11 +134,12 @@ export default function PostGamePage() {
         console.error('Error fetching AI fact:', error);
         setAiGeneratedFact(''); // show nothing if it fails
       } finally {
-        setFactLoading(false);
+        // Only show the page now
+        setPageReady(true);
       }
     };
     getAIFact();
-  }, [player]);
+  }, [player, navigate]);
 
   const playAgainWithSameFilters = async () => {
     if (loading || gamesLeft <= 0) return;
@@ -158,10 +169,8 @@ export default function PostGamePage() {
     }
   };
 
-  if (!player) {
-    navigate('/game');
-    return null;
-  }
+  if (!player) return null;
+  if (!pageReady) return null; // hold the whole page until the fact is ready
 
   const pdata = player || {};
   const photo = pdata.player_photo || pdata.photo || null;
@@ -207,20 +216,17 @@ export default function PostGamePage() {
             </div>
           </div>
 
-          {/* AI Fact (render only if LLM responded or loading) */}
-          {(factLoading || aiGeneratedFact) && (
+          {/* AI Fact (render only if LLM returned something) */}
+          {aiGeneratedFact && (
             <div className="bg-blue-50 rounded-lg p-4 mb-6">
               <h3 className="font-semibold mb-2 flex items-center text-blue-700">
                 <Lightbulb className="h-5 w-5 mr-1 text-blue-600" />
                 Did you know…
               </h3>
-              {factLoading ? (
-                <div className="flex items-center justify-center py-2">
-                  <div className="animate-pulse text-blue-500">Generating a fun fact…</div>
-                </div>
-              ) : (
-                <p className="italic text-gray-700">{aiGeneratedFact}</p>
-              )}
+              <p className="italic text-gray-700">{aiGeneratedFact}</p>
+              <p className="mt-2 text-xs text-gray-500">
+                And now you'll have to google that to see if I made it all up...
+              </p>
             </div>
           )}
 

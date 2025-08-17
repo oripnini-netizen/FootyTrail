@@ -6,149 +6,55 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const router = express.Router();
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-// ---------- Utilities ----------
-
-// Minimal nationality -> Wikipedia language mapping (extend as needed)
-const NAT_LANG = {
-  // Europe
-  Spain: 'es', Mexico: 'es', Argentina: 'es', Colombia: 'es', Chile: 'es', Uruguay: 'es', Peru: 'es', Paraguay: 'es', Bolivia: 'es', Ecuador: 'es', Venezuela: 'es',
-  Portugal: 'pt', Brazil: 'pt', 'Cabo Verde': 'pt', Angola: 'pt', Mozambique: 'pt',
-  France: 'fr', Belgium: 'fr', Switzerland: 'fr',
-  Germany: 'de', Austria: 'de', 'Switzerland (German)': 'de',
-  Italy: 'it',
-  Netherlands: 'nl', Belgium_NL: 'nl',
-  Poland: 'pl',
-  Russia: 'ru',
-  Ukraine: 'uk',
-  Turkey: 'tr',
-  Greece: 'el',
-  Croatia: 'hr', Serbia: 'sr', Slovenia: 'sl',
-  Sweden: 'sv', Norway: 'no', Denmark: 'da', Finland: 'fi',
-  Czechia: 'cs', Slovakia: 'sk',
-  Romania: 'ro', Bulgaria: 'bg', Hungary: 'hu',
-  // Middle East & North Africa
-  Israel: 'he',
-  Morocco: 'ar', Algeria: 'ar', Tunisia: 'ar', Egypt: 'ar', SaudiArabia: 'ar', 'Saudi Arabia': 'ar', UAE: 'ar', 'United Arab Emirates': 'ar', Iraq: 'ar', Jordan: 'ar', Lebanon: 'ar', Qatar: 'ar',
-  // Others common in football
-  England: 'en', Scotland: 'en', Wales: 'en', 'Northern Ireland': 'en', Ireland: 'en',
-  USA: 'en', Canada: 'en',
-};
-
-// Build candidate language list: player’s national language first, then English
-function langCandidates(nationality) {
-  const key = (nationality || '').trim();
-  const first = NAT_LANG[key] || null;
-  const langs = [];
-  if (first) langs.push(first);
-  if (!langs.includes('en')) langs.push('en');
-  return langs;
-}
-
+// ---------- helpers ----------
 function firstSentenceOnly(text = '') {
   const m = text.match(/^[\s\S]*?[.!?](?=\s|$)/);
   return (m ? m[0] : text).trim();
 }
 
-// Wikipedia helpers (Node 18+ has global fetch; if you’re on Node 16, install node-fetch)
-async function wikiSearch(lang, query) {
-  const url = new URL(`https://${lang}.wikipedia.org/w/api.php`);
-  url.search = new URLSearchParams({
-    action: 'query',
-    list: 'search',
-    srsearch: query,
-    srlimit: '3',
-    format: 'json',
-    utf8: '1',
-    srnamespace: '0',
-  }).toString();
-
-  const r = await fetch(url, { headers: { 'user-agent': 'FootyTrail/1.0' } });
-  if (!r.ok) return null;
-  const data = await r.json();
-  const hit = data?.query?.search?.[0];
-  if (!hit) return null;
-  return { title: hit.title, pageid: hit.pageid };
-}
-
-async function wikiSummary(lang, title) {
-  const slug = encodeURIComponent(title.replace(/\s/g, '_'));
-  const r = await fetch(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${slug}`, {
-    headers: { 'user-agent': 'FootyTrail/1.0' }
-  });
-  if (!r.ok) return null;
-  const data = await r.json();
-  // extract: main text; description: short tag line
-  const extract = (data?.extract || '').trim();
-  const description = (data?.description || '').trim();
-  return { extract, description, title: data?.title || title, lang };
-}
-
-// Try national language first, then English; collect up to two summaries
-async function researchPlayer(name, nationality) {
-  const langs = langCandidates(nationality);
-  const snippets = [];
-
-  for (const lang of langs) {
-    try {
-      const hit = await wikiSearch(lang, name);
-      if (!hit) continue;
-      const sum = await wikiSummary(lang, hit.title);
-      if (!sum) continue;
-
-      // Keep it short; capture first ~2 sentences to feed model
-      const first = firstSentenceOnly(sum.extract);
-      let remainder = sum.extract.slice(first.length).trim();
-      remainder = firstSentenceOnly(remainder);
-
-      const text = [sum.description, first, remainder].filter(Boolean).join(' ');
-      if (text) {
-        snippets.push(`[${lang}] ${text}`);
-      }
-      // Two snippets are usually enough; stop early if both languages worked
-      if (snippets.length >= 2) break;
-    } catch (_) {
-      // pass
-    }
-  }
-
-  return snippets;
-}
-
-// Clean & enforce output style
 function normalizeDidYouKnowSentence(s, name) {
   if (!s) return '';
   let out = firstSentenceOnly(s).trim();
-
-  // Remove URLs/citations
+  // strip urls / citations
   out = out.replace(/\bhttps?:\/\/\S+/gi, '').trim();
   out = out.replace(/\s*\([^)]*\)\s*$/g, '').trim();
-
-  // Ensure it begins with "Did you know"
+  // enforce "Did you know..."
   if (!/^did you know/i.test(out)) {
-    // If the sentence already includes the name but starts some other way, just prepend
-    const lc = out.charAt(0).toLowerCase() + out.slice(1);
-    out = `Did you know that ${lc}`;
+    const lower = out.charAt(0).toLowerCase() + out.slice(1);
+    out = `Did you know that ${lower}`;
   }
-  if (!/[.!?]$/.test(out)) out += '.';
-
-  // Prefer mentioning the player’s name if omitted
+  // prefer including the player's name
   if (name && !new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(out)) {
-    // Try to inject name after "Did you know that"
     out = out.replace(/^Did you know that\s*/i, `Did you know that ${name} `);
   }
-
+  if (!/[.!?]$/.test(out)) out += '.';
   return out;
 }
 
-// ---------- Endpoints ----------
+function summarizeClubs(transferHistory = []) {
+  const clubs = new Set(
+    (transferHistory || [])
+      .flatMap(t => [
+        t?.toClub, t?.fromClub, t?.club,
+        t?.to, t?.from,
+        t?.team_name, t?.club_name,
+        t?.teams?.in?.name, t?.teams?.out?.name,
+        t?.to_team, t?.from_team,
+        t?.inTeam, t?.outTeam,
+      ])
+      .filter(Boolean)
+      .map(String)
+      .map(s => s.trim())
+  );
+  return Array.from(clubs).slice(0, 10).join(', ') || 'N/A';
+}
+
+// ---------- routes ----------
 
 // POST /api/ai/generate-player-fact
-// body: { player: { name, nationality, position, age }, transferHistory: [...] }
+// Simple LLM-only generation using chat.completions (no stored Prompt ID).
 router.post('/generate-player-fact', async (req, res) => {
   try {
     if (!process.env.OPENAI_API_KEY) {
@@ -159,62 +65,65 @@ router.post('/generate-player-fact', async (req, res) => {
     const name = player?.name?.trim();
     if (!name) return res.status(400).json({ error: 'Player data required: name' });
 
-    // 1) Web research (Wikipedia; national language first, then English)
-    const snippets = await researchPlayer(name, player?.nationality || '');
+    const model = process.env.OPENAI_MODEL || 'gpt-4o'; // stronger default; set OPENAI_MODEL to tweak
+    const transferHistorySummary = summarizeClubs(transferHistory);
 
-    // If we found nothing useful, fail (client shows nothing; no fallback text)
-    if (!snippets.length) {
-      return res.status(502).json({ error: 'No research snippets found' });
-    }
-
-    // Make a compact “verification only” block (to anchor the right person)
-    const clubs = Array.from(
-      new Set(
-        (transferHistory || [])
-          .map(t => t?.toClub || t?.fromClub || t?.club || t?.to || t?.from || t?.team_name || t?.club_name)
-          .filter(Boolean)
-          .map(String)
-          .map(s => s.trim())
-      )
-    ).slice(0, 10);
-    const transferSummary = clubs.length ? clubs.join(', ') : 'N/A';
-
-    // 2) Ask LLM to produce one sentence ONLY from research snippets (no invention)
-    const system = `You are a football trivia assistant.
-Use ONLY the "Research Snippets" provided to craft one interesting, single-sentence fun fact about the player.
-Do NOT invent facts. If the snippets don't contain anything notable, say nothing (return empty content). 
-No links, no citations, no markdown—just one clean sentence starting with "Did you know that".`;
-
+    // Your original prompt, with variables filled in
     const userPrompt = `
-Verification (DO NOT repeat this unless it helps you choose among snippets):
+You are a football trivia expert. Your task is to provide a short, single-sentence 'Did you know...' style fun fact about a football player.
+
+Use the following data ONLY to verify you are talking about the correct player. DO NOT simply repeat this information.
+
+Player Data for Verification:
 - Name: ${name}
 - Age: ${player?.age ?? 'Unknown'}
 - Position: ${player?.position ?? 'Unknown'}
-- Notable Clubs (from transfers): ${transferSummary}
+- Notable Clubs: ${transferHistorySummary}
 
-Research Snippets (use these as your ONLY factual source):
-${snippets.map((s, i) => `- ${s}`).join('\n')}
+Now, find a NEW and INTERESTING fun fact about ${name} from your own knowledge. The fact could be about:
+- A famous nickname or unusual habit
+- A unique record they hold
+- A memorable goal or match moment
+- An interesting piece of personal trivia (e.g., family connections, hobbies, education)
+- Something surprising about their career path or background
 
-Now write ONE short sentence beginning with "Did you know that". No links, no sources, no extra sentences.`.trim();
+Example: "Did you know that his nickname is 'The Butcher of Amsterdam' due to his aggressive playing style?"
+
+CRITICAL INSTRUCTIONS:
+- Do NOT include any source URLs, links, or citations in parentheses
+- Do NOT include markdown links like [website](url)
+- Do NOT mention where you found the information
+- Provide ONLY the fun fact as a clean, single sentence
+- Start with "Did you know that" or similar phrasing
+
+Generate the fun fact now:`.trim();
 
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      temperature: 0.4,   // lower temperature to reduce generic fluff
+      model,
+      temperature: 0.7,
       max_tokens: 80,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: userPrompt }
-      ],
+      messages: [{ role: 'user', content: userPrompt }],
     });
 
     let fact = completion?.choices?.[0]?.message?.content?.trim() || '';
     fact = normalizeDidYouKnowSentence(fact, name);
 
-    if (!fact) return res.status(502).json({ error: 'LLM returned empty content' });
+    if (!fact) {
+      console.error('[AI fact] Empty output from chat.completions response:', JSON.stringify(completion, null, 2));
+      return res.status(502).json({ error: 'LLM returned empty content' });
+    }
 
     return res.json({ fact });
   } catch (err) {
-    console.error('AI fact error:', err);
+    const safe = {
+      name: err?.name,
+      status: err?.status,
+      statusText: err?.statusText,
+      code: err?.code,
+      message: err?.message,
+      details: err?.response?.data || err?.data || null,
+    };
+    console.error('[AI fact error]', safe);
     return res.status(500).json({ error: 'Failed to generate fact' });
   }
 });
@@ -227,8 +136,8 @@ router.post('/generate-game-prompt', async (_req, res) => {
     }
 
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      temperature: 0.8,
+      model: process.env.OPENAI_MODEL || 'gpt-4o',
+      temperature: 0.9,
       max_tokens: 60,
       messages: [
         {
@@ -243,7 +152,15 @@ router.post('/generate-game-prompt', async (_req, res) => {
     prompt = firstSentenceOnly(prompt);
     return res.json({ prompt });
   } catch (err) {
-    console.error('AI prompt error:', err);
+    const safe = {
+      name: err?.name,
+      status: err?.status,
+      statusText: err?.statusText,
+      code: err?.code,
+      message: err?.message,
+      details: err?.response?.data || err?.data || null,
+    };
+    console.error('[AI prompt error]', safe);
     return res.status(500).json({ error: 'Failed to generate prompt' });
   }
 });
