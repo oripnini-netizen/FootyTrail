@@ -23,6 +23,7 @@ import {
   ChevronUp,
   Sparkles,
   UserSearch,
+  Timer, // NEW: used in the lockout view
 } from 'lucide-react';
 
 function classNames(...s) {
@@ -39,11 +40,12 @@ function CountdownToTomorrow() {
     const now = new Date();
     const tomorrow = new Date(now);
     tomorrow.setHours(24, 0, 0, 0);
-    const diff = tomorrow - now;
+    const diff = Math.max(0, tomorrow - now);
     const hours = Math.floor(diff / 1000 / 60 / 60);
     const minutes = Math.floor((diff / 1000 / 60) % 60);
     const seconds = Math.floor((diff / 1000) % 60);
-    return `${hours}h ${minutes}m ${seconds}s`;
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
   }
   return <span>{timeLeft}</span>;
 }
@@ -67,13 +69,13 @@ export default function GamePage() {
   const [loadingCounts, setLoadingCounts] = useState(false);
   const [expandedCountries, setExpandedCountries] = useState({});
 
-  // Game prompt (kept simple; we restore from cache if present)
+  // Game prompt
   const [gamePrompt, setGamePrompt] = useState(
     "Get ready to outsmart your rivals and predict the game—let’s kick off a new round now!"
   );
   const [isLoadingPrompt, setIsLoadingPrompt] = useState(true);
 
-  // Limits for progress row
+  // Limits
   const [limits, setLimits] = useState({ gamesToday: 0, dailyPlayed: false, dailyWin: false, pointsToday: 0, pointsTotal: 0 });
   const [dailyLoading, setDailyLoading] = useState(false);
 
@@ -89,7 +91,6 @@ export default function GamePage() {
   const hasRestoredRef = useRef(false);
   const restoredFromCacheRef = useRef(false);
 
-  // Track initial filters to know when the user actually changed something
   const initialFiltersRef = useRef(null);
   const filtersDirtyRef = useRef(false);
 
@@ -105,7 +106,6 @@ export default function GamePage() {
     gamePrompt
   });
 
-  // Restore from cache (instant), but still run background fetches for labels/limits
   useLayoutEffect(() => {
     if (hasRestoredRef.current) return;
     const cached = loadGamePageCache();
@@ -122,19 +122,16 @@ export default function GamePage() {
         if (Number.isFinite(cached.totalCount)) setTotalCount(cached.totalCount);
         if (typeof cached.gamePrompt === 'string') setGamePrompt(cached.gamePrompt);
 
-        // Remember initial filters (for "did user change?" detection)
         initialFiltersRef.current = {
           leagues: (cached.selectedLeagueIds || []).slice(),
           seasons: (cached.selectedSeasons || []).slice(),
           minApps: cached.minApps ?? 0
         };
 
-        // Show UI immediately
         setPageReady(true);
         setLoadingFilters(false);
         setIsLoadingPrompt(false);
 
-        // Restore scroll
         requestAnimationFrame(() => window.scrollTo(0, cached.scrollY || 0));
         setTimeout(() => window.scrollTo(0, cached.scrollY || 0), 0);
 
@@ -146,7 +143,6 @@ export default function GamePage() {
     hasRestoredRef.current = true;
   }, []);
 
-  // Save when leaving or backgrounding
   useEffect(() => () => saveGamePageCache(gatherStateForCache()), [
     selectedLeagueIds, selectedSeasons, minApps, collapsed, expandedCountries, gamePrompt, poolCount, totalCount
   ]);
@@ -166,7 +162,6 @@ export default function GamePage() {
       setSelectedLeagueIds((user.default_leagues || []).map(String));
       setSelectedSeasons(user.default_seasons || []);
       setMinApps(user.default_min_appearances || 0);
-      // set initial baseline for "dirty" detection
       initialFiltersRef.current = {
         leagues: (user.default_leagues || []).map(String),
         seasons: (user.default_seasons || []).slice(),
@@ -175,7 +170,7 @@ export default function GamePage() {
     }
   }, [user]);
 
-  // Detect when filters change vs initial (to trigger counts recompute on cache-return)
+  // Detect when filters change vs initial
   useEffect(() => {
     const init = initialFiltersRef.current;
     if (!init) {
@@ -237,7 +232,7 @@ export default function GamePage() {
   // Load leagues/seasons/limits/daily
   useEffect(() => {
     let cancelled = false;
-    const background = restoredFromCacheRef.current; // if true, don't flip spinners
+    const background = restoredFromCacheRef.current;
 
     (async () => {
       try {
@@ -280,7 +275,6 @@ export default function GamePage() {
           setPageReady(true);
         }
         if (background) {
-          // we were already ready; keep it that way
           setLoadingFilters(false);
         }
       }
@@ -289,7 +283,7 @@ export default function GamePage() {
     return () => { cancelled = true; };
   }, [user?.id]);
 
-  // Fetch game prompt unless we restored one
+  // Game prompt (skip if restored)
   useEffect(() => {
     if (restoredFromCacheRef.current) {
       setIsLoadingPrompt(false);
@@ -314,9 +308,7 @@ export default function GamePage() {
     })();
   }, []);
 
-  // Recalculate counts:
-  // - normal path: when filters change
-  // - cache path: only after the user *actually* changes a filter
+  // Recalculate counts
   useEffect(() => {
     let cancelled = false;
 
@@ -345,7 +337,7 @@ export default function GamePage() {
           setTotalCount(dbTotal || 0);
           setPageReady(true);
         }
-      } catch (e) {
+      } catch {
         if (!cancelled) {
           setPoolCount(0);
           setTotalCount(0);
@@ -411,7 +403,7 @@ export default function GamePage() {
         },
         replace: true
       });
-    } catch (error) {
+    } catch {
       alert('Failed to start game. Please try again.');
     } finally {
       setGameLoading(false);
@@ -421,6 +413,10 @@ export default function GamePage() {
   const maxGames = limits?.dailyWin ? 11 : 10;
   const pointsToday = limits?.pointsToday ?? 0;
   const pointsTotal = limits?.pointsTotal ?? 0;
+
+  // Admin bypass (admins can continue playing for testing)
+  const isAdmin = (user?.role === 'admin');
+  const reachedLimit = !isAdmin && (Number(limits?.gamesToday || 0) >= maxGames);
 
   const LoadingSpinner = () => (
     <div className="min-h-screen flex flex-col items-center justify-center">
@@ -514,245 +510,263 @@ export default function GamePage() {
             </div>
           </div>
 
-          {/* Game Setup */}
-          <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-6">
-            <div className="flex justify-center mb-6">
-              <UserSearch className="h-16 w-16 text-gray-400" />
-            </div>
-            <p className="text-center text-gray-600 mb-6">
-              {isLoadingPrompt ? (
-                <span className="inline-block animate-pulse">Getting ready for your challenge...</span>
-              ) : (
-                gamePrompt
-              )}
-            </p>
+          {/* Game Setup OR Lockout */}
+          {!reachedLimit ? (
+            <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-6">
+              <div className="flex justify-center mb-6">
+                <UserSearch className="h-16 w-16 text-gray-400" />
+              </div>
+              <p className="text-center text-gray-600 mb-6">
+                {isLoadingPrompt ? (
+                  <span className="inline-block animate-pulse">Getting ready for your challenge...</span>
+                ) : (
+                  gamePrompt
+                )}
+              </p>
 
-            {/* Player Pool */}
-            <div className="bg-yellow-50 rounded-lg p-4 mb-6">
-              <div className="flex justify-between items-center">
-                <div>
-                  <div className="text-lg font-semibold text-yellow-800">{potentialPoints}</div>
-                  <div className="text-sm text-yellow-600">Potential Points</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-lg font-semibold text-yellow-800">
-                    {poolCount} / {totalCount}
+              {/* Player Pool */}
+              <div className="bg-yellow-50 rounded-lg p-4 mb-6">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <div className="text-lg font-semibold text-yellow-800">{potentialPoints}</div>
+                    <div className="text-sm text-yellow-600">Potential Points</div>
                   </div>
-                  <div className="text-sm text-yellow-600">Player Pool</div>
+                  <div className="text-right">
+                    <div className="text-lg font-semibold text-yellow-800">
+                      {poolCount} / {totalCount}
+                    </div>
+                    <div className="text-sm text-yellow-600">Player Pool</div>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Play */}
-            <div className="flex justify-center mt-6">
-              <button
-                onClick={onStartGame}
-                disabled={gameLoading || poolCount === 0}
-                className={`relative overflow-hidden rounded-xl bg-gradient-to-r from-green-800 via-green-700 to-green-800 px-8 py-3 font-bold text-white shadow-lg transition-all hover:scale-105 hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-green-600 focus:ring-offset-2 ${
-                  gameLoading ? 'opacity-70' : 'opacity-100'
-                }`}
-              >
-                <div className="absolute inset-0 bg-white opacity-10 transition-opacity hover:opacity-20"></div>
-                <div className="flex items-center justify-center gap-2">
-                  {gameLoading ? (
-                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
-                  ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-100">
-                      <circle cx="11" cy="11" r="8"></circle>
-                      <path d="m21 21-4.3-4.3"></path>
-                    </svg>
-                  )}
-                  <span className="text-lg">{gameLoading ? 'Loading...' : 'Who are ya?!'}</span>
-                </div>
-              </button>
-            </div>
-
-            {/* Selected Filters */}
-            <div className="mb-4">
-              <div className="text-sm text-gray-600 mb-2">Leagues</div>
-              <SelectedChips
-                items={selectedLeagueIds}
-                onClear={() => setSelectedLeagueIds([])}
-                getLabel={(id) => leagueIdToLabel[id] || `Unknown League (${id})`}
-                onRemoveItem={(id) => setSelectedLeagueIds(prev => prev.filter(x => x !== id))}
-                hoverClose
-              />
-
-              <div className="text-sm text-gray-600 mt-3 mb-2">Seasons</div>
-              <SelectedChips
-                items={selectedSeasons}
-                onClear={() => setSelectedSeasons([])}
-                onRemoveItem={(season) => setSelectedSeasons(prev => prev.filter(x => x !== season))}
-                hoverClose
-              />
-
-              {/* Min Appearances label (requested) */}
-              {minApps > 0 && (
-                <>
-                  <div className="text-sm text-gray-600 mt-3 mb-2">Minimum Appearances</div>
-                  <SelectedChips
-                    items={[minApps]}
-                    onClear={() => setMinApps(0)}
-                    getLabel={(v) => `Min Apps: ${v}`}
-                    onRemoveItem={() => setMinApps(0)}
-                    hoverClose
-                  />
-                </>
-              )}
-            </div>
-
-            {/* Filters Panel */}
-            <div className="rounded-xl shadow-md transition-all hover:shadow-lg border bg-green-50/60 p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Filter className="h-5 w-5 text-green-700" />
-                  <h3 className="text-lg font-semibold text-green-900">Difficulty Filters</h3>
-                </div>
-                <button className="text-gray-600 hover:text-gray-800" onClick={() => setCollapsed(c => !c)}>
-                  {collapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
+              {/* Play */}
+              <div className="flex justify-center mt-6">
+                <button
+                  onClick={onStartGame}
+                  disabled={gameLoading || poolCount === 0}
+                  className={`relative overflow-hidden rounded-xl bg-gradient-to-r from-green-800 via-green-700 to-green-800 px-8 py-3 font-bold text-white shadow-lg transition-all hover:scale-105 hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-green-600 focus:ring-offset-2 ${
+                    gameLoading ? 'opacity-70' : 'opacity-100'
+                  }`}
+                >
+                  <div className="absolute inset-0 bg-white opacity-10 transition-opacity hover:opacity-20"></div>
+                  <div className="flex items-center justify-center gap-2">
+                    {gameLoading ? (
+                      <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
+                    ) : (
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-100">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <path d="m21 21-4.3-4.3"></path>
+                      </svg>
+                    )}
+                    <span className="text-lg">{gameLoading ? 'Loading...' : 'Who are ya?!'}</span>
+                  </div>
                 </button>
               </div>
 
-              {!collapsed && !loadingFilters && (
-                <div className="mt-4 space-y-6">
-                  {/* Leagues */}
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <Star className="h-4 w-4 text-green-700" />
-                        <span className="font-medium text-green-900">Leagues Filter</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={handleTop10Leagues}
-                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                        >
-                          <Star className="h-3 w-3 text-yellow-600" />
-                          Top 10
-                        </button>
-                        <button
-                          onClick={clearLeagues}
-                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                          Clear
-                        </button>
-                      </div>
-                    </div>
+              {/* Selected Filters */}
+              <div className="mb-4">
+                <div className="text-sm text-gray-600 mb-2">Leagues</div>
+                <SelectedChips
+                  items={selectedLeagueIds}
+                  onClear={() => setSelectedLeagueIds([])}
+                  getLabel={(id) => leagueIdToLabel[id] || `Unknown League (${id})`}
+                  onRemoveItem={(id) => setSelectedLeagueIds(prev => prev.filter(x => x !== id))}
+                  hoverClose
+                />
 
+                <div className="text-sm text-gray-600 mt-3 mb-2">Seasons</div>
+                <SelectedChips
+                  items={selectedSeasons}
+                  onClear={() => setSelectedSeasons([])}
+                  onRemoveItem={(season) => setSelectedSeasons(prev => prev.filter(x => x !== season))}
+                  hoverClose
+                />
+
+                {minApps > 0 && (
+                  <>
+                    <div className="text-sm text-gray-600 mt-3 mb-2">Minimum Appearances</div>
                     <SelectedChips
-                      title="Chosen leagues"
-                      items={selectedLeagueIds}
-                      onClear={clearLeagues}
-                      getLabel={(id) => leagueIdToLabel[id] || `Unknown League (${id})`}
-                      onRemoveItem={(id) => setSelectedLeagueIds(prev => prev.filter(x => x !== id))}
+                      items={[minApps]}
+                      onClear={() => setMinApps(0)}
+                      getLabel={(v) => `Min Apps: ${v}`}
+                      onRemoveItem={() => setMinApps(0)}
                       hoverClose
                     />
+                  </>
+                )}
+              </div>
 
-                    <div className="max-h-96 overflow-y-auto pr-2">
-                      {Object.entries(groupedLeagues)
-                        .sort(([a], [b]) => a.localeCompare(b))
-                        .map(([country, leagues]) => (
-                          <div key={country} className="mb-2">
-                            <button
-                              onClick={(e) => { e.preventDefault(); toggleCountry(country); }}
-                              type="button"
-                              className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
-                            >
-                              <div className="flex items-center gap-2">
-                                <img
-                                  src={leagues[0].country_flag}
-                                  alt={country}
-                                  className="w-6 h-4 object-cover rounded"
-                                />
-                                <span>{country}</span>
-                                <span className="text-xs text-gray-500">({leagues.length})</span>
-                              </div>
-                              {expandedCountries[country] ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                            </button>
-
-                            {expandedCountries[country] && (
-                              <div className="ml-8 space-y-2 mt-2">
-                                {leagues.map((league) => {
-                                  const lid = String(league.league_id);
-                                  const checked = selectedLeagueIds.includes(lid);
-                                  return (
-                                    <label key={lid} className="flex items-center gap-2 cursor-pointer" onClick={(e) => e.stopPropagation()}>
-                                      <input type="checkbox" checked={checked} onChange={() => toggleLeague(lid)} className="rounded" />
-                                      <img src={league.logo} alt={league.league_name} className="w-5 h-5 object-contain" />
-                                      <span className="text-sm">{league.league_name}</span>
-                                    </label>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                    </div>
+              {/* Filters Panel */}
+              <div className="rounded-xl shadow-md transition-all hover:shadow-lg border bg-green-50/60 p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Filter className="h-5 w-5 text-green-700" />
+                    <h3 className="text-lg font-semibold text-green-900">Difficulty Filters</h3>
                   </div>
+                  <button className="text-gray-600 hover:text-gray-800" onClick={() => setCollapsed(c => !c)}>
+                    {collapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
+                  </button>
+                </div>
 
-                  {/* Seasons */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
-                    <div className="md:col-span-2">
+                {!collapsed && !loadingFilters && (
+                  <div className="mt-4 space-y-6">
+                    {/* Leagues */}
+                    <div>
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
-                          <UsersRound className="h-4 w-4 text-green-700" />
-                          <span className="font-medium text-green-900">Season Filter</span>
+                          <Star className="h-4 w-4 text-green-700" />
+                          <span className="font-medium text-green-900">Leagues Filter</span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <button onClick={handleLast5Seasons} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
-                            Last 5
+                          <button
+                            onClick={handleTop10Leagues}
+                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                          >
+                            <Star className="h-3 w-3 text-yellow-600" />
+                            Top 10
                           </button>
-                          <button onClick={clearSeasons} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
+                          <button
+                            onClick={clearLeagues}
+                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                          >
                             <Trash2 className="h-3 w-3" />
                             Clear
                           </button>
                         </div>
                       </div>
 
-                      <SelectedChips title="Chosen seasons" items={selectedSeasons} onClear={clearSeasons} />
+                      <SelectedChips
+                        title="Chosen leagues"
+                        items={selectedLeagueIds}
+                        onClear={clearLeagues}
+                        getLabel={(id) => leagueIdToLabel[id] || `Unknown League (${id})`}
+                        onRemoveItem={(id) => setSelectedLeagueIds(prev => prev.filter(x => x !== id))}
+                        hoverClose
+                      />
 
-                      <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-2">
-                        {allSeasons.map((season) => (
-                          <button
-                            key={season}
-                            onClick={() =>
-                              setSelectedSeasons(prev => prev.includes(season) ? prev.filter(s => s !== season) : [...prev, season])
-                            }
-                            className={classNames(
-                              'px-2 py-1 text-sm rounded-md border',
-                              selectedSeasons.includes(season)
-                                ? 'bg-green-100 border-green-500 text-green-700'
-                                : 'bg-white hover:bg-gray-50'
-                            )}
-                          >
-                            {season}
-                          </button>
-                        ))}
+                      <div className="max-h-96 overflow-y-auto pr-2">
+                        {Object.entries(groupedLeagues)
+                          .sort(([a], [b]) => a.localeCompare(b))
+                          .map(([country, leagues]) => (
+                            <div key={country} className="mb-2">
+                              <button
+                                onClick={(e) => { e.preventDefault(); toggleCountry(country); }}
+                                type="button"
+                                className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <img
+                                    src={leagues[0].country_flag}
+                                    alt={country}
+                                    className="w-6 h-4 object-cover rounded"
+                                  />
+                                  <span>{country}</span>
+                                  <span className="text-xs text-gray-500">({leagues.length})</span>
+                                </div>
+                                {expandedCountries[country] ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                              </button>
+
+                              {expandedCountries[country] && (
+                                <div className="ml-8 space-y-2 mt-2">
+                                  {leagues.map((league) => {
+                                    const lid = String(league.league_id);
+                                    const checked = selectedLeagueIds.includes(lid);
+                                    return (
+                                      <label key={lid} className="flex items-center gap-2 cursor-pointer" onClick={(e) => e.stopPropagation()}>
+                                        <input type="checkbox" checked={checked} onChange={() => toggleLeague(lid)} className="rounded" />
+                                        <img src={league.logo} alt={league.league_name} className="w-5 h-5 object-contain" />
+                                        <span className="text-sm">{league.league_name}</span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          ))}
                       </div>
                     </div>
 
-                    {/* Minimum Appearances (input) */}
-                    <div className="flex flex-col items-center">
-                      <div className="flex items-center gap-2 mb-2">
-                        <UsersRound className="h-4 w-4 text-green-700" />
-                        <span className="font-medium text-green-900">Minimum Appearances</span>
+                    {/* Seasons */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
+                      <div className="md:col-span-2">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <UsersRound className="h-4 w-4 text-green-700" />
+                            <span className="font-medium text-green-900">Season Filter</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button onClick={handleLast5Seasons} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
+                              Last 5
+                            </button>
+                            <button onClick={clearSeasons} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
+                              <Trash2 className="h-3 w-3" />
+                              Clear
+                            </button>
+                          </div>
+                        </div>
+
+                        <SelectedChips title="Chosen seasons" items={selectedSeasons} onClear={clearSeasons} />
+
+                        <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-2">
+                          {allSeasons.map((season) => (
+                            <button
+                              key={season}
+                              onClick={() =>
+                                setSelectedSeasons(prev => prev.includes(season) ? prev.filter(s => s !== season) : [...prev, season])
+                              }
+                              className={classNames(
+                                'px-2 py-1 text-sm rounded-md border',
+                                selectedSeasons.includes(season)
+                                  ? 'bg-green-100 border-green-500 text-green-700'
+                                  : 'bg-white hover:bg-gray-50'
+                              )}
+                            >
+                              {season}
+                            </button>
+                          ))}
+                        </div>
                       </div>
-                      <input
-                        type="number"
-                        value={minApps}
-                        onChange={(e) => setMinApps(parseInt(e.target.value) || 0)}
-                        min="0"
-                        max="100"
-                        className="w-full px-3 py-2 border rounded-md text-center"
-                      />
-                      <div className="text-xs text-gray-500 text-center mt-1">Minimum appearances in a season</div>
+
+                      {/* Minimum Appearances (input) */}
+                      <div className="flex flex-col items-center">
+                        <div className="flex items-center gap-2 mb-2">
+                          <UsersRound className="h-4 w-4 text-green-700" />
+                          <span className="font-medium text-green-900">Minimum Appearances</span>
+                        </div>
+                        <input
+                          type="number"
+                          value={minApps}
+                          onChange={(e) => setMinApps(parseInt(e.target.value) || 0)}
+                          min="0"
+                          max="100"
+                          className="w-full px-3 py-2 border rounded-md text-center"
+                        />
+                        <div className="text-xs text-gray-500 text-center mt-1">Minimum appearances in a season</div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
-          </div>
+          ) : (
+            // ======= LOCKOUT VIEW (limit reached) =======
+            <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-8 text-center">
+              <div className="flex justify-center mb-4">
+                <Timer className="h-14 w-14 text-green-600" />
+              </div>
+              <h3 className="text-2xl font-semibold mb-2 text-gray-900">You're done for today!</h3>
+              <p className="text-gray-600">
+                You’ve finished your {maxGames} games for today. Come back when the new day starts.
+              </p>
+              <div className="mt-6">
+                <div className="text-sm text-gray-500 mb-1">Time until reset</div>
+                <div className="text-4xl font-extrabold text-green-700 tracking-widest">
+                  <CountdownToTomorrow />
+                </div>
+              </div>
+            </div>
+          )}
         </motion.div>
       )}
     </div>
