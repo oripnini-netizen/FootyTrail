@@ -14,7 +14,8 @@ export default function LiveGamePage() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  const INITIAL_TIME = 180;
+  // ====== CHANGED: 2 minutes instead of 3 ======
+  const INITIAL_TIME = 120;
 
   const [currentGuess, setCurrentGuess] = useState('');
   const [guessesAttempted, setGuessesAttempted] = useState(0);
@@ -41,6 +42,9 @@ export default function LiveGamePage() {
   const timerRef = useRef(null);
   const [transferHistory, setTransferHistory] = useState([]);
   const [loadingTransfers, setLoadingTransfers] = useState(true);
+
+  // guard to avoid double-saving when time runs out / blur / visibility / give up
+  const endedRef = useRef(false);
 
   const game = location.state || null;
   const filters = location.state?.filters || { potentialPoints: 0 };
@@ -82,9 +86,53 @@ export default function LiveGamePage() {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // ====== NEW: auto-forfeit when user leaves tab / page ======
+  useEffect(() => {
+    if (!game?.id) return;
+
+    const forfeitAndExit = async (reason = 'left-page') => {
+      if (endedRef.current) return;
+      endedRef.current = true;
+      try {
+        clearInterval(timerRef.current);
+        await saveGameRecord(false);
+      } catch (e) {
+        // swallow; we'll still navigate away
+      } finally {
+        // Send them back to the Game page
+        navigate('/game', { replace: true, state: { forfeited: true } });
+      }
+    };
+
+    const onVisibility = () => {
+      // If the tab becomes hidden, consider it cheating and forfeit
+      if (document.visibilityState === 'hidden') forfeitAndExit('hidden');
+    };
+    const onBlur = () => {
+      // Some browsers may not fire visibilitychange reliably; blur is a good backup
+      forfeitAndExit('blur');
+    };
+    const onPageHide = () => {
+      forfeitAndExit('pagehide');
+    };
+
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('blur', onBlur);
+    window.addEventListener('pagehide', onPageHide);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('blur', onBlur);
+      window.removeEventListener('pagehide', onPageHide);
+    };
+  }, [game?.id, navigate]); // eslint-disable-line
+
+  // ====== Timer countdown (2 minutes) ======
   useEffect(() => {
     if (!game?.id) return;
     const handleTimeUp = async () => {
+      if (endedRef.current) return;
+      endedRef.current = true;
       clearInterval(timerRef.current);
       await saveGameRecord(false);
       navigate('/postgame', {
@@ -112,6 +160,7 @@ export default function LiveGamePage() {
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [game?.id]); // eslint-disable-line
 
+  // Suggestions debounce
   useEffect(() => {
     let active = true;
     const id = setTimeout(async () => {
@@ -125,6 +174,7 @@ export default function LiveGamePage() {
     return () => { active = false; clearTimeout(id); };
   }, [guess]);
 
+  // Guard against missing game data
   useEffect(() => {
     if (!game || !game.id || !game.name) {
       setTimeout(() => navigate('/game'), 0);
@@ -147,9 +197,10 @@ export default function LiveGamePage() {
   }
 
   const submitGuess = async (value) => {
-    if (!value?.trim()) return;
+    if (!value?.trim() || endedRef.current) return;
     const correct = value.trim().toLowerCase() === game.name.trim().toLowerCase();
     if (correct) {
+      endedRef.current = true;
       clearInterval(timerRef.current);
       await saveGameRecord(true);
       navigate('/postgame', {
@@ -166,6 +217,7 @@ export default function LiveGamePage() {
     setIsWrongGuess(true);
     setTimeout(() => setIsWrongGuess(false), 500);
     if (guessesLeft - 1 <= 0) {
+      endedRef.current = true;
       clearInterval(timerRef.current);
       await saveGameRecord(false);
       navigate('/postgame', {
@@ -214,16 +266,30 @@ export default function LiveGamePage() {
   const revealPartialImage = () => { if (!usedHints.partialImage) setUsedHints(u => ({ ...u, partialImage: true })); };
   const revealFirstLetter = () => { if (!usedHints.firstLetter && game?.name) setUsedHints(u => ({ ...u, firstLetter: true })); };
 
+  // ====== NEW: timer color based on remaining time ======
+  const timeColorClass = timeSec <= 30 ? 'text-red-600'
+                        : timeSec <= 60 ? 'text-yellow-600'
+                        : 'text-gray-900';
+
   return (
     <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
       <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
+
+      {/* ====== NEW: anti-cheat banner ====== */}
+      <div className="max-w-4xl mx-auto px-4 pt-6">
+        <div className="rounded-lg bg-red-50 border border-red-200 text-red-800 font-bold px-4 py-2 text-center">
+          Don’t leave this page while the round is active — leaving will immediately count as a loss.
+        </div>
+      </div>
+
       <div className="max-w-4xl mx-auto px-4 py-6">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
           <div className="rounded border bg-white p-4 flex items-center gap-3">
             <Clock className="h-5 w-5 text-gray-700" />
             <div>
               <div className="text-xs text-gray-500">Time Remaining</div>
-              <div className="text-lg font-semibold">{formatTime(timeSec)}</div>
+              {/* ====== CHANGED: dynamic color ====== */}
+              <div className={classNames('text-lg font-semibold', timeColorClass)}>{formatTime(timeSec)}</div>
             </div>
           </div>
           <div className="rounded border bg-white p-4 flex items-center gap-3">
@@ -263,14 +329,40 @@ export default function LiveGamePage() {
               />
               <div className="flex gap-3">
                 <button type="submit" className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded font-medium">Submit Guess</button>
-                <button type="button" onClick={() => { clearInterval(timerRef.current); saveGameRecord(false).then(() => navigate('/postgame', { state: { didWin: false, player: game, stats: { pointsEarned: 0, timeSec: INITIAL_TIME - timeSec, guessesUsed: 3, usedHints }, filters, isDaily }, replace: true })); }} className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded font-medium">Give Up</button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (endedRef.current) return;
+                    endedRef.current = true;
+                    clearInterval(timerRef.current);
+                    saveGameRecord(false).then(() =>
+                      navigate('/postgame', {
+                        state: {
+                          didWin: false,
+                          player: game,
+                          stats: { pointsEarned: 0, timeSec: INITIAL_TIME - timeSec, guessesUsed: 3, usedHints },
+                          filters,
+                          isDaily
+                        },
+                        replace: true
+                      })
+                    );
+                  }}
+                  className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded font-medium"
+                >
+                  Give Up
+                </button>
               </div>
             </form>
 
             {suggestions?.length ? (
               <ul className="mt-3 border rounded divide-y max-h-56 overflow-auto">
                 {suggestions.map((sug) => (
-                  <li key={sug.id} className="px-3 py-2 hover:bg-gray-50 cursor-pointer text-sm" onClick={() => { setGuess(sug.name); submitGuess(sug.name); }}>
+                  <li
+                    key={sug.id}
+                    className="px-3 py-2 hover:bg-gray-50 cursor-pointer text-sm"
+                    onClick={() => { setGuess(sug.name); submitGuess(sug.name); }}
+                  >
                     {sug.name}
                   </li>
                 ))}

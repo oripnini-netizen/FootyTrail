@@ -1,5 +1,5 @@
 // src/pages/GamePage.jsx
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useLayoutEffect, useRef } from 'react';
 import {
   getLeagues,
   getSeasons,
@@ -7,16 +7,14 @@ import {
   getRandomPlayer,
   getDailyChallenge,
   getLimits,
-  getGamePrompt,
   API_BASE
 } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
+import { saveGamePageCache, loadGamePageCache, clearGamePageCache } from '../state/gamePageCache.js';
 
-// lucide icons
 import {
-  Trophy,
   UsersRound,
   Star,
   Trash2,
@@ -24,11 +22,6 @@ import {
   ChevronDown,
   ChevronUp,
   Sparkles,
-  PlayCircle,
-  Info,
-  Aperture,
-  Bell,
-  TableProperties,
   UserSearch,
 } from 'lucide-react';
 
@@ -38,12 +31,10 @@ function classNames(...s) {
 
 function CountdownToTomorrow() {
   const [timeLeft, setTimeLeft] = useState(getTimeLeft());
-
   useEffect(() => {
-    const interval = setInterval(() => setTimeLeft(getTimeLeft()), 1000);
-    return () => clearInterval(interval);
+    const id = setInterval(() => setTimeLeft(getTimeLeft()), 1000);
+    return () => clearInterval(id);
   }, []);
-
   function getTimeLeft() {
     const now = new Date();
     const tomorrow = new Date(now);
@@ -54,7 +45,6 @@ function CountdownToTomorrow() {
     const seconds = Math.floor((diff / 1000) % 60);
     return `${hours}h ${minutes}m ${seconds}s`;
   }
-
   return <span>{timeLeft}</span>;
 }
 
@@ -62,10 +52,10 @@ export default function GamePage() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
-  // Add this state to track overall page loading
+  // Page readiness
   const [pageReady, setPageReady] = useState(false);
 
-  // Initialize state with empty arrays/objects to prevent undefined
+  // Data + UI state
   const [daily, setDaily] = useState(null);
   const [loadingFilters, setLoadingFilters] = useState(true);
   const [collapsed, setCollapsed] = useState(true);
@@ -75,57 +65,151 @@ export default function GamePage() {
   const [selectedSeasons, setSelectedSeasons] = useState([]);
   const [minApps, setMinApps] = useState(0);
   const [loadingCounts, setLoadingCounts] = useState(false);
-  const [leagueTags, setLeagueTags] = useState([]);
   const [expandedCountries, setExpandedCountries] = useState({});
-  
-  // Add isLoading and error state
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState(null);
 
-  // New state variables for game prompt
-  const [gamePrompt, setGamePrompt] = useState("Your next challenge is here. Calibrate your filters and start scouting.");
+  // Game prompt (kept simple; we restore from cache if present)
+  const [gamePrompt, setGamePrompt] = useState(
+    "Get ready to outsmart your rivals and predict the game—let’s kick off a new round now!"
+  );
   const [isLoadingPrompt, setIsLoadingPrompt] = useState(true);
 
-  // Add loading state for daily challenge
+  // Limits for progress row
+  const [limits, setLimits] = useState({ gamesToday: 0, dailyPlayed: false, dailyWin: false, pointsToday: 0, pointsTotal: 0 });
   const [dailyLoading, setDailyLoading] = useState(false);
-
-  // Initialize with user defaults when available
-  useEffect(() => {
-    if (user) {
-      setSelectedLeagueIds(user.default_leagues || []);
-      setSelectedSeasons(user.default_seasons || []);
-      setMinApps(user.default_min_appearances || 0);
-    }
-  }, [user]);
 
   // Counts
   const [poolCount, setPoolCount] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
   const potentialPoints = useMemo(() => poolCount * 5, [poolCount]);
 
-  // Daily challenge state
-  const [limits, setLimits] = useState({ gamesToday: 0, dailyPlayed: false });
+  // Start button state
   const [gameLoading, setGameLoading] = useState(false);
 
-  // NEW: Start Daily Challenge game
+  // --------- Cache management ---------
+  const hasRestoredRef = useRef(false);
+  const restoredFromCacheRef = useRef(false);
+
+  // Track initial filters to know when the user actually changed something
+  const initialFiltersRef = useRef(null);
+  const filtersDirtyRef = useRef(false);
+
+  const gatherStateForCache = () => ({
+    scrollY: window.scrollY,
+    selectedLeagueIds,
+    selectedSeasons,
+    minApps,
+    collapsed,
+    expandedCountries,
+    poolCount,
+    totalCount,
+    gamePrompt
+  });
+
+  // Restore from cache (instant), but still run background fetches for labels/limits
+  useLayoutEffect(() => {
+    if (hasRestoredRef.current) return;
+    const cached = loadGamePageCache();
+    if (cached) {
+      try {
+        if (Array.isArray(cached.selectedLeagueIds)) setSelectedLeagueIds(cached.selectedLeagueIds);
+        if (Array.isArray(cached.selectedSeasons)) setSelectedSeasons(cached.selectedSeasons);
+        if (Number.isFinite(cached.minApps)) setMinApps(cached.minApps);
+        if (typeof cached.collapsed === 'boolean') setCollapsed(cached.collapsed);
+        if (cached.expandedCountries && typeof cached.expandedCountries === 'object') {
+          setExpandedCountries(cached.expandedCountries);
+        }
+        if (Number.isFinite(cached.poolCount)) setPoolCount(cached.poolCount);
+        if (Number.isFinite(cached.totalCount)) setTotalCount(cached.totalCount);
+        if (typeof cached.gamePrompt === 'string') setGamePrompt(cached.gamePrompt);
+
+        // Remember initial filters (for "did user change?" detection)
+        initialFiltersRef.current = {
+          leagues: (cached.selectedLeagueIds || []).slice(),
+          seasons: (cached.selectedSeasons || []).slice(),
+          minApps: cached.minApps ?? 0
+        };
+
+        // Show UI immediately
+        setPageReady(true);
+        setLoadingFilters(false);
+        setIsLoadingPrompt(false);
+
+        // Restore scroll
+        requestAnimationFrame(() => window.scrollTo(0, cached.scrollY || 0));
+        setTimeout(() => window.scrollTo(0, cached.scrollY || 0), 0);
+
+        restoredFromCacheRef.current = true;
+      } catch {
+        clearGamePageCache();
+      }
+    }
+    hasRestoredRef.current = true;
+  }, []);
+
+  // Save when leaving or backgrounding
+  useEffect(() => () => saveGamePageCache(gatherStateForCache()), [
+    selectedLeagueIds, selectedSeasons, minApps, collapsed, expandedCountries, gamePrompt, poolCount, totalCount
+  ]);
+  useEffect(() => {
+    const handleHide = () => saveGamePageCache(gatherStateForCache());
+    document.addEventListener('visibilitychange', handleHide, { passive: true });
+    window.addEventListener('pagehide', handleHide, { passive: true });
+    return () => {
+      document.removeEventListener('visibilitychange', handleHide);
+      window.removeEventListener('pagehide', handleHide);
+    };
+  }, [selectedLeagueIds, selectedSeasons, minApps, collapsed, expandedCountries, gamePrompt, poolCount, totalCount]);
+
+  // Apply user defaults only if NOT restored
+  useEffect(() => {
+    if (!restoredFromCacheRef.current && user) {
+      setSelectedLeagueIds((user.default_leagues || []).map(String));
+      setSelectedSeasons(user.default_seasons || []);
+      setMinApps(user.default_min_appearances || 0);
+      // set initial baseline for "dirty" detection
+      initialFiltersRef.current = {
+        leagues: (user.default_leagues || []).map(String),
+        seasons: (user.default_seasons || []).slice(),
+        minApps: user.default_min_appearances || 0
+      };
+    }
+  }, [user]);
+
+  // Detect when filters change vs initial (to trigger counts recompute on cache-return)
+  useEffect(() => {
+    const init = initialFiltersRef.current;
+    if (!init) {
+      initialFiltersRef.current = { leagues: selectedLeagueIds, seasons: selectedSeasons, minApps };
+      return;
+    }
+    const eqArray = (a, b) => {
+      if (!Array.isArray(a) || !Array.isArray(b)) return false;
+      const aa = [...a].map(String).sort();
+      const bb = [...b].map(String).sort();
+      if (aa.length !== bb.length) return false;
+      for (let i = 0; i < aa.length; i++) if (aa[i] !== bb[i]) return false;
+      return true;
+    };
+    const changed =
+      !eqArray(init.leagues, selectedLeagueIds) ||
+      !eqArray(init.seasons, selectedSeasons) ||
+      init.minApps !== minApps;
+    if (changed) filtersDirtyRef.current = true;
+  }, [selectedLeagueIds, selectedSeasons, minApps]);
+
+  // Start daily
   const onStartDaily = async () => {
     try {
       setDailyLoading(true);
-
-      // 1. Get today's daily challenge record
       const dailyChallenge = await getDailyChallenge();
       if (!dailyChallenge || !dailyChallenge.player_id) {
         alert("No daily challenge available for today.");
         setDailyLoading(false);
         return;
       }
-
-      // 2. Fetch full player data (from backend)
       const res = await fetch(`${API_BASE}/player/${dailyChallenge.player_id}`);
       if (!res.ok) throw new Error('Failed to fetch player data');
       const playerData = await res.json();
-
-      // 3. Map fields to expected names
       const mappedPlayerData = {
         id: playerData.player_id,
         name: playerData.player_name,
@@ -134,8 +218,6 @@ export default function GamePage() {
         position: playerData.player_position,
         photo: playerData.player_photo,
       };
-
-      // 4. Always set potentialPoints to 10,000 for daily challenge
       navigate('/live', {
         state: {
           ...mappedPlayerData,
@@ -145,107 +227,139 @@ export default function GamePage() {
         },
         replace: true,
       });
-    } catch (err) {
+    } catch {
       alert('Failed to start daily challenge. Please try again.');
     } finally {
       setDailyLoading(false);
     }
   };
 
-  // ---------- Load filters + limits + daily card ----------
+  // Load leagues/seasons/limits/daily
   useEffect(() => {
     let cancelled = false;
+    const background = restoredFromCacheRef.current; // if true, don't flip spinners
 
-    async function load() {
+    (async () => {
       try {
-        setLoadingFilters(true);
-        setPageReady(false); // Ensure page shows loading state
+        if (!background) {
+          setLoadingFilters(true);
+          setPageReady(false);
+        }
 
         const leaguesRes = await getLeagues();
         if (!cancelled) {
           setGroupedLeagues(leaguesRes.groupedByCountry || {});
-          setLeagueTags(leaguesRes.tags || []);
           const initialCollapse = {};
           Object.keys(leaguesRes.groupedByCountry || {}).forEach((c) => {
             initialCollapse[c] = false;
           });
-          setExpandedCountries(initialCollapse);
+          setExpandedCountries((prev) => Object.keys(prev).length ? prev : initialCollapse);
         }
 
         const seasonsRes = await getSeasons();
         if (!cancelled) setAllSeasons(seasonsRes.seasons || []);
 
-        // user limits (only if user is available)
         if (user?.id) {
           try {
             const lim = await getLimits(user.id);
-            if (!cancelled) setLimits(lim || { gamesToday: 0, dailyPlayed: false, pointsToday: 0, pointsTotal: 0 });
+            if (!cancelled) {
+              setLimits(lim || { gamesToday: 0, dailyPlayed: false, dailyWin: false, pointsToday: 0, pointsTotal: 0 });
+            }
           } catch {
-            if (!cancelled) setLimits({ gamesToday: 0, dailyPlayed: false, pointsToday: 0, pointsTotal: 0 });
+            if (!cancelled) setLimits({ gamesToday: 0, dailyPlayed: false, dailyWin: false, pointsToday: 0, pointsTotal: 0 });
           }
         } else {
-          if (!cancelled) setLimits({ gamesToday: 0, dailyPlayed: false, pointsToday: 0, pointsTotal: 0 });
+          if (!cancelled) setLimits({ gamesToday: 0, dailyPlayed: false, dailyWin: false, pointsToday: 0, pointsTotal: 0 });
         }
 
-        // daily challenge
         const d = await getDailyChallenge().catch(() => null);
         if (!cancelled) setDaily(d || null);
-      } catch (e) {
-        console.error('❌ Error loading page data:', e);
       } finally {
-        if (!cancelled) setLoadingFilters(false);
+        if (!cancelled && !background) {
+          setLoadingFilters(false);
+          setPageReady(true);
+        }
+        if (background) {
+          // we were already ready; keep it that way
+          setLoadingFilters(false);
+        }
       }
-    }
+    })();
 
-    load();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [user?.id]);
 
-  // Update the counts effect to manage pageReady state
+  // Fetch game prompt unless we restored one
+  useEffect(() => {
+    if (restoredFromCacheRef.current) {
+      setIsLoadingPrompt(false);
+      return;
+    }
+    (async () => {
+      try {
+        setIsLoadingPrompt(true);
+        const response = await fetch(`${API_BASE}/ai/generate-game-prompt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        if (!response.ok) throw new Error(`Failed to fetch game prompt: ${response.status}`);
+        const data = await response.json();
+        if (data.prompt) setGamePrompt(data.prompt);
+      } catch {
+        /* ignore */
+      } finally {
+        setIsLoadingPrompt(false);
+      }
+    })();
+  }, []);
+
+  // Recalculate counts:
+  // - normal path: when filters change
+  // - cache path: only after the user *actually* changes a filter
   useEffect(() => {
     let cancelled = false;
 
-    async function recalc() {
+    const shouldSkip =
+      restoredFromCacheRef.current && !filtersDirtyRef.current;
+
+    if (shouldSkip || loadingFilters) return;
+
+    (async () => {
       try {
         setLoadingCounts(true);
-        setPageReady(false); // Keep page in loading state while recalculating
-        
+        if (!restoredFromCacheRef.current) setPageReady(false);
+
         const payload = {
           leagues: selectedLeagueIds,
           seasons: selectedSeasons,
           minAppearances: Number(minApps) || 0,
           userId: user?.id
         };
-        
+
         const countsResult = await getCounts(payload);
-        const { poolCount: filteredCount, totalCount: dbTotal } = countsResult;
-        
+        const { poolCount: filteredCount, totalCount: dbTotal } = countsResult || {};
+
         if (!cancelled) {
           setPoolCount(filteredCount || 0);
           setTotalCount(dbTotal || 0);
           setPageReady(true);
         }
       } catch (e) {
-        console.error('❌ Error getting counts:', e);
         if (!cancelled) {
           setPoolCount(0);
           setTotalCount(0);
-          setPageReady(true); // Show page even if there's an error
+          setPageReady(true);
         }
       } finally {
         if (!cancelled) setLoadingCounts(false);
       }
-    }
+    })();
 
-    if (!loadingFilters) recalc();
-    else setPageReady(false);
-    
     return () => { cancelled = true; };
-  }, [loadingFilters, selectedLeagueIds, selectedSeasons, minApps, user?.id]);
+  }, [selectedLeagueIds, selectedSeasons, minApps, user?.id, loadingFilters]);
 
-  // Build label map: league_id -> "Country - League Name"
+  // Label map
   const leagueIdToLabel = useMemo(() => {
     const map = {};
     Object.entries(groupedLeagues || {}).forEach(([country, leagues]) => {
@@ -256,36 +370,23 @@ export default function GamePage() {
     return map;
   }, [groupedLeagues]);
 
-  // ---------- Helpers for selection ----------
+  // Helpers
   const toggleLeague = (id) => {
+    const sid = String(id);
     setSelectedLeagueIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+      prev.includes(sid) ? prev.filter((x) => x !== sid) : [...prev, sid]
     );
   };
-
   const clearLeagues = () => setSelectedLeagueIds([]);
-  const top10Leagues = () =>
-    setSelectedLeagueIds(['128', '144', '39', '40', '61', '78', '135', '88', '140', '94']);
-
-  const clearSeasons = () => setSelectedSeasons([]);
-  const last5Seasons = () => setSelectedSeasons(allSeasons.slice(0, 5)); // seasons already sorted desc
-
-  const goToLiveGame = (gamePayload, isDaily = false) => {
-    navigate('/live', {
-      state: {
-        game: gamePayload,
-        filters: {
-          leagues: selectedLeagueIds,
-          seasons: selectedSeasons,
-          minAppearances: Number(minApps) || 0,
-          potentialPoints: potentialPoints,
-        },
-        isDaily,
-      },
-    });
+  const handleTop10Leagues = () => {
+    const top10Ids = ['39', '140', '78', '135', '61', '88', '94', '71', '128', '253'];
+    setSelectedLeagueIds(prev => Array.from(new Set([...prev, ...top10Ids])));
   };
+  const clearSeasons = () => setSelectedSeasons([]);
+  const handleLast5Seasons = () => setSelectedSeasons(allSeasons.slice(0, 5));
+  const toggleCountry = (country) => setExpandedCountries(prev => ({ ...prev, [country]: !prev[country] }));
 
-  // ---------- Start regular game ----------
+  // Start regular game
   const onStartGame = async () => {
     try {
       setGameLoading(true);
@@ -311,170 +412,16 @@ export default function GamePage() {
         replace: true
       });
     } catch (error) {
-      console.error('Error starting game:', error);
       alert('Failed to start game. Please try again.');
     } finally {
       setGameLoading(false);
     }
   };
 
-  // ---------- UI pieces ----------
-  const SelectedChips = ({
-    title,
-    items,
-    onClear,
-    getLabel,
-    onRemoveItem,
-    hoverClose = false
-  }) => {
-    if (!items?.length) return null;
-    return (
-      <div className="mb-2">
-        {title && <div className="text-xs text-gray-600 mb-1">{title}</div>}
-        <div className="flex flex-wrap gap-2">
-          {items.map((t, index) => {
-            const label = getLabel ? getLabel(t) : String(t);
-            return (
-              <span
-                key={`${String(t)}-${index}`}
-                className={classNames(
-                  'group relative inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800',
-                  hoverClose && 'pr-6'
-                )}
-              >
-                {label}
-                {hoverClose && onRemoveItem && (
-                  <button
-                    type="button"
-                    onClick={() => onRemoveItem(t)}
-                    className="absolute right-0 top-0 bottom-0 hidden group-hover:flex items-center justify-center w-5 text-red-600 hover:text-red-700"
-                    title="Remove"
-                  >
-                    ×
-                  </button>
-                )}
-              </span>
-            );
-          })}
-          <button
-            onClick={onClear}
-            className="text-xs text-gray-600 underline hover:text-gray-800"
-          >
-            Clear
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  const LeaguesPicker = () => {
-    if (loadingFilters) return <div className="text-sm text-gray-500">Loading leagues…</div>;
-    const countries = Object.keys(groupedLeagues);
-    if (countries.length === 0) return <div className="text-sm text-gray-500">No leagues available.</div>;
-    return (
-      <div className="border rounded-md">
-        <div className="max-h-64 overflow-auto divide-y">
-          {countries.sort().map((country) => {
-            const leagues = groupedLeagues[country] || [];
-            const flag = leagues[0]?.country_flag;
-            const expanded = !!expandedCountries[country];
-
-            return (
-              <div key={country} className="p-2">
-                <button
-                  type="button"
-                  className="w-full flex items-center gap-2 mb-1"
-                  onClick={() =>
-                    setExpandedCountries((prev) => ({ ...prev, [country]: !prev[country] }))
-                  }
-                >
-                  {flag ? (
-                    <img src={flag} alt="" className="h-4 w-6 object-cover rounded-sm border" />
-                  ) : (
-                    <span className="h-4 w-6" />
-                  )}
-                  <div className="font-medium text-left flex-1">{country}</div>
-                  <div className="text-xs text-gray-500">({leagues.length})</div>
-                  <span className="ml-2">
-                    {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                  </span>
-                </button>
-
-                {expanded && (
-                  <div className="pl-8 space-y-2">
-                    {leagues.map((l) => {
-                      const checked = selectedLeagueIds.includes(String(l.league_id));
-                      return (
-                        <label
-                          key={String(l.league_id)}
-                          className={classNames(
-                            'flex items-center gap-2 rounded border p-2 cursor-pointer',
-                            checked ? 'bg-green-50 border-green-300' : 'bg-white hover:bg-gray-50'
-                          )}
-                          onClick={() => toggleLeague(String(l.league_id))}
-                        >
-                          {l.logo ? (
-                            <img src={l.logo} alt="" className="h-5 w-5 object-contain" />
-                          ) : (
-                            <div className="h-5 w-5" />
-                          )}
-                          <span className="text-sm">{l.league_name}</span>
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => { }}
-                            className="ml-auto"
-                          />
-                        </label>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
-  const SeasonsPicker = () => {
-    if (loadingFilters) return <div className="text-sm text-gray-500">Loading seasons…</div>;
-    if (!allSeasons.length) return <div className="text-sm text-gray-500">No seasons available.</div>;
-    return (
-      <div className="border rounded-md p-2 bg-white">
-        <div className="grid grid-cols-3 sm:grid-cols-6 md:gridCols-8 gap-2">
-          {allSeasons.map((y) => {
-            const checked = selectedSeasons.includes(y);
-            return (
-              <label
-                key={y}
-                className={classNames(
-                  'text-sm px-3 py-1 rounded border cursor-pointer text-center',
-                  checked ? 'bg-green-50 border-green-300' : 'bg-white hover:bg-gray-50'
-                )}
-                onClick={() =>
-                  setSelectedSeasons((prev) =>
-                    prev.includes(y) ? prev.filter((s) => s !== y) : [...prev, y]
-                  )
-                }
-              >
-                {y}
-                <input type="checkbox" checked={checked} onChange={() => { }} className="hidden" />
-              </label>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
-  // derive a max-games display (11 if daily win, else 10)
   const maxGames = limits?.dailyWin ? 11 : 10;
   const pointsToday = limits?.pointsToday ?? 0;
   const pointsTotal = limits?.pointsTotal ?? 0;
 
-  // Loading spinner
   const LoadingSpinner = () => (
     <div className="min-h-screen flex flex-col items-center justify-center">
       <div className="mb-4">
@@ -485,59 +432,20 @@ export default function GamePage() {
     </div>
   );
 
-  // Helpers used in the filters box
-  const handleTop10Leagues = () => {
-    const top10Ids = ['39', '140', '78', '135', '61', '88', '94', '71', '128', '253'];
-    setSelectedLeagueIds(prev => {
-      const uniqueIds = new Set([...prev, ...top10Ids]);
-      return Array.from(uniqueIds);
-    });
-  };
-  const toggleCountry = (country) => {
-    setExpandedCountries(prev => ({ ...prev, [country]: !prev[country] }));
-  };
-  const handleLast5Seasons = () => {
-    setSelectedSeasons(allSeasons.slice(0, 5));
-  };
-
-  // Fetch game prompt
-  useEffect(() => {
-    const fetchGamePrompt = async () => {
-      try {
-        setIsLoadingPrompt(true);
-        const response = await fetch(`${API_BASE}/ai/generate-game-prompt`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
-        });
-        if (!response.ok) throw new Error(`Failed to fetch game prompt: ${response.status}`);
-        const data = await response.json();
-        if (data.prompt) setGamePrompt(data.prompt);
-      } catch (error) {
-        console.error('Error fetching game prompt:', error);
-      } finally {
-        setIsLoadingPrompt(false);
-      }
-    };
-    fetchGamePrompt();
-  }, []);
-
-  // ********** ONLY CHANGE BELOW THIS COMMENT IS THE FIXED BACKGROUND LAYER **********
   return (
     <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
-      {/* Fixed, full-viewport gradient so there’s no gray strip under the navbar */}
       <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
 
       {!pageReady ? (
         <LoadingSpinner />
       ) : (
-        <motion.div 
-          initial={{ opacity: 0 }} 
-          animate={{ opacity: 1 }} 
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
           transition={{ duration: 0.4 }}
           className="max-w-3xl mx-auto px-4 py-8 space-y-6"
         >
-          {/* Daily Challenge Card */}
+          {/* Daily Challenge */}
           <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-6 text-center">
             <div className="flex justify-center mb-4">
               <Star className="h-8 w-8 text-yellow-400" />
@@ -573,7 +481,7 @@ export default function GamePage() {
                       ? <>You <span className="font-bold text-green-600">won</span> today's challenge!<br /></>
                       : <>You <span className="font-bold text-red-600">lost</span> today's challenge.<br /></>}
                     The player was <span className="font-bold">{daily.player_name}</span>.
-                   </div>
+                  </div>
                 )}
               </>
             )}
@@ -588,7 +496,7 @@ export default function GamePage() {
             )}
           </div>
 
-          {/* Progress Stats Card */}
+          {/* Progress Stats */}
           <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-6 grid grid-cols-3 gap-4">
             <div className="text-center">
               <div className="text-xl font-bold">
@@ -597,20 +505,16 @@ export default function GamePage() {
               <div className="text-sm text-gray-600">Daily Progress</div>
             </div>
             <div className="text-center">
-              <div className="text-xl font-bold text-green-600">
-                {pointsToday}
-              </div>
+              <div className="text-xl font-bold text-green-600">{pointsToday}</div>
               <div className="text-sm text-gray-600">Daily Points</div>
             </div>
             <div className="text-center">
-              <div className="text-xl font-bold text-blue-600">
-                {pointsTotal}
-              </div>
+              <div className="text-xl font-bold text-blue-600">{pointsTotal}</div>
               <div className="text-sm text-gray-600">Total Points</div>
             </div>
           </div>
 
-          {/* Game Setup Card */}
+          {/* Game Setup */}
           <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-6">
             <div className="flex justify-center mb-6">
               <UserSearch className="h-16 w-16 text-gray-400" />
@@ -623,29 +527,23 @@ export default function GamePage() {
               )}
             </p>
 
-            {/* Player Pool Stats */}
+            {/* Player Pool */}
             <div className="bg-yellow-50 rounded-lg p-4 mb-6">
               <div className="flex justify-between items-center">
                 <div>
-                  <div className="text-lg font-semibold text-yellow-800">
-                    {potentialPoints}
-                  </div>
-                  <div className="text-sm text-yellow-600">
-                    Potential Points
-                  </div>
+                  <div className="text-lg font-semibold text-yellow-800">{potentialPoints}</div>
+                  <div className="text-sm text-yellow-600">Potential Points</div>
                 </div>
                 <div className="text-right">
                   <div className="text-lg font-semibold text-yellow-800">
                     {poolCount} / {totalCount}
                   </div>
-                  <div className="text-sm text-yellow-600">
-                    Player Pool
-                  </div>
+                  <div className="text-sm text-yellow-600">Player Pool</div>
                 </div>
               </div>
             </div>
 
-            {/* Start Game */}
+            {/* Play */}
             <div className="flex justify-center mt-6">
               <button
                 onClick={onStartGame}
@@ -669,7 +567,7 @@ export default function GamePage() {
               </button>
             </div>
 
-            {/* Selected Filters Display */}
+            {/* Selected Filters */}
             <div className="mb-4">
               <div className="text-sm text-gray-600 mb-2">Leagues</div>
               <SelectedChips
@@ -689,28 +587,21 @@ export default function GamePage() {
               />
             </div>
 
-            {/* Difficulty Filters Section */}
+            {/* Filters Panel */}
             <div className="rounded-xl shadow-md transition-all hover:shadow-lg border bg-green-50/60 p-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Filter className="h-5 w-5 text-green-700" />
                   <h3 className="text-lg font-semibold text-green-900">Difficulty Filters</h3>
                 </div>
-                <button
-                  className="text-gray-600 hover:text-gray-800"
-                  onClick={() => setCollapsed(c => !c)}
-                >
-                  {collapsed ? (
-                    <ChevronDown className="h-5 w-5" />
-                  ) : (
-                    <ChevronUp className="h-5 w-5" />
-                  )}
+                <button className="text-gray-600 hover:text-gray-800" onClick={() => setCollapsed(c => !c)}>
+                  {collapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
                 </button>
               </div>
 
               {!collapsed && !loadingFilters && (
                 <div className="mt-4 space-y-6">
-                  {/* Leagues Filter */}
+                  {/* Leagues */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
@@ -750,10 +641,7 @@ export default function GamePage() {
                         .map(([country, leagues]) => (
                           <div key={country} className="mb-2">
                             <button
-                              onClick={(e) => {
-                                e.preventDefault();
-                                toggleCountry(country);
-                              }}
+                              onClick={(e) => { e.preventDefault(); toggleCountry(country); }}
                               type="button"
                               className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
                             >
@@ -764,39 +652,24 @@ export default function GamePage() {
                                   className="w-6 h-4 object-cover rounded"
                                 />
                                 <span>{country}</span>
-                                <span className="text-xs text-gray-500">
-                                  ({leagues.length})
-                                </span>
+                                <span className="text-xs text-gray-500">({leagues.length})</span>
                               </div>
-                              {expandedCountries[country] ? (
-                                <ChevronUp className="h-4 w-4" />
-                              ) : (
-                                <ChevronDown className="h-4 w-4" />
-                              )}
+                              {expandedCountries[country] ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                             </button>
 
                             {expandedCountries[country] && (
                               <div className="ml-8 space-y-2 mt-2">
-                                {leagues.map((league) => (
-                                  <label
-                                    key={league.league_id}
-                                    className="flex items-center gap-2 cursor-pointer"
-                                    onClick={(e) => e.stopPropagation()}
-                                  >
-                                    <input
-                                      type="checkbox"
-                                      checked={selectedLeagueIds.includes(league.league_id)}
-                                      onChange={() => toggleLeague(league.league_id)}
-                                      className="rounded"
-                                    />
-                                    <img
-                                      src={league.logo}
-                                      alt={league.league_name}
-                                      className="w-5 h-5 object-contain"
-                                    />
-                                    <span className="text-sm">{league.league_name}</span>
-                                  </label>
-                                ))}
+                                {leagues.map((league) => {
+                                  const lid = String(league.league_id);
+                                  const checked = selectedLeagueIds.includes(lid);
+                                  return (
+                                    <label key={lid} className="flex items-center gap-2 cursor-pointer" onClick={(e) => e.stopPropagation()}>
+                                      <input type="checkbox" checked={checked} onChange={() => toggleLeague(lid)} className="rounded" />
+                                      <img src={league.logo} alt={league.league_name} className="w-5 h-5 object-contain" />
+                                      <span className="text-sm">{league.league_name}</span>
+                                    </label>
+                                  );
+                                })}
                               </div>
                             )}
                           </div>
@@ -804,7 +677,7 @@ export default function GamePage() {
                     </div>
                   </div>
 
-                  {/* Seasons Filter */}
+                  {/* Seasons */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
                     <div className="md:col-span-2">
                       <div className="flex items-center justify-between mb-2">
@@ -813,37 +686,25 @@ export default function GamePage() {
                           <span className="font-medium text-green-900">Season Filter</span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <button
-                            onClick={handleLast5Seasons}
-                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                          >
+                          <button onClick={handleLast5Seasons} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
                             Last 5
                           </button>
-                          <button
-                            onClick={clearSeasons}
-                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                          >
+                          <button onClick={clearSeasons} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
                             <Trash2 className="h-3 w-3" />
                             Clear
                           </button>
                         </div>
                       </div>
 
-                      <SelectedChips
-                        title="Chosen seasons"
-                        items={selectedSeasons}
-                        onClear={clearSeasons}
-                      />
+                      <SelectedChips title="Chosen seasons" items={selectedSeasons} onClear={clearSeasons} />
 
                       <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-2">
                         {allSeasons.map((season) => (
                           <button
                             key={season}
-                            onClick={() => {
-                              setSelectedSeasons(prev =>
-                                prev.includes(season) ? prev.filter(s => s !== season) : [...prev, season]
-                              );
-                            }}
+                            onClick={() =>
+                              setSelectedSeasons(prev => prev.includes(season) ? prev.filter(s => s !== season) : [...prev, season])
+                            }
                             className={classNames(
                               'px-2 py-1 text-sm rounded-md border',
                               selectedSeasons.includes(season)
@@ -871,9 +732,7 @@ export default function GamePage() {
                         max="100"
                         className="w-full px-3 py-2 border rounded-md text-center"
                       />
-                      <div className="text-xs text-gray-500 text-center mt-1">
-                        Minimum appearances in a season
-                      </div>
+                      <div className="text-xs text-gray-500 text-center mt-1">Minimum appearances in a season</div>
                     </div>
                   </div>
                 </div>
@@ -882,6 +741,45 @@ export default function GamePage() {
           </div>
         </motion.div>
       )}
+    </div>
+  );
+}
+
+// Small chip helper
+function SelectedChips({ title, items, onClear, getLabel, onRemoveItem, hoverClose = false }) {
+  if (!items?.length) return null;
+  return (
+    <div className="mb-2">
+      {title && <div className="text-xs text-gray-600 mb-1">{title}</div>}
+      <div className="flex flex-wrap gap-2">
+        {items.map((t, index) => {
+          const label = getLabel ? getLabel(t) : String(t);
+          return (
+            <span
+              key={`${String(t)}-${index}`}
+              className={classNames(
+                'group relative inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800',
+                hoverClose && 'pr-6'
+              )}
+            >
+              {label}
+              {hoverClose && onRemoveItem && (
+                <button
+                  type="button"
+                  onClick={() => onRemoveItem(t)}
+                  className="absolute right-0 top-0 bottom-0 hidden group-hover:flex items-center justify-center w-5 text-red-600 hover:text-red-700"
+                  title="Remove"
+                >
+                  ×
+                </button>
+              )}
+            </span>
+          );
+        })}
+        <button onClick={onClear} className="text-xs text-gray-600 underline hover:text-gray-800">
+          Clear
+        </button>
+      </div>
     </div>
   );
 }

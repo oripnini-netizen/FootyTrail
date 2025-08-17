@@ -1,5 +1,5 @@
 // client/src/pages/PostGamePage.jsx
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, useAnimate } from 'framer-motion';
 import confetti from 'canvas-confetti';
@@ -14,12 +14,18 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../supabase/client';
 import { getRandomPlayer, API_BASE } from '../api';
+import {
+  loadPostGameCache,
+  savePostGameCache,
+  clearPostGameCache,
+} from '../state/postGameCache';
 
 export default function PostGamePage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { didWin, player, stats, filters, isDaily } = location.state || {};
   const { user } = useAuth();
+
   const [loading, setLoading] = useState(false);
   const [gamesLeft, setGamesLeft] = useState(null);
 
@@ -31,6 +37,13 @@ export default function PostGamePage() {
 
   const [scope, animate] = useAnimate();
 
+  // ---- cache guards ----
+  const hasRestoredRef = useRef(false);
+  const restoredFromCacheRef = useRef(false);
+
+  const playerKey = getPlayerKey(player); // used to validate cache belongs to this result
+
+  // Fire confetti only for wins (first real render)
   useEffect(() => {
     if (didWin) {
       confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
@@ -54,17 +67,74 @@ export default function PostGamePage() {
         await animate(scope.current, { x: -2 }, { duration: 0.05 });
         await animate(scope.current, { x: 2 }, { duration: 0.05 });
         await animate(scope.current, { x: 0 }, { duration: 0.05 });
-      } catch (e) {
-        // no-op: guard against StrictMode double-invoke during dev
-        console.debug('shake animation skipped:', e?.message);
+      } catch {
+        // StrictMode dev double-invoke etc. -> ignore
       }
     };
     sequence();
   }, [didWin, pageReady, animate, scope]);
 
+  // ---------- Restore from cache instantly (no re-fetch, no spinner) ----------
+  useLayoutEffect(() => {
+    if (hasRestoredRef.current) return;
+
+    const cached = loadPostGameCache();
+    if (cached && cached.playerKey === playerKey) {
+      try {
+        if (typeof cached.aiGeneratedFact === 'string') {
+          setAiGeneratedFact(cached.aiGeneratedFact);
+        }
+        if (typeof cached.gamesLeft === 'number') {
+          setGamesLeft(cached.gamesLeft);
+        }
+        // Show page right away
+        setPageReady(true);
+
+        // Restore scroll gently
+        requestAnimationFrame(() => window.scrollTo(0, cached.scrollY || 0));
+        setTimeout(() => window.scrollTo(0, cached.scrollY || 0), 0);
+
+        restoredFromCacheRef.current = true;
+      } catch {
+        clearPostGameCache();
+      }
+    }
+
+    hasRestoredRef.current = true;
+  }, [playerKey]);
+
+  // Save cache on unmount / tab hide
   useEffect(() => {
+    const saveNow = () => {
+      savePostGameCache({
+        playerKey,
+        aiGeneratedFact,
+        gamesLeft,
+        scrollY: window.scrollY,
+      });
+    };
+
+    // save on backgrounding and when leaving the page
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') saveNow();
+    };
+    document.addEventListener('visibilitychange', onVisibility, { passive: true });
+    window.addEventListener('pagehide', saveNow, { passive: true });
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', saveNow);
+      // also save on unmount
+      saveNow();
+    };
+  }, [playerKey, aiGeneratedFact, gamesLeft]);
+
+  // ---------- Fetch "games left" (background OK) ----------
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+
     async function fetchGamesLeft() {
-      if (!user?.id) return;
       try {
         const today = new Date().toISOString().split('T')[0];
         const { data, error } = await supabase
@@ -75,14 +145,18 @@ export default function PostGamePage() {
           .gte('created_at', `${today}T00:00:00`)
           .lte('created_at', `${today}T23:59:59`);
         if (error) throw error;
-        const remaining = 10 - (data?.length || 0);
-        setGamesLeft(Math.max(0, remaining));
+        if (!cancelled) {
+          const remaining = 10 - (data?.length || 0);
+          setGamesLeft(Math.max(0, remaining));
+        }
       } catch (e) {
-        console.error('Error fetching games left:', e);
-        setGamesLeft(null);
+        if (!cancelled) setGamesLeft(null);
       }
     }
+
+    // If restored, we might already have gamesLeft; still refresh in background
     fetchGamesLeft();
+    return () => { cancelled = true; };
   }, [user?.id]);
 
   function CountdownToTomorrow() {
@@ -104,7 +178,15 @@ export default function PostGamePage() {
     return <span>{timeLeft}</span>;
   }
 
+  // ---------- AI fun fact ----------
   useEffect(() => {
+    // If we restored a fact from cache, skip fetching.
+    if (restoredFromCacheRef.current && aiGeneratedFact) {
+      // ensure page is visible
+      setPageReady(true);
+      return;
+    }
+
     const getAIFact = async () => {
       if (!player) {
         navigate('/game', { replace: true });
@@ -134,11 +216,24 @@ export default function PostGamePage() {
         console.error('Error fetching AI fact:', error);
         setAiGeneratedFact(''); // show nothing if it fails
       } finally {
-        // Only show the page now
+        // Show the page now and persist to cache
         setPageReady(true);
+        savePostGameCache({
+          playerKey,
+          aiGeneratedFact: (prev => prev)(), // harmless; next save happens in save effect
+          gamesLeft,
+          scrollY: window.scrollY,
+        });
       }
     };
+
     getAIFact();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playerKey]); // re-run only if it's a different result
+
+  // If user somehow hits this without state, redirect
+  useEffect(() => {
+    if (!player) navigate('/game', { replace: true });
   }, [player, navigate]);
 
   const playAgainWithSameFilters = async () => {
@@ -153,6 +248,8 @@ export default function PostGamePage() {
         },
         user?.id
       );
+      // clear cache because we are starting a new game
+      clearPostGameCache();
       navigate('/live', {
         state: {
           ...gameData,
@@ -170,7 +267,7 @@ export default function PostGamePage() {
   };
 
   if (!player) return null;
-  if (!pageReady) return null; // hold the whole page until the fact is ready
+  if (!pageReady) return null; // hold the whole page until the fact is ready OR restored
 
   const pdata = player || {};
   const photo = pdata.player_photo || pdata.photo || null;
@@ -241,7 +338,11 @@ export default function PostGamePage() {
           {/* Actions */}
           {!isDaily && (
             <div className="flex gap-3">
-              <button onClick={() => navigate('/game')} className="flex-none bg-gray-100 hover:bg-gray-200 p-2 rounded-lg" title="Back to Game Setup">
+              <button
+                onClick={() => { clearPostGameCache(); navigate('/game'); }}
+                className="flex-none bg-gray-100 hover:bg-gray-200 p-2 rounded-lg"
+                title="Back to Game Setup"
+              >
                 <ArrowLeft className="h-5 w-5 text-gray-700" />
               </button>
               <button
@@ -262,7 +363,12 @@ export default function PostGamePage() {
                   : 'Better luck next time! Try again tomorrow for another chance at 10,000 points.'}
               </div>
               <div className="mt-2 text-sm text-gray-500">Next daily challenge in <CountdownToTomorrow /></div>
-              <button onClick={() => navigate('/game')} className="mt-4 bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg">Back to Game Setup</button>
+              <button
+                onClick={() => { clearPostGameCache(); navigate('/game'); }}
+                className="mt-4 bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg"
+              >
+                Back to Game Setup
+              </button>
             </div>
           )}
         </div>
@@ -280,5 +386,17 @@ function StatCard({ label, value, icon }) {
       </div>
       <div className="text-xl font-semibold">{value}</div>
     </div>
+  );
+}
+
+// ---- helpers ----
+function getPlayerKey(p) {
+  if (!p) return '';
+  return String(
+    p.id ??
+      p.player_id ??
+      p.player_league_season_id ??
+      p.name ??
+      ''
   );
 }
