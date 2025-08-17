@@ -431,7 +431,10 @@ export default function ProfilePage() {
                       >
                         <div className="flex justify-between items-center">
                           <div>
-                            <div className="font-medium">{game.player_name || "Unknown Player"}</div>
+                            {/* Golden name for daily challenge */}
+                            <div className={`font-medium ${game.is_daily_challenge ? 'text-yellow-600 font-semibold' : ''}`}>
+                              {game.player_name || "Unknown Player"}
+                            </div>
                             <div className="text-sm text-gray-500">
                               {new Date(game.created_at).toLocaleDateString()}
                             </div>

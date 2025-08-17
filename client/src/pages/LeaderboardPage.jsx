@@ -1,6 +1,6 @@
 // client/src/pages/LeaderboardPage.jsx
 import React, { useEffect, useMemo, useState } from 'react';
-// Use the wrapper that re-exports from ./supabase/client.js in your project
+// Use the wrapper that re-exports your Supabase client
 import { supabase } from '../supabase';
 import { Trophy, Clock, Award, X } from 'lucide-react';
 
@@ -115,6 +115,7 @@ export default function LeaderboardPage() {
     setUserStats({ totalPoints: 0, games: 0, avgTime: 0, successRate: 0 });
     setLoadingUser(true);
     try {
+      // Recent 20 for the list
       const { data: games } = await supabase
         .from('games_records')
         .select('id, player_name, won, points_earned, time_taken_seconds, guesses_attempted, hints_used, created_at, is_daily_challenge')
@@ -122,13 +123,18 @@ export default function LeaderboardPage() {
         .order('created_at', { ascending: false })
         .limit(20);
 
-      const list = games || [];
-      setUserGames(list);
+      setUserGames(games || []);
 
-      const total = list.length;
-      const pts = list.reduce((s, g) => s + (g.points_earned || 0), 0);
-      const wins = list.filter(g => g.won).length;
-      const time = list.reduce((s, g) => s + (g.time_taken_seconds || 0), 0);
+      // ALL games (for stats)
+      const { data: allGames } = await supabase
+        .from('games_records')
+        .select('won, points_earned, time_taken_seconds')
+        .eq('user_id', player.userId);
+
+      const total = allGames?.length || 0;
+      const pts = (allGames || []).reduce((s, g) => s + (g.points_earned || 0), 0);
+      const wins = (allGames || []).filter(g => g.won).length;
+      const time = (allGames || []).reduce((s, g) => s + (g.time_taken_seconds || 0), 0);
 
       setUserStats({
         totalPoints: pts,
@@ -335,6 +341,7 @@ export default function LeaderboardPage() {
               </button>
             </div>
 
+            {/* Stats are ALL-TIME */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-4">
               <div className="rounded border p-3 text-center">
                 <div className="text-xs text-gray-500">Total Points</div>
@@ -354,6 +361,7 @@ export default function LeaderboardPage() {
               </div>
             </div>
 
+            {/* Recent 20 list */}
             <div className="max-h-96 overflow-y-auto px-4 pb-4">
               {loadingUser ? (
                 <div className="flex h-32 items-center justify-center">
@@ -367,7 +375,9 @@ export default function LeaderboardPage() {
                     <div key={g.id} className="rounded border p-3">
                       <div className="flex items-center justify-between">
                         <div>
-                          <div className="font-medium">{g.player_name || 'Unknown Player'}</div>
+                          <div className={`font-medium ${g.is_daily_challenge ? 'text-yellow-600 font-semibold' : ''}`}>
+                            {g.player_name || 'Unknown Player'}
+                          </div>
                           <div className="text-xs text-gray-500">{new Date(g.created_at).toLocaleString()}</div>
                         </div>
                         <div className="text-right">
