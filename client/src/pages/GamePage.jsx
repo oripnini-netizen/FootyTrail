@@ -585,6 +585,20 @@ export default function GamePage() {
                 onRemoveItem={(season) => setSelectedSeasons(prev => prev.filter(x => x !== season))}
                 hoverClose
               />
+
+              {/* Min Appearances label (requested) */}
+              {minApps > 0 && (
+                <>
+                  <div className="text-sm text-gray-600 mt-3 mb-2">Minimum Appearances</div>
+                  <SelectedChips
+                    items={[minApps]}
+                    onClear={() => setMinApps(0)}
+                    getLabel={(v) => `Min Apps: ${v}`}
+                    onRemoveItem={() => setMinApps(0)}
+                    hoverClose
+                  />
+                </>
+              )}
             </div>
 
             {/* Filters Panel */}
@@ -718,7 +732,7 @@ export default function GamePage() {
                       </div>
                     </div>
 
-                    {/* Minimum Appearances */}
+                    {/* Minimum Appearances (input) */}
                     <div className="flex flex-col items-center">
                       <div className="flex items-center gap-2 mb-2">
                         <UsersRound className="h-4 w-4 text-green-700" />

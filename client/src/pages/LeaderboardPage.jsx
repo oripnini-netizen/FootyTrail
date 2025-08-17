@@ -1,10 +1,18 @@
 // client/src/pages/LeaderboardPage.jsx
-import React, { useState, useEffect } from 'react';
-import { supabase } from '../supabase/client';
-import { Trophy, Clock, Target, Award } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+// Use the wrapper that re-exports from ./supabase/client.js in your project
+import { supabase } from '../supabase';
+import { Trophy, Clock, Award, X } from 'lucide-react';
 
 const tabs = ['All Time', 'Month', 'Week', 'Today'];
 const metrics = ['Total Points', 'Points/Game'];
+
+const PERIOD_TO_START = (now, tab) => {
+  if (tab === 'Today') return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (tab === 'Week') { const d = new Date(now); d.setDate(now.getDate() - 7); return d; }
+  if (tab === 'Month') { const d = new Date(now); d.setMonth(now.getMonth() - 1); return d; }
+  return null;
+};
 
 export default function LeaderboardPage() {
   const [tab, setTab] = useState('All Time');
@@ -13,82 +21,125 @@ export default function LeaderboardPage() {
   const [dailyChampions, setDailyChampions] = useState([]);
   const [leaderboard, setLeaderboard] = useState([]);
 
+  // Modal state
+  const [openUser, setOpenUser] = useState(null); // { userId, name, profilePhoto, memberSince, ... }
+  const [userGames, setUserGames] = useState([]);
+  const [userStats, setUserStats] = useState({ totalPoints: 0, games: 0, avgTime: 0, successRate: 0 });
+  const [loadingUser, setLoadingUser] = useState(false);
+
   useEffect(() => {
-    async function fetchLeaderboard() {
+    async function fetchAll() {
       try {
         setLoading(true);
-        const now = new Date();
-        let startDate = null;
-        if (tab === 'Today') startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        else if (tab === 'Week') { startDate = new Date(now); startDate.setDate(now.getDate() - 7); }
-        else if (tab === 'Month') { startDate = new Date(now); startDate.setMonth(now.getMonth() - 1); }
-        const startDateIso = startDate ? startDate.toISOString() : null;
 
-        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-        try {
-          const { data: dailyData } = await supabase
-            .from('games_records')
-            .select('id, user_id, points_earned, player_name, created_at')
-            .eq('is_daily_challenge', true)
-            .gte('created_at', todayStart)
-            .eq('won', true)
-            .order('points_earned', { ascending: false })
-            .limit(10);
+        // Daily champs (today)
+        const todayStart = new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
+        const { data: daily } = await supabase
+          .from('games_records')
+          .select('id, user_id, points_earned, player_name, created_at, won')
+          .eq('is_daily_challenge', true)
+          .gte('created_at', todayStart)
+          .eq('won', true)
+          .order('points_earned', { ascending: false })
+          .limit(10);
 
-          if (dailyData?.length) {
-            const userIds = dailyData.map(g => g.user_id);
-            const { data: usersData } = await supabase
-              .from('users')
-              .select('id, full_name, profile_photo_url')
-              .in('id', userIds);
-            const map = {};
-            usersData?.forEach(u => map[u.id] = u);
-            setDailyChampions(dailyData.map(g => ({ ...g, user: map[g.user_id] || { full_name: 'Unknown Player' } })));
-          } else {
-            setDailyChampions([]);
-          }
-        } catch {
+        if (daily?.length) {
+          const ids = Array.from(new Set(daily.map(d => d.user_id)));
+          const { data: users } = await supabase
+            .from('users')
+            .select('id, full_name, profile_photo_url')
+            .in('id', ids);
+          const map = {};
+          (users || []).forEach(u => { map[u.id] = u; });
+          setDailyChampions(
+            daily.map(d => ({ ...d, user: map[d.user_id] || { full_name: 'Unknown Player' } }))
+          );
+        } else {
           setDailyChampions([]);
         }
 
-        const { data: userData } = await supabase
+        // Leaderboard
+        const now = new Date();
+        const start = PERIOD_TO_START(now, tab);
+        const startIso = start ? start.toISOString() : null;
+
+        // Pull all users (public profile)
+        const { data: users } = await supabase
           .from('users')
           .select('id, full_name, profile_photo_url, created_at');
 
-        const enriched = [];
-        for (const u of (userData || [])) {
-          let q = supabase.from('games_records').select('*').eq('user_id', u.id);
-          if (startDateIso) q = q.gte('created_at', startDateIso);
-          const { data: stats } = await q;
-          if (stats?.length) {
-            const points = stats.reduce((s, g) => s + (g.points_earned || 0), 0);
-            const gamesCount = stats.length;
-            const wins = stats.filter(g => g.won).length;
-            const totalTime = stats.reduce((s, g) => s + (g.time_taken_seconds || 0), 0);
-            enriched.push({
-              userId: u.id,
-              name: u.full_name || 'Unknown Player',
-              profilePhoto: u.profile_photo_url,
-              memberSince: u.created_at ? new Date(u.created_at).toLocaleDateString() : 'Unknown',
-              points,
-              gamesCount,
-              avgTime: gamesCount ? Math.round(totalTime / gamesCount) : 0,
-              successRate: gamesCount ? Math.round((wins / gamesCount) * 100) : 0,
-              avgPoints: gamesCount ? Math.round(points / gamesCount) : 0
-            });
-          }
+        const rows = [];
+        for (const u of (users || [])) {
+          let q = supabase.from('games_records')
+            .select('won, points_earned, time_taken_seconds, created_at')
+            .eq('user_id', u.id);
+          if (startIso) q = q.gte('created_at', startIso);
+          const { data: games } = await q;
+          if (!games || games.length === 0) continue;
+
+          const points = games.reduce((s, g) => s + (g.points_earned || 0), 0);
+          const gamesCount = games.length;
+          const wins = games.filter(g => g.won).length;
+          const totalTime = games.reduce((s, g) => s + (g.time_taken_seconds || 0), 0);
+
+          rows.push({
+            userId: u.id,
+            name: u.full_name || 'Unknown Player',
+            profilePhoto: u.profile_photo_url || '',
+            memberSince: u.created_at ? new Date(u.created_at).toLocaleDateString() : 'Unknown',
+            points,
+            gamesCount,
+            avgTime: gamesCount ? Math.round(totalTime / gamesCount) : 0,
+            successRate: gamesCount ? Math.round((wins / gamesCount) * 100) : 0,
+            avgPoints: gamesCount ? Math.round(points / gamesCount) : 0
+          });
         }
-        enriched.sort((a, b) => (metric === 'Total Points' ? b.points - a.points : b.avgPoints - a.avgPoints));
-        setLeaderboard(enriched);
+
+        rows.sort((a, b) => (metric === 'Total Points' ? b.points - a.points : b.avgPoints - a.avgPoints));
+        setLeaderboard(rows);
       } catch (e) {
-        console.error('Error fetching leaderboard data:', e);
+        console.error('Error fetching leaderboard:', e);
         setLeaderboard([]);
+        setDailyChampions([]);
       } finally {
         setLoading(false);
       }
     }
-    fetchLeaderboard();
+
+    fetchAll();
   }, [tab, metric]);
+
+  const onRowClick = async (player) => {
+    setOpenUser(player);
+    setUserGames([]);
+    setUserStats({ totalPoints: 0, games: 0, avgTime: 0, successRate: 0 });
+    setLoadingUser(true);
+    try {
+      const { data: games } = await supabase
+        .from('games_records')
+        .select('id, player_name, won, points_earned, time_taken_seconds, guesses_attempted, hints_used, created_at, is_daily_challenge')
+        .eq('user_id', player.userId)
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      const list = games || [];
+      setUserGames(list);
+
+      const total = list.length;
+      const pts = list.reduce((s, g) => s + (g.points_earned || 0), 0);
+      const wins = list.filter(g => g.won).length;
+      const time = list.reduce((s, g) => s + (g.time_taken_seconds || 0), 0);
+
+      setUserStats({
+        totalPoints: pts,
+        games: total,
+        avgTime: total ? Math.round(time / total) : 0,
+        successRate: total ? Math.round((wins / total) * 100) : 0
+      });
+    } finally {
+      setLoadingUser(false);
+    }
+  };
 
   const getMedalComponent = (index) => {
     if (index === 0) return <Trophy className="h-6 w-6 text-yellow-500" />;
@@ -98,8 +149,9 @@ export default function LeaderboardPage() {
   };
 
   const formatTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
+    const s = Number(seconds) || 0;
+    const mins = Math.floor(s / 60);
+    const secs = s % 60;
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
@@ -125,14 +177,23 @@ export default function LeaderboardPage() {
           ) : (
             <div className="p-4">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-                {dailyChampions.map((champion, index) => (
-                  <div key={champion.id} className="flex items-center gap-3 rounded-lg border border-yellow-200 bg-white p-3">
+                {dailyChampions.map((c, index) => (
+                  <div key={c.id} className="flex items-center gap-3 rounded-lg border border-yellow-200 bg-white p-3">
                     <div className="flex h-10 w-10 items-center justify-center rounded-full bg-yellow-100 text-lg font-bold text-yellow-800">
                       {index + 1}
                     </div>
-                    <div>
-                      <div className="font-medium">{champion.user?.full_name || 'Unknown Player'}</div>
-                      <div className="text-sm text-yellow-700">{champion.points_earned} points</div>
+                    <div className="flex items-center gap-3">
+                      {c.user?.profile_photo_url ? (
+                        <img src={c.user.profile_photo_url} alt="" className="h-8 w-8 rounded-full object-cover" />
+                      ) : (
+                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-green-100 text-green-800">
+                          {(c.user?.full_name || '?')[0]}
+                        </div>
+                      )}
+                      <div>
+                        <div className="font-medium">{c.user?.full_name || 'Unknown Player'}</div>
+                        <div className="text-sm text-yellow-700">{c.points_earned} points</div>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -153,7 +214,7 @@ export default function LeaderboardPage() {
             </button>
           ))}
           <div className="mx-2 h-5 w-px bg-gray-300" />
-          {['Total Points', 'Points/Game'].map(m => (
+          {metrics.map(m => (
             <button
               key={m}
               onClick={() => setMetric(m)}
@@ -189,48 +250,57 @@ export default function LeaderboardPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {leaderboard.map((player, index) => (
-                    <tr key={player.userId} className="border-b border-gray-200 hover:bg-gray-50">
-                      <td className="px-4 py-3"><div className="flex items-center justify-center">{getMedalComponent(index)}</div></td>
+                  {leaderboard.map((p, index) => (
+                    <tr
+                      key={p.userId}
+                      className="border-b border-gray-200 hover:bg-gray-50 cursor-pointer"
+                      onClick={() => onRowClick(p)}
+                    >
+                      <td className="px-4 py-3">
+                        <div className="flex items-center justify-center">{getMedalComponent(index)}</div>
+                      </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
-                          {player.profilePhoto ? (
-                            <img
-                              src={player.profilePhoto}
-                              alt=""
-                              className="h-8 w-8 rounded-full object-cover"
-                              onError={(e) => { e.target.onerror = null; e.target.src = 'https://via.placeholder.com/40?text=' + player.name[0]; }}
-                            />
+                          {p.profilePhoto ? (
+                            <img src={p.profilePhoto} alt="" className="h-8 w-8 rounded-full object-cover" />
                           ) : (
                             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-green-100 text-green-800">
-                              {player.name[0]}
+                              {p.name?.[0] || '?'}
                             </div>
                           )}
                           <div>
-                            <div className="font-medium">{player.name}</div>
-                            <div className="text-xs text-gray-500">Member since {player.memberSince}</div>
+                            {/* Make the name explicitly clickable */}
+                            <button
+                              type="button"
+                              title="View recent games"
+                              onClick={(e) => { e.stopPropagation(); onRowClick(p); }}
+                              className="font-medium text-left text-green-700 hover:underline focus:outline-none"
+                            >
+                              {p.name}
+                            </button>
+                            <div className="text-xs text-gray-500">Member since {p.memberSince}</div>
                           </div>
                         </div>
                       </td>
                       <td className="px-4 py-3 text-right">
                         <div className="font-bold text-green-600">
-                          {metric === 'Total Points' ? player.points.toLocaleString() : player.avgPoints}
+                          {metric === 'Total Points' ? Number(p.points || 0).toLocaleString() : p.avgPoints}
                         </div>
                         <div className="text-xs text-gray-500">points</div>
                       </td>
                       <td className="px-4 py-3 text-center">
-                        <div className="font-medium">{player.gamesCount}</div>
+                        <div className="font-medium">{p.gamesCount}</div>
                         <div className="text-xs text-gray-500">Games</div>
                       </td>
                       <td className="hidden px-4 py-3 text-center sm:table-cell">
                         <div className="flex items-center justify-center gap-1">
                           <Clock className="h-3 w-3 text-gray-500" />
-                          <span>{formatTime(player.avgTime)}</span>
+                          <span>{formatTime(p.avgTime)}</span>
                         </div>
                         <div className="text-xs text-gray-500">Avg Time</div>
                       </td>
                       <td className="hidden px-4 py-3 text-right sm:table-cell">
-                        <div className="font-medium">{player.successRate}%</div>
+                        <div className="font-medium">{p.successRate}%</div>
                         <div className="text-xs text-gray-500">Success</div>
                       </td>
                     </tr>
@@ -241,6 +311,83 @@ export default function LeaderboardPage() {
           )}
         </div>
       </div>
+
+      {/* User modal */}
+      {openUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-2xl rounded-xl bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b px-4 py-3">
+              <div className="flex items-center gap-3">
+                {openUser.profilePhoto ? (
+                  <img src={openUser.profilePhoto} alt="" className="h-10 w-10 rounded-full object-cover" />
+                ) : (
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-green-100 text-green-800">
+                    {openUser.name?.[0] || '?'}
+                  </div>
+                )}
+                <div>
+                  <div className="font-semibold">{openUser.name}</div>
+                  <div className="text-xs text-gray-500">Member since {openUser.memberSince}</div>
+                </div>
+              </div>
+              <button className="rounded-full p-1 hover:bg-gray-100" onClick={() => setOpenUser(null)}>
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-4">
+              <div className="rounded border p-3 text-center">
+                <div className="text-xs text-gray-500">Total Points</div>
+                <div className="text-lg font-semibold text-green-700">{userStats.totalPoints?.toLocaleString?.() || 0}</div>
+              </div>
+              <div className="rounded border p-3 text-center">
+                <div className="text-xs text-gray-500">Games</div>
+                <div className="text-lg font-semibold">{userStats.games || 0}</div>
+              </div>
+              <div className="rounded border p-3 text-center">
+                <div className="text-xs text-gray-500">Avg Time</div>
+                <div className="text-lg font-semibold">{userStats.avgTime || 0}s</div>
+              </div>
+              <div className="rounded border p-3 text-center">
+                <div className="text-xs text-gray-500">Success</div>
+                <div className="text-lg font-semibold">{userStats.successRate || 0}%</div>
+              </div>
+            </div>
+
+            <div className="max-h-96 overflow-y-auto px-4 pb-4">
+              {loadingUser ? (
+                <div className="flex h-32 items-center justify-center">
+                  <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-green-700" />
+                </div>
+              ) : userGames.length === 0 ? (
+                <div className="p-6 text-center text-gray-500">No recent games.</div>
+              ) : (
+                <div className="space-y-3">
+                  {userGames.map(g => (
+                    <div key={g.id} className="rounded border p-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="font-medium">{g.player_name || 'Unknown Player'}</div>
+                          <div className="text-xs text-gray-500">{new Date(g.created_at).toLocaleString()}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className={`font-semibold ${g.won ? 'text-green-600' : 'text-red-600'}`}>
+                            {g.won ? `+${g.points_earned}` : '0'} pts
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {g.guesses_attempted} {g.guesses_attempted === 1 ? 'guess' : 'guesses'}
+                            {g.is_daily_challenge && ' • Daily'}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
