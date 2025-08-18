@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { supabase } from '../supabase';
 import {
   TableProperties,
   Aperture,
@@ -9,7 +10,7 @@ import {
   Info,
   ShieldCheck,
   Menu,
-  X
+  X,
 } from 'lucide-react';
 
 const SKIP_REDIRECT_KEY = 'skip_onboarding_redirect';
@@ -21,6 +22,60 @@ export default function Navbar() {
   const location = useLocation();
   const [scrolled, setScrolled] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  // ---- NEW: unread notifications for My Leagues ----
+  const [unreadLeagues, setUnreadLeagues] = useState(0);
+
+  async function refreshUnread() {
+    try {
+      if (!user?.id) {
+        setUnreadLeagues(0);
+        return;
+      }
+      // Count unread notifications for this user
+      const { count, error } = await supabase
+        .from('notifications')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .eq('is_read', false);
+
+      if (!error) setUnreadLeagues(count || 0);
+    } catch {
+      /* noop */
+    }
+  }
+
+  useEffect(() => {
+    refreshUnread();
+    if (!user?.id) return;
+
+    // Realtime: any insert/update/delete on notifications for this user
+    const channel = supabase
+      .channel(`notif-dot:${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => refreshUnread()
+      )
+      .subscribe();
+
+    // Also refresh periodically in case browser lost realtime events
+    const id = setInterval(refreshUnread, 30000);
+
+    return () => {
+      clearInterval(id);
+      try {
+        supabase.removeChannel(channel);
+      } catch {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+  // -------------------------------------------------
 
   // Close mobile menu on route change
   useEffect(() => {
@@ -59,20 +114,33 @@ export default function Navbar() {
   }, []);
 
   // Reusable nav item
-  const NavItem = ({ title, icon: Icon, onClick }) => (
+  const NavItem = ({ title, icon: Icon, onClick, showDot = false }) => (
     <button
       onClick={onClick}
-      className="flex flex-col items-center text-gray-500 hover:text-green-700"
+      className="relative flex flex-col items-center text-gray-500 hover:text-green-700"
       title={title}
     >
-      <Icon className="h-6 w-6" />
+      <div className="relative">
+        <Icon className="h-6 w-6" />
+        {showDot ? (
+          <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" />
+        ) : null}
+      </div>
       <span className="text-xs mt-1">{title}</span>
     </button>
   );
 
   return (
-    <div className={`sticky top-0 left-0 right-0 z-50 transition-all duration-300 ${scrolled ? 'py-2 px-4 sm:px-6 lg:px-8' : ''}`}>
-      <nav className={`bg-white rounded-xl transition-all duration-300 ${scrolled ? 'shadow-lg mx-auto max-w-7xl' : 'shadow-sm w-full'}`}>
+    <div
+      className={`sticky top-0 left-0 right-0 z-50 transition-all duration-300 ${
+        scrolled ? 'py-2 px-4 sm:px-6 lg:px-8' : ''
+      }`}
+    >
+      <nav
+        className={`bg-white rounded-xl transition-all duration-300 ${
+          scrolled ? 'shadow-lg mx-auto max-w-7xl' : 'shadow-sm w-full'
+        }`}
+      >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16 relative">
             {/* Left: Logo and name */}
@@ -84,7 +152,9 @@ export default function Navbar() {
                   className="h-8 w-8 mr-2"
                   style={{ objectFit: 'contain' }}
                 />
-                <span className="text-xl font-bold text-green-800">FootyTrail</span>
+                <span className="text-xl font-bold text-green-800">
+                  FootyTrail
+                </span>
               </Link>
 
               {user?.role === 'admin' && (
@@ -108,7 +178,9 @@ export default function Navbar() {
               >
                 <div className="rounded-full shadow-md border bg-green-600 group-hover:bg-green-700 text-white p-3 sm:p-4 flex flex-col items-center transition-all duration-300 group-hover:scale-110">
                   <Aperture className="h-7 w-7 sm:h-8 sm:w-8 group-hover:rotate-45 transition-transform duration-300" />
-                  <span className="text-[10px] sm:text-xs mt-1 font-semibold">Play</span>
+                  <span className="text-[10px] sm:text-xs mt-1 font-semibold">
+                    Play
+                  </span>
                 </div>
               </button>
             </div>
@@ -116,9 +188,22 @@ export default function Navbar() {
             {/* Right (desktop): nav icons + avatar */}
             <div className="hidden md:flex items-center">
               <div className="flex items-center space-x-8 mr-8">
-                <NavItem title="My Leagues" icon={TableProperties} onClick={() => navigate('/my-leagues')} />
-                <NavItem title="Leaderboard" icon={Trophy} onClick={() => navigate('/leaderboard')} />
-                <NavItem title="About" icon={Info} onClick={() => navigate('/about')} />
+                <NavItem
+                  title="My Leagues"
+                  icon={TableProperties}
+                  onClick={() => navigate('/my-leagues')}
+                  showDot={unreadLeagues > 0}
+                />
+                <NavItem
+                  title="Leaderboard"
+                  icon={Trophy}
+                  onClick={() => navigate('/leaderboard')}
+                />
+                <NavItem
+                  title="About"
+                  icon={Info}
+                  onClick={() => navigate('/about')}
+                />
               </div>
 
               <button
@@ -131,7 +216,11 @@ export default function Navbar() {
                     src={user.profile_photo_url}
                     alt="avatar"
                     className="h-12 w-12 rounded-full object-cover shadow-sm hover:shadow-md"
-                    onError={(e) => { e.currentTarget.src = 'https://via.placeholder.com/48?text=' + (user?.email?.[0]?.toUpperCase() || 'U'); }}
+                    onError={(e) => {
+                      e.currentTarget.src =
+                        'https://via.placeholder.com/48?text=' +
+                        (user?.email?.[0]?.toUpperCase() || 'U');
+                    }}
                   />
                 ) : (
                   <div className="h-12 w-12 rounded-full bg-gray-200 hover:bg-green-100 transition-colors flex items-center justify-center text-sm text-gray-700 shadow-sm hover:shadow-md">
@@ -155,7 +244,7 @@ export default function Navbar() {
               )}
 
               <button
-                onClick={() => setMobileOpen(v => !v)}
+                onClick={() => setMobileOpen((v) => !v)}
                 className="p-2 rounded-md border hover:bg-gray-50"
                 aria-label="Open menu"
               >
@@ -175,10 +264,13 @@ export default function Navbar() {
                     <div className="flex flex-col divide-y">
                       <button
                         onClick={() => navigate('/my-leagues')}
-                        className="flex items-center gap-3 p-3 hover:bg-gray-50 text-gray-700"
+                        className="relative flex items-center gap-3 p-3 hover:bg-gray-50 text-gray-700"
                       >
                         <TableProperties className="h-5 w-5" />
                         <span>My Leagues</span>
+                        {unreadLeagues > 0 ? (
+                          <span className="ml-auto h-2.5 w-2.5 rounded-full bg-red-500" />
+                        ) : null}
                       </button>
                       <button
                         onClick={() => navigate('/leaderboard')}
@@ -203,7 +295,11 @@ export default function Navbar() {
                             src={user.profile_photo_url}
                             alt="avatar"
                             className="h-6 w-6 rounded-full object-cover"
-                            onError={(e) => { e.currentTarget.src = 'https://via.placeholder.com/24?text=' + (user?.email?.[0]?.toUpperCase() || 'U'); }}
+                            onError={(e) => {
+                              e.currentTarget.src =
+                                'https://via.placeholder.com/24?text=' +
+                                (user?.email?.[0]?.toUpperCase() || 'U');
+                            }}
                           />
                         ) : (
                           <div className="h-6 w-6 rounded-full bg-gray-200 flex items-center justify-center text-[10px] text-gray-700">
