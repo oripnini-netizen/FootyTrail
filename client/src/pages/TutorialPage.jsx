@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { supabase, uploadAvatar } from '../supabase';
-import { getLeagues, getSeasons } from '../api';
+import { getCompetitions, getSeasons } from '../api';
 import { ChevronRight, ChevronLeft, ImagePlus, UsersRound, Filter, CheckCircle2 } from 'lucide-react';
 
 function classNames(...s) { return s.filter(Boolean).join(' '); }
@@ -11,9 +11,9 @@ function classNames(...s) { return s.filter(Boolean).join(' '); }
 const STEP_STORAGE_KEY = 'onboarding_step';
 
 // Persist filters so they don't clear if the component remounts mid-flow
-const LEAGUES_KEY = 'onboarding_leagueIds';
+const COMP_KEY    = 'onboarding_competitionIds';
 const SEASONS_KEY = 'onboarding_seasons';
-const MINAPPS_KEY = 'onboarding_minApps';
+const MINMV_KEY   = 'onboarding_minMarket';
 
 export default function TutorialPage() {
   const navigate = useNavigate();
@@ -42,67 +42,79 @@ export default function TutorialPage() {
   const [savingProfile, setSavingProfile] = useState(false);
 
   // filters state (with session persistence)
-  const [groupedLeagues, setGroupedLeagues] = useState({});
+  const [groupedCompetitions, setGroupedCompetitions] = useState({});
   const [allSeasons, setAllSeasons] = useState([]);
   const [expandedCountries, setExpandedCountries] = useState({});
 
-  const [leagueIds, setLeagueIds] = useState(() => {
-    const saved = sessionStorage.getItem(LEAGUES_KEY);
-    return saved ? JSON.parse(saved) : (user?.default_leagues || []);
+  const [competitionIds, setCompetitionIds] = useState(() => {
+    const saved = sessionStorage.getItem(COMP_KEY);
+    // Prefer new defaults; fallback to old if present
+    const fromUser =
+      (user?.default_competitions) ||
+      (user?.default_leagues) ||
+      [];
+    return saved ? JSON.parse(saved) : fromUser;
   });
   const [seasons, setSeasons] = useState(() => {
     const saved = sessionStorage.getItem(SEASONS_KEY);
-    return saved ? JSON.parse(saved) : (user?.default_seasons || []);
+    const fromUser =
+      (user?.default_seasons) || [];
+    return saved ? JSON.parse(saved) : fromUser;
   });
-  const [minApps, setMinApps] = useState(() => {
-    const saved = sessionStorage.getItem(MINAPPS_KEY);
-    return saved ? parseInt(saved, 10) || 0 : (user?.default_min_appearances || 0);
+  const [minMarket, setMinMarket] = useState(() => {
+    const saved = sessionStorage.getItem(MINMV_KEY);
+    const fromUser =
+      (user?.default_min_market_value) ??
+      (user?.default_min_appearances) ?? 0;
+    return saved ? (parseInt(saved, 10) || 0) : (fromUser || 0);
   });
 
-  useEffect(() => {
-    try { sessionStorage.setItem(LEAGUES_KEY, JSON.stringify(leagueIds)); } catch {}
-  }, [leagueIds]);
-  useEffect(() => {
-    try { sessionStorage.setItem(SEASONS_KEY, JSON.stringify(seasons)); } catch {}
-  }, [seasons]);
-  useEffect(() => {
-    try { sessionStorage.setItem(MINAPPS_KEY, String(minApps)); } catch {}
-  }, [minApps]);
+  useEffect(() => { try { sessionStorage.setItem(COMP_KEY, JSON.stringify(competitionIds)); } catch {} }, [competitionIds]);
+  useEffect(() => { try { sessionStorage.setItem(SEASONS_KEY, JSON.stringify(seasons)); } catch {} }, [seasons]);
+  useEffect(() => { try { sessionStorage.setItem(MINMV_KEY, String(minMarket)); } catch {} }, [minMarket]);
 
-  // Load selectable filters
+  // Load selectable filters (NEW model)
   useEffect(() => {
     async function loadFilters() {
       try {
-        const leaguesRes = await getLeagues();
-        setGroupedLeagues(leaguesRes.groupedByCountry || {});
+        const compRes = await getCompetitions();
+        const gb = compRes.groupedByCountry || {};
+        setGroupedCompetitions(gb);
+
         const initialCollapse = {};
-        Object.keys(leaguesRes.groupedByCountry || {}).forEach((c) => (initialCollapse[c] = false));
+        Object.keys(gb).forEach((c) => (initialCollapse[c] = false));
         setExpandedCountries(initialCollapse);
 
         const seasonsRes = await getSeasons();
         setAllSeasons(seasonsRes.seasons || []);
       } catch (e) {
-        console.error('Error loading filters for tutorial:', e);
+        console.error('Error loading filters for tutorial (new model):', e);
       }
     }
     loadFilters();
   }, []);
 
-  const leagueIdToLabel = useMemo(() => {
+  const competitionIdToLabel = useMemo(() => {
     const map = {};
-    Object.entries(groupedLeagues).forEach(([country, leagues]) => {
-      (leagues || []).forEach(l => {
-        map[String(l.league_id)] = `${country} - ${l.league_name}`;
+    Object.entries(groupedCompetitions).forEach(([country, comps]) => {
+      (comps || []).forEach((c) => {
+        map[String(c.competition_id)] = `${country} - ${c.competition_name}`;
       });
     });
     return map;
-  }, [groupedLeagues]);
+  }, [groupedCompetitions]);
 
-  const toggleLeague = (id) => {
-    setLeagueIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const toggleCompetition = (id) => {
+    setCompetitionIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   };
 
-  const SelectedChips = ({ title, items, onClear, getLabel, onRemoveItem }) => {
+  const SelectedChips = ({
+    title,
+    items,
+    onClear,
+    getLabel,
+    onRemoveItem
+  }) => {
     if (!items?.length) return null;
     return (
       <div className="mb-2">
@@ -175,7 +187,7 @@ export default function TutorialPage() {
     }
   };
 
-  // STEP 3 -> Await DB write, then hard-navigate to /game (full reload) so fresh user is fetched
+  // STEP 3 -> Await DB write, then hard-navigate to /game
   const [finalizing, setFinalizing] = useState(false);
   const finishOnboarding = async () => {
     if (finalizing) return;
@@ -183,9 +195,9 @@ export default function TutorialPage() {
     try {
       const { error } = await supabase.from('users')
         .update({
-          default_leagues: leagueIds,
+          default_competitions: competitionIds,
           default_seasons: seasons,
-          default_min_appearances: minApps,
+          default_min_market_value: minMarket,
           has_completed_onboarding: true
         })
         .eq('id', user.id);
@@ -196,13 +208,13 @@ export default function TutorialPage() {
     } finally {
       // Clear persisted wizard state
       try {
-        sessionStorage.removeItem(LEAGUES_KEY);
+        sessionStorage.removeItem(COMP_KEY);
         sessionStorage.removeItem(SEASONS_KEY);
-        sessionStorage.removeItem(MINAPPS_KEY);
+        sessionStorage.removeItem(MINMV_KEY);
         sessionStorage.removeItem(STEP_STORAGE_KEY);
       } catch {}
-      // Full reload to ensure fresh user (and navbar redirect to /game is honored)
-      window.location.replace('/game'); // hard navigation to the game page
+      // Full reload to ensure fresh user and navbar redirect
+      window.location.replace('/game');
     }
   };
 
@@ -244,13 +256,13 @@ export default function TutorialPage() {
               <h1 className="text-2xl font-bold text-green-900 mb-2">Welcome to FootyTrail</h1>
               <p className="text-gray-700 mb-4">
                 In FootyTrail you’ll guess players from their transfer history.
-                You have <strong>3 minutes</strong> and <strong>3 guesses</strong> per game.
+                You have <strong>2 minutes</strong> and <strong>3 guesses</strong> per game.
                 Use hints wisely—each hint reduces your points.
               </p>
               <ul className="list-disc ml-6 text-gray-700 space-y-2 mb-4">
                 <li><strong>Daily Challenge:</strong> one shared player per day worth 10,000 pts. Win it to get an extra game.</li>
                 <li><strong>Regular Games:</strong> up to 10 per day (11 if you won the daily).</li>
-                <li><strong>Filters:</strong> choose leagues, seasons, and minimum appearances to set difficulty.</li>
+                <li><strong>Filters:</strong> choose competitions, seasons, and minimum market value to set difficulty.</li>
                 <li><strong>Leaderboards:</strong> your name & avatar appear across the app.</li>
               </ul>
               <div className="flex justify-end">
@@ -317,55 +329,55 @@ export default function TutorialPage() {
                 These filters preload when you play. You can change them later in your Profile.
               </p>
 
-              {/* Leagues */}
+              {/* Competitions */}
               <div className="rounded-xl border bg-green-50/60 p-3 mb-4">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
                     <Filter className="h-5 w-5 text-green-700" />
-                    <span className="font-medium text-green-900">Leagues</span>
+                    <span className="font-medium text-green-900">Competitions</span>
                   </div>
                 </div>
 
                 <SelectedChips
-                  items={leagueIds}
-                  onClear={() => setLeagueIds([])}
-                  getLabel={(id) => leagueIdToLabel[id] || `League ${id}`}
-                  onRemoveItem={(id) => setLeagueIds(prev => prev.filter(x => x !== id))}
+                  items={competitionIds}
+                  onClear={() => setCompetitionIds([])}
+                  getLabel={(id) => competitionIdToLabel[id] || `Competition ${id}`}
+                  onRemoveItem={(id) => setCompetitionIds(prev => prev.filter(x => x !== id))}
                 />
 
                 <div className="max-h-64 overflow-y-auto pr-1">
-                  {Object.entries(groupedLeagues)
+                  {Object.entries(groupedCompetitions)
                     .sort(([a],[b]) => a.localeCompare(b))
-                    .map(([country, leagues]) => (
+                    .map(([country, comps]) => (
                       <div key={country} className="mb-2">
                         <button
                           onClick={() => setExpandedCountries(prev => ({ ...prev, [country]: !prev[country] }))}
                           className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
                         >
                           <div className="flex items-center gap-2">
-                            {leagues?.[0]?.country_flag && (
-                              <img src={leagues[0].country_flag} alt={country} className="w-6 h-4 object-cover rounded" />
+                            {(comps?.[0]?.flag_url) && (
+                              <img src={comps[0].flag_url} alt={country} className="w-6 h-4 object-cover rounded" />
                             )}
                             <span>{country}</span>
-                            <span className="text-xs text-gray-500">({leagues.length})</span>
+                            <span className="text-xs text-gray-500">({(comps || []).length})</span>
                           </div>
                           <span className="text-sm text-gray-500">{expandedCountries[country] ? 'Hide' : 'Show'}</span>
                         </button>
 
                         {expandedCountries[country] && (
                           <div className="ml-8 space-y-2 mt-2">
-                            {leagues.map((league) => (
-                              <label key={league.league_id} className="flex items-center gap-2 cursor-pointer">
+                            {(comps || []).map((c) => (
+                              <label key={c.competition_id} className="flex items-center gap-2 cursor-pointer">
                                 <input
                                   type="checkbox"
-                                  checked={leagueIds.includes(league.league_id)}
-                                  onChange={() => toggleLeague(league.league_id)}
+                                  checked={competitionIds.includes(String(c.competition_id))}
+                                  onChange={() => toggleCompetition(String(c.competition_id))}
                                   className="rounded"
                                 />
-                                {league.logo && (
-                                  <img src={league.logo} alt={league.league_name} className="w-5 h-5 object-contain" />
+                                {c.logo_url && (
+                                  <img src={c.logo_url} alt={c.competition_name} className="w-5 h-5 object-contain" />
                                 )}
-                                <span className="text-sm">{league.league_name}</span>
+                                <span className="text-sm">{c.competition_name}</span>
                               </label>
                             ))}
                           </div>
@@ -375,7 +387,7 @@ export default function TutorialPage() {
                 </div>
               </div>
 
-              {/* Seasons + min apps */}
+              {/* Seasons + min market value */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
                 <div className="md:col-span-2">
                   <div className="flex items-center justify-between mb-2">
@@ -414,16 +426,16 @@ export default function TutorialPage() {
                 <div className="flex flex-col items-center">
                   <div className="flex items-center gap-2 mb-2">
                     <UsersRound className="h-4 w-4 text-green-700" />
-                    <span className="font-medium text-green-900">Minimum Appearances</span>
+                    <span className="font-medium text-green-900">Min Market Value (€)</span>
                   </div>
                   <input
                     type="number"
-                    value={minApps}
-                    onChange={(e) => setMinApps(parseInt(e.target.value) || 0)}
-                    min="0" max="100"
+                    value={minMarket}
+                    onChange={(e) => setMinMarket(parseInt(e.target.value) || 0)}
+                    min={0}
                     className="w-full px-3 py-2 border rounded-md text-center"
                   />
-                  <div className="text-xs text-gray-500 text-center mt-1">Sum of appearances across chosen leagues & seasons</div>
+                  <div className="text-xs text-gray-500 text-center mt-1">Maximum career market value threshold</div>
                 </div>
               </div>
 

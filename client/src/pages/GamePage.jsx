@@ -1,7 +1,9 @@
 // src/pages/GamePage.jsx
+// Switched to new data model: Competitions + Seasons + Min Market Value (€)
+
 import React, { useEffect, useMemo, useState, useLayoutEffect, useRef } from 'react';
 import {
-  getLeagues,
+  getCompetitions,
   getSeasons,
   getCounts,
   getRandomPlayer,
@@ -23,7 +25,7 @@ import {
   ChevronUp,
   Sparkles,
   UserSearch,
-  Timer, // NEW: used in the lockout view
+  Timer,
 } from 'lucide-react';
 
 function classNames(...s) {
@@ -50,6 +52,8 @@ function CountdownToTomorrow() {
   return <span>{timeLeft}</span>;
 }
 
+const fmt = (n) => new Intl.NumberFormat('en-US').format(n || 0);
+
 export default function GamePage() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -61,11 +65,11 @@ export default function GamePage() {
   const [daily, setDaily] = useState(null);
   const [loadingFilters, setLoadingFilters] = useState(true);
   const [collapsed, setCollapsed] = useState(true);
-  const [groupedLeagues, setGroupedLeagues] = useState({});
+  const [groupedCompetitions, setGroupedCompetitions] = useState({});
   const [allSeasons, setAllSeasons] = useState([]);
-  const [selectedLeagueIds, setSelectedLeagueIds] = useState([]);
+  const [selectedCompetitionIds, setSelectedCompetitionIds] = useState([]);
   const [selectedSeasons, setSelectedSeasons] = useState([]);
-  const [minApps, setMinApps] = useState(0);
+  const [minMarketValue, setMinMarketValue] = useState(0);
   const [loadingCounts, setLoadingCounts] = useState(false);
   const [expandedCountries, setExpandedCountries] = useState({});
 
@@ -96,9 +100,9 @@ export default function GamePage() {
 
   const gatherStateForCache = () => ({
     scrollY: window.scrollY,
-    selectedLeagueIds,
+    selectedCompetitionIds,
     selectedSeasons,
-    minApps,
+    minMarketValue,
     collapsed,
     expandedCountries,
     poolCount,
@@ -111,9 +115,9 @@ export default function GamePage() {
     const cached = loadGamePageCache();
     if (cached) {
       try {
-        if (Array.isArray(cached.selectedLeagueIds)) setSelectedLeagueIds(cached.selectedLeagueIds);
+        if (Array.isArray(cached.selectedCompetitionIds)) setSelectedCompetitionIds(cached.selectedCompetitionIds);
         if (Array.isArray(cached.selectedSeasons)) setSelectedSeasons(cached.selectedSeasons);
-        if (Number.isFinite(cached.minApps)) setMinApps(cached.minApps);
+        if (Number.isFinite(cached.minMarketValue)) setMinMarketValue(cached.minMarketValue);
         if (typeof cached.collapsed === 'boolean') setCollapsed(cached.collapsed);
         if (cached.expandedCountries && typeof cached.expandedCountries === 'object') {
           setExpandedCountries(cached.expandedCountries);
@@ -123,9 +127,9 @@ export default function GamePage() {
         if (typeof cached.gamePrompt === 'string') setGamePrompt(cached.gamePrompt);
 
         initialFiltersRef.current = {
-          leagues: (cached.selectedLeagueIds || []).slice(),
+          competitions: (cached.selectedCompetitionIds || []).slice(),
           seasons: (cached.selectedSeasons || []).slice(),
-          minApps: cached.minApps ?? 0
+          minMarketValue: cached.minMarketValue ?? 0
         };
 
         setPageReady(true);
@@ -144,7 +148,7 @@ export default function GamePage() {
   }, []);
 
   useEffect(() => () => saveGamePageCache(gatherStateForCache()), [
-    selectedLeagueIds, selectedSeasons, minApps, collapsed, expandedCountries, gamePrompt, poolCount, totalCount
+    selectedCompetitionIds, selectedSeasons, minMarketValue, collapsed, expandedCountries, gamePrompt, poolCount, totalCount
   ]);
   useEffect(() => {
     const handleHide = () => saveGamePageCache(gatherStateForCache());
@@ -154,18 +158,23 @@ export default function GamePage() {
       document.removeEventListener('visibilitychange', handleHide);
       window.removeEventListener('pagehide', handleHide);
     };
-  }, [selectedLeagueIds, selectedSeasons, minApps, collapsed, expandedCountries, gamePrompt, poolCount, totalCount]);
+  }, [selectedCompetitionIds, selectedSeasons, minMarketValue, collapsed, expandedCountries, gamePrompt, poolCount, totalCount]);
 
-  // Apply user defaults only if NOT restored
+  // Apply user defaults only if NOT restored (support future fields, fallback to legacy ones)
   useEffect(() => {
     if (!restoredFromCacheRef.current && user) {
-      setSelectedLeagueIds((user.default_leagues || []).map(String));
-      setSelectedSeasons(user.default_seasons || []);
-      setMinApps(user.default_min_appearances || 0);
+      const defaultsComp = (user.default_competitions || user.default_leagues || []).map(String);
+      const defaultsSeasons = user.default_seasons || [];
+      const defaultsMinMV = user.default_min_market_value ?? user.default_min_appearances ?? 0;
+
+      setSelectedCompetitionIds(defaultsComp);
+      setSelectedSeasons(defaultsSeasons);
+      setMinMarketValue(defaultsMinMV);
+
       initialFiltersRef.current = {
-        leagues: (user.default_leagues || []).map(String),
-        seasons: (user.default_seasons || []).slice(),
-        minApps: user.default_min_appearances || 0
+        competitions: defaultsComp.slice(),
+        seasons: defaultsSeasons.slice(),
+        minMarketValue: defaultsMinMV
       };
     }
   }, [user]);
@@ -174,7 +183,7 @@ export default function GamePage() {
   useEffect(() => {
     const init = initialFiltersRef.current;
     if (!init) {
-      initialFiltersRef.current = { leagues: selectedLeagueIds, seasons: selectedSeasons, minApps };
+      initialFiltersRef.current = { competitions: selectedCompetitionIds, seasons: selectedSeasons, minMarketValue };
       return;
     }
     const eqArray = (a, b) => {
@@ -186,11 +195,11 @@ export default function GamePage() {
       return true;
     };
     const changed =
-      !eqArray(init.leagues, selectedLeagueIds) ||
+      !eqArray(init.competitions, selectedCompetitionIds) ||
       !eqArray(init.seasons, selectedSeasons) ||
-      init.minApps !== minApps;
+      init.minMarketValue !== minMarketValue;
     if (changed) filtersDirtyRef.current = true;
-  }, [selectedLeagueIds, selectedSeasons, minApps]);
+  }, [selectedCompetitionIds, selectedSeasons, minMarketValue]);
 
   // Start daily
   const onStartDaily = async () => {
@@ -229,7 +238,7 @@ export default function GamePage() {
     }
   };
 
-  // Load leagues/seasons/limits/daily
+  // Load competitions/seasons/limits/daily
   useEffect(() => {
     let cancelled = false;
     const background = restoredFromCacheRef.current;
@@ -241,11 +250,11 @@ export default function GamePage() {
           setPageReady(false);
         }
 
-        const leaguesRes = await getLeagues();
+        const compsRes = await getCompetitions();
         if (!cancelled) {
-          setGroupedLeagues(leaguesRes.groupedByCountry || {});
+          setGroupedCompetitions(compsRes.groupedByCountry || {});
           const initialCollapse = {};
-          Object.keys(leaguesRes.groupedByCountry || {}).forEach((c) => {
+          Object.keys(compsRes.groupedByCountry || {}).forEach((c) => {
             initialCollapse[c] = false;
           });
           setExpandedCountries((prev) => Object.keys(prev).length ? prev : initialCollapse);
@@ -323,9 +332,9 @@ export default function GamePage() {
         if (!restoredFromCacheRef.current) setPageReady(false);
 
         const payload = {
-          leagues: selectedLeagueIds,
+          competitions: selectedCompetitionIds,
           seasons: selectedSeasons,
-          minAppearances: Number(minApps) || 0,
+          minMarketValue: Number(minMarketValue) || 0,
           userId: user?.id
         };
 
@@ -349,31 +358,27 @@ export default function GamePage() {
     })();
 
     return () => { cancelled = true; };
-  }, [selectedLeagueIds, selectedSeasons, minApps, user?.id, loadingFilters]);
+  }, [selectedCompetitionIds, selectedSeasons, minMarketValue, user?.id, loadingFilters]);
 
-  // Label map
-  const leagueIdToLabel = useMemo(() => {
+  // Label map for chips
+  const compIdToLabel = useMemo(() => {
     const map = {};
-    Object.entries(groupedLeagues || {}).forEach(([country, leagues]) => {
-      (leagues || []).forEach((l) => {
-        map[String(l.league_id)] = `${country} - ${l.league_name}`;
+    Object.entries(groupedCompetitions || {}).forEach(([country, comps]) => {
+      (comps || []).forEach((c) => {
+        map[String(c.competition_id)] = `${country} - ${c.competition_name}`;
       });
     });
     return map;
-  }, [groupedLeagues]);
+  }, [groupedCompetitions]);
 
   // Helpers
-  const toggleLeague = (id) => {
+  const toggleCompetition = (id) => {
     const sid = String(id);
-    setSelectedLeagueIds((prev) =>
+    setSelectedCompetitionIds((prev) =>
       prev.includes(sid) ? prev.filter((x) => x !== sid) : [...prev, sid]
     );
   };
-  const clearLeagues = () => setSelectedLeagueIds([]);
-  const handleTop10Leagues = () => {
-    const top10Ids = ['39', '140', '78', '135', '61', '88', '94', '71', '128', '253'];
-    setSelectedLeagueIds(prev => Array.from(new Set([...prev, ...top10Ids])));
-  };
+  const clearCompetitions = () => setSelectedCompetitionIds([]);
   const clearSeasons = () => setSelectedSeasons([]);
   const handleLast5Seasons = () => setSelectedSeasons(allSeasons.slice(0, 5));
   const toggleCountry = (country) => setExpandedCountries(prev => ({ ...prev, [country]: !prev[country] }));
@@ -383,9 +388,9 @@ export default function GamePage() {
     try {
       setGameLoading(true);
       const currentFilters = {
-        leagues: selectedLeagueIds,
+        competitions: selectedCompetitionIds,
         seasons: selectedSeasons,
-        minAppearances: Number(minApps) || 0,
+        minMarketValue: Number(minMarketValue) || 0,
         userId: user?.id
       };
       const randomPlayer = await getRandomPlayer(currentFilters, user?.id);
@@ -414,7 +419,6 @@ export default function GamePage() {
   const pointsToday = limits?.pointsToday ?? 0;
   const pointsTotal = limits?.pointsTotal ?? 0;
 
-  // Admin bypass (admins can continue playing for testing)
   const isAdmin = (user?.role === 'admin');
   const reachedLimit = !isAdmin && (Number(limits?.gamesToday || 0) >= maxGames);
 
@@ -476,7 +480,7 @@ export default function GamePage() {
                     {limits.dailyWin
                       ? <>You <span className="font-bold text-green-600">won</span> today's challenge!<br /></>
                       : <>You <span className="font-bold text-red-600">lost</span> today's challenge.<br /></>}
-                    The player was <span className="font-bold">{daily.player_name}</span>.
+                    The player was <span className="font-bold">{limits.dailyPlayerName || daily.player_name}</span>.
                   </div>
                 )}
               </>
@@ -528,12 +532,12 @@ export default function GamePage() {
               <div className="bg-yellow-50 rounded-lg p-4 mb-6">
                 <div className="flex justify-between items-center">
                   <div>
-                    <div className="text-lg font-semibold text-yellow-800">{potentialPoints}</div>
+                    <div className="text-lg font-semibold text-yellow-800">{fmt(potentialPoints)}</div>
                     <div className="text-sm text-yellow-600">Potential Points</div>
                   </div>
                   <div className="text-right">
                     <div className="text-lg font-semibold text-yellow-800">
-                      {poolCount} / {totalCount}
+                      {fmt(poolCount)} / {fmt(totalCount)}
                     </div>
                     <div className="text-sm text-yellow-600">Player Pool</div>
                   </div>
@@ -566,12 +570,12 @@ export default function GamePage() {
 
               {/* Selected Filters */}
               <div className="mb-4">
-                <div className="text-sm text-gray-600 mb-2">Leagues</div>
+                <div className="text-sm text-gray-600 mb-2">Competitions</div>
                 <SelectedChips
-                  items={selectedLeagueIds}
-                  onClear={() => setSelectedLeagueIds([])}
-                  getLabel={(id) => leagueIdToLabel[id] || `Unknown League (${id})`}
-                  onRemoveItem={(id) => setSelectedLeagueIds(prev => prev.filter(x => x !== id))}
+                  items={selectedCompetitionIds}
+                  onClear={() => setSelectedCompetitionIds([])}
+                  getLabel={(id) => compIdToLabel[id] || `Unknown Competition (${id})`}
+                  onRemoveItem={(id) => setSelectedCompetitionIds(prev => prev.filter(x => x !== id))}
                   hoverClose
                 />
 
@@ -583,14 +587,14 @@ export default function GamePage() {
                   hoverClose
                 />
 
-                {minApps > 0 && (
+                {Number(minMarketValue) > 0 && (
                   <>
-                    <div className="text-sm text-gray-600 mt-3 mb-2">Minimum Appearances</div>
+                    <div className="text-sm text-gray-600 mt-3 mb-2">Minimum Market Value (€)</div>
                     <SelectedChips
-                      items={[minApps]}
-                      onClear={() => setMinApps(0)}
-                      getLabel={(v) => `Min Apps: ${v}`}
-                      onRemoveItem={() => setMinApps(0)}
+                      items={[minMarketValue]}
+                      onClear={() => setMinMarketValue(0)}
+                      getLabel={(v) => `Min MV: €${fmt(v)}`}
+                      onRemoveItem={() => setMinMarketValue(0)}
                       hoverClose
                     />
                   </>
@@ -611,23 +615,16 @@ export default function GamePage() {
 
                 {!collapsed && !loadingFilters && (
                   <div className="mt-4 space-y-6">
-                    {/* Leagues */}
+                    {/* Competitions */}
                     <div>
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
                           <Star className="h-4 w-4 text-green-700" />
-                          <span className="font-medium text-green-900">Leagues Filter</span>
+                          <span className="font-medium text-green-900">Competitions Filter</span>
                         </div>
                         <div className="flex items-center gap-2">
                           <button
-                            onClick={handleTop10Leagues}
-                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                          >
-                            <Star className="h-3 w-3 text-yellow-600" />
-                            Top 10
-                          </button>
-                          <button
-                            onClick={clearLeagues}
+                            onClick={clearCompetitions}
                             className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
                           >
                             <Trash2 className="h-3 w-3" />
@@ -637,18 +634,18 @@ export default function GamePage() {
                       </div>
 
                       <SelectedChips
-                        title="Chosen leagues"
-                        items={selectedLeagueIds}
-                        onClear={clearLeagues}
-                        getLabel={(id) => leagueIdToLabel[id] || `Unknown League (${id})`}
-                        onRemoveItem={(id) => setSelectedLeagueIds(prev => prev.filter(x => x !== id))}
+                        title="Chosen competitions"
+                        items={selectedCompetitionIds}
+                        onClear={clearCompetitions}
+                        getLabel={(id) => compIdToLabel[id] || `Unknown Competition (${id})`}
+                        onRemoveItem={(id) => setSelectedCompetitionIds(prev => prev.filter(x => x !== id))}
                         hoverClose
                       />
 
                       <div className="max-h-96 overflow-y-auto pr-2">
-                        {Object.entries(groupedLeagues)
+                        {Object.entries(groupedCompetitions)
                           .sort(([a], [b]) => a.localeCompare(b))
-                          .map(([country, leagues]) => (
+                          .map(([country, comps]) => (
                             <div key={country} className="mb-2">
                               <button
                                 onClick={(e) => { e.preventDefault(); toggleCountry(country); }}
@@ -656,27 +653,32 @@ export default function GamePage() {
                                 className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
                               >
                                 <div className="flex items-center gap-2">
-                                  <img
-                                    src={leagues[0].country_flag}
-                                    alt={country}
-                                    className="w-6 h-4 object-cover rounded"
-                                  />
+                                  {comps?.[0]?.flag_url && (
+                                    <img
+                                      src={comps[0].flag_url}
+                                      alt={country}
+                                      className="w-6 h-4 object-cover rounded"
+                                    />
+                                  )}
                                   <span>{country}</span>
-                                  <span className="text-xs text-gray-500">({leagues.length})</span>
+                                  <span className="text-xs text-gray-500">({comps.length})</span>
                                 </div>
                                 {expandedCountries[country] ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                               </button>
 
                               {expandedCountries[country] && (
                                 <div className="ml-8 space-y-2 mt-2">
-                                  {leagues.map((league) => {
-                                    const lid = String(league.league_id);
-                                    const checked = selectedLeagueIds.includes(lid);
+                                  {comps.map((c) => {
+                                    const cid = String(c.competition_id);
+                                    const checked = selectedCompetitionIds.includes(cid);
                                     return (
-                                      <label key={lid} className="flex items-center gap-2 cursor-pointer" onClick={(e) => e.stopPropagation()}>
-                                        <input type="checkbox" checked={checked} onChange={() => toggleLeague(lid)} className="rounded" />
-                                        <img src={league.logo} alt={league.league_name} className="w-5 h-5 object-contain" />
-                                        <span className="text-sm">{league.league_name}</span>
+                                      <label key={cid} className="flex items-center gap-2 cursor-pointer" onClick={(e) => e.stopPropagation()}>
+                                        <input type="checkbox" checked={checked} onChange={() => toggleCompetition(cid)} className="rounded" />
+                                        {c.logo_url && (
+                                          <img src={c.logo_url} alt={c.competition_name} className="w-5 h-5 object-contain" />
+                                        )}
+                                        <span className="text-sm">{c.competition_name}</span>
+                                        {c.tier && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700">Tier {c.tier}</span>}
                                       </label>
                                     );
                                   })}
@@ -687,7 +689,7 @@ export default function GamePage() {
                       </div>
                     </div>
 
-                    {/* Seasons */}
+                    {/* Seasons + Min Market Value */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
                       <div className="md:col-span-2">
                         <div className="flex items-center justify-between mb-2">
@@ -728,21 +730,21 @@ export default function GamePage() {
                         </div>
                       </div>
 
-                      {/* Minimum Appearances (input) */}
+                      {/* Minimum Market Value (€) */}
                       <div className="flex flex-col items-center">
                         <div className="flex items-center gap-2 mb-2">
                           <UsersRound className="h-4 w-4 text-green-700" />
-                          <span className="font-medium text-green-900">Minimum Appearances</span>
+                          <span className="font-medium text-green-900">Minimum Market Value (€)</span>
                         </div>
                         <input
                           type="number"
-                          value={minApps}
-                          onChange={(e) => setMinApps(parseInt(e.target.value) || 0)}
+                          value={minMarketValue}
+                          onChange={(e) => setMinMarketValue(parseInt(e.target.value) || 0)}
                           min="0"
-                          max="100"
+                          step="100000"
                           className="w-full px-3 py-2 border rounded-md text-center"
                         />
-                        <div className="text-xs text-gray-500 text-center mt-1">Minimum appearances in a season</div>
+                        <div className="text-xs text-gray-500 text-center mt-1">Players whose max value ≥ this number</div>
                       </div>
                     </div>
                   </div>

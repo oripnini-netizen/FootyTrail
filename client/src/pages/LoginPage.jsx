@@ -1,3 +1,4 @@
+// client/src/pages/LoginPage.jsx
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../supabase';
@@ -17,7 +18,9 @@ export default function LoginPage() {
     // If already logged in (user from public.users or minimal fallback)
     if (user?.id) {
       navigatedRef.current = true;
-      const toTutorial = user.has_completed_onboarding === false || user.has_completed_onboarding == null;
+      const toTutorial =
+        user.has_completed_onboarding === false ||
+        user.has_completed_onboarding == null;
       navigate(toTutorial ? '/tutorial' : '/game', { replace: true });
     }
   }, [loading, user, navigate]);
@@ -28,7 +31,8 @@ export default function LoginPage() {
       await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/login`, // return to this page; AuthContext will route after hydration
+          // Always return to wherever the app is running (localhost in dev, Vercel in prod)
+          redirectTo: `${window.location.origin}/login`,
           queryParams: { prompt: 'select_account' },
         },
       });
@@ -58,7 +62,11 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signUp({
       email,
       password,
-      options: { data: { full_name } },
+      options: {
+        data: { full_name },
+        // Ensure confirmation/magic link sends you back to the current origin
+        emailRedirectTo: `${window.location.origin}/login`,
+      },
     });
     setBusy(false);
     if (error) {

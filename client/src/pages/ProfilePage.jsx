@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import SelectedChips from '../components/SelectedChips';
-import { getLeagues, getSeasons } from '../api';
+import { getCompetitions, getSeasons } from '../api';
 
 function classNames(...s) {
   return s.filter(Boolean).join(' ');
@@ -44,47 +44,30 @@ export default function ProfilePage() {
   const [error, setError] = useState(null);
   const [loadingFilters, setLoadingFilters] = useState(true);
   const [filtersCollapsed, setFiltersCollapsed] = useState(true);
-  const [groupedLeagues, setGroupedLeagues] = useState({});
+
+  // NEW model state
+  const [groupedCompetitions, setGroupedCompetitions] = useState({});
   const [allSeasons, setAllSeasons] = useState([]);
-  const [defaultLeagueIds, setDefaultLeagueIds] = useState(user?.default_leagues || []);
+  const [defaultCompetitionIds, setDefaultCompetitionIds] = useState(
+    user?.default_competitions || user?.default_leagues || []
+  );
   const [defaultSeasons, setDefaultSeasons] = useState(user?.default_seasons || []);
-  const [defaultMinApps, setDefaultMinApps] = useState(user?.default_min_appearances || 0);
+  const [defaultMinMarket, setDefaultMinMarket] = useState(
+    (user?.default_min_market_value ?? user?.default_min_appearances ?? 0) || 0
+  );
   const [expandedCountries, setExpandedCountries] = useState({});
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
 
-  const leagueIdToLabel = useMemo(() => {
+  const competitionIdToLabel = useMemo(() => {
     const mapping = {};
-    Object.entries(groupedLeagues).forEach(([country, leagues]) => {
-      leagues.forEach(league => {
-        mapping[league.league_id] = `${country} - ${league.league_name}`;
+    Object.entries(groupedCompetitions).forEach(([country, comps]) => {
+      (comps || []).forEach(c => {
+        mapping[String(c.competition_id)] = `${country} - ${c.competition_name}`;
       });
     });
-    const top10 = [
-      { id: 39, country: "England", name: "Premier League" },
-      { id: 140, country: "Spain", name: "La Liga" },
-      { id: 78, country: "Germany", name: "Bundesliga" },
-      { id: 135, country: "Italy", name: "Serie A" },
-      { id: 61, country: "France", name: "Ligue 1" },
-      { id: 88, country: "Netherlands", name: "Eredivisie" },
-      { id: 94, country: "Portugal", name: "Primeira Liga" },
-      { id: 71, country: "Brazil", name: "Brasileirão" },
-      { id: 128, country: "Argentina", name: "Primera División" },
-      { id: 253, country: "USA", name: "MLS" }
-    ];
-    top10.forEach(league => {
-      mapping[league.id] = `${league.country} - ${league.name}`;
-    });
     return mapping;
-  }, [groupedLeagues]);
-
-  const handleTop10Leagues = () => {
-    const top10Ids = [39, 140, 78, 135, 61, 88, 94, 71, 128, 253];
-    setDefaultLeagueIds(prev => {
-      const uniqueIds = new Set([...prev, ...top10Ids]);
-      return Array.from(uniqueIds);
-    });
-  };
+  }, [groupedCompetitions]);
 
   useEffect(() => {
     if (user) {
@@ -154,24 +137,24 @@ export default function ProfilePage() {
 
   useEffect(() => {
     if (user) {
-      setDefaultLeagueIds(user.default_leagues || []);
+      setDefaultCompetitionIds(user.default_competitions || user.default_leagues || []);
       setDefaultSeasons(user.default_seasons || []);
-      setDefaultMinApps(user.default_min_appearances || 0);
+      setDefaultMinMarket((user.default_min_market_value ?? user.default_min_appearances ?? 0) || 0);
     }
   }, [user]);
 
-  // Load filters (for the "Default Filters" section)
+  // Load filters (NEW model)
   useEffect(() => {
     let cancelled = false;
 
     async function loadFilters() {
       try {
         setLoadingFilters(true);
-        const leaguesRes = await getLeagues();
+        const compsRes = await getCompetitions();
         if (!cancelled) {
-          setGroupedLeagues(leaguesRes.groupedByCountry || {});
+          setGroupedCompetitions(compsRes.groupedByCountry || {});
           const initialCollapse = {};
-          Object.keys(leaguesRes.groupedByCountry || {}).forEach((c) => (initialCollapse[c] = false));
+          Object.keys(compsRes.groupedByCountry || {}).forEach((c) => (initialCollapse[c] = false));
           setExpandedCountries(initialCollapse);
         }
         const seasonsRes = await getSeasons();
@@ -256,12 +239,12 @@ export default function ProfilePage() {
 
   useEffect(() => {
     if (user) {
-      const hasLeaguesChanged = JSON.stringify(defaultLeagueIds) !== JSON.stringify(user.default_leagues || []);
+      const hasCompsChanged   = JSON.stringify(defaultCompetitionIds) !== JSON.stringify(user.default_competitions || user.default_leagues || []);
       const hasSeasonsChanged = JSON.stringify(defaultSeasons) !== JSON.stringify(user.default_seasons || []);
-      const hasMinAppsChanged = defaultMinApps !== (user.default_min_appearances || 0);
-      setHasChanges(hasLeaguesChanged || hasSeasonsChanged || hasMinAppsChanged);
+      const hasMinChanged     = Number(defaultMinMarket) !== Number(user.default_min_market_value ?? user.default_min_appearances ?? 0);
+      setHasChanges(hasCompsChanged || hasSeasonsChanged || hasMinChanged);
     }
-  }, [defaultLeagueIds, defaultSeasons, defaultMinApps, user]);
+  }, [defaultCompetitionIds, defaultSeasons, defaultMinMarket, user]);
 
   const saveDefaultFilters = async () => {
     try {
@@ -270,9 +253,9 @@ export default function ProfilePage() {
       const { error: updateError } = await supabase
         .from('users')
         .update({
-          default_leagues: defaultLeagueIds,
+          default_competitions: defaultCompetitionIds,
           default_seasons: defaultSeasons,
-          default_min_appearances: defaultMinApps
+          default_min_market_value: Number(defaultMinMarket) || 0
         })
         .eq('id', user.id);
       if (updateError) throw updateError;
@@ -286,18 +269,18 @@ export default function ProfilePage() {
     }
   };
 
-  const leaguesWithCountry = useMemo(() => {
-    const enrichedLeagues = {};
-    Object.entries(groupedLeagues).forEach(([country, leagues]) => {
-      enrichedLeagues[country] = leagues.map(league => ({ ...league, country_name: country }));
+  const competitionsWithCountry = useMemo(() => {
+    const enriched = {};
+    Object.entries(groupedCompetitions).forEach(([country, comps]) => {
+      enriched[country] = (comps || []).map(c => ({ ...c, country_name: country }));
     });
-    return enrichedLeagues;
-  }, [groupedLeagues]);
+    return enriched;
+  }, [groupedCompetitions]);
 
-  const handleClearLeagues = () => setDefaultLeagueIds([]);
+  const handleClearCompetitions = () => setDefaultCompetitionIds([]);
   const toggleCountry = (country) => setExpandedCountries(prev => ({ ...prev, [country]: !prev[country] }));
-  const toggleLeague = (leagueId) =>
-    setDefaultLeagueIds(prev => (prev.includes(leagueId) ? prev.filter(id => id !== leagueId) : [...prev, leagueId]));
+  const toggleCompetition = (competitionId) =>
+    setDefaultCompetitionIds(prev => (prev.includes(competitionId) ? prev.filter(id => id !== competitionId) : [...prev, competitionId]));
   const handleLast5Seasons = () => setDefaultSeasons(allSeasons.slice(0, 5));
   const handleClearSeasons = () => setDefaultSeasons([]);
   const toggleSeason = (season) =>
@@ -456,7 +439,7 @@ export default function ProfilePage() {
               </div>
             </div>
 
-            {/* Default Filters Card */}
+            {/* Default Filters Card (NEW model) */}
             <div className="rounded-xl shadow-md transition-all hover:shadow-lg border bg-green-50/60 p-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -473,23 +456,16 @@ export default function ProfilePage() {
 
               {!filtersCollapsed && !loadingFilters && (
                 <div className="mt-4 space-y-6">
-                  {/* Leagues Filter */}
+                  {/* Competitions Filter */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
                         <Star className="h-4 w-4 text-green-700" />
-                        <span className="font-medium text-green-900">Leagues Filter</span>
+                        <span className="font-medium text-green-900">Competitions</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <button
-                          onClick={handleTop10Leagues}
-                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                        >
-                          <Star className="h-3 w-3 text-yellow-600" />
-                          Top 10
-                        </button>
-                        <button
-                          onClick={handleClearLeagues}
+                          onClick={handleClearCompetitions}
                           className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
                         >
                           <Trash2 className="h-3 w-3" />
@@ -499,47 +475,51 @@ export default function ProfilePage() {
                     </div>
 
                     <SelectedChips
-                      title="Chosen leagues"
-                      items={defaultLeagueIds}
-                      onClear={handleClearLeagues}
-                      getLabel={(id) => leagueIdToLabel[id] || `Unknown League (${id})`}
-                      onRemoveItem={(id) => setDefaultLeagueIds(prev => prev.filter(x => x !== id))}
+                      title="Chosen competitions"
+                      items={defaultCompetitionIds}
+                      onClear={handleClearCompetitions}
+                      getLabel={(id) => competitionIdToLabel[id] || `Competition (${id})`}
+                      onRemoveItem={(id) => setDefaultCompetitionIds(prev => prev.filter(x => x !== id))}
                       hoverClose
                     />
 
                     <div className="max-h-96 overflow-y-auto pr-2">
-                      {Object.entries(groupedLeagues)
+                      {Object.entries(competitionsWithCountry)
                         .sort(([a], [b]) => a.localeCompare(b))
-                        .map(([country, leagues]) => (
+                        .map(([country, comps]) => (
                           <div key={country} className="mb-2">
                             <button
                               onClick={() => toggleCountry(country)}
                               className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
                             >
                               <div className="flex items-center gap-2">
-                                <img
-                                  src={leagues[0].country_flag}
-                                  alt={country}
-                                  className="w-6 h-4 object-cover rounded"
-                                />
+                                {comps[0]?.flag_url && (
+                                  <img
+                                    src={comps[0].flag_url}
+                                    alt={country}
+                                    className="w-6 h-4 object-cover rounded"
+                                  />
+                                )}
                                 <span>{country}</span>
-                                <span className="text-xs text-gray-500">({leagues.length})</span>
+                                <span className="text-xs text-gray-500">({comps.length})</span>
                               </div>
                               {expandedCountries[country] ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                             </button>
 
                             {expandedCountries[country] && (
                               <div className="ml-8 space-y-2 mt-2">
-                                {leagues.map((league) => (
-                                  <label key={league.league_id} className="flex items-center gap-2 cursor-pointer">
+                                {comps.map((c) => (
+                                  <label key={c.competition_id} className="flex items-center gap-2 cursor-pointer">
                                     <input
                                       type="checkbox"
-                                      checked={defaultLeagueIds.includes(league.league_id)}
-                                      onChange={() => toggleLeague(league.league_id)}
+                                      checked={defaultCompetitionIds.includes(String(c.competition_id))}
+                                      onChange={() => toggleCompetition(String(c.competition_id))}
                                       className="rounded"
                                     />
-                                    <img src={league.logo} alt={league.league_name} className="w-5 h-5 object-contain" />
-                                    <span className="text-sm">{league.league_name}</span>
+                                    {c.logo_url && (
+                                      <img src={c.logo_url} alt={c.competition_name} className="w-5 h-5 object-contain" />
+                                    )}
+                                    <span className="text-sm">{c.competition_name}</span>
                                   </label>
                                 ))}
                               </div>
@@ -549,13 +529,13 @@ export default function ProfilePage() {
                     </div>
                   </div>
 
-                  {/* Seasons Filter */}
+                  {/* Seasons + Min Market Value */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
                     <div className="md:col-span-2">
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
                           <UsersRound className="h-4 w-4 text-green-700" />
-                          <span className="font-medium text-green-900">Season Filter</span>
+                          <span className="font-medium text-green-900">Seasons</span>
                         </div>
                         <div className="flex items-center gap-2">
                           <button
@@ -594,21 +574,20 @@ export default function ProfilePage() {
                       </div>
                     </div>
 
-                    {/* Minimum Appearances */}
+                    {/* Min Market Value (€) */}
                     <div className="flex flex-col items-center">
                       <div className="flex items-center gap-2 mb-2">
                         <UsersRound className="h-4 w-4 text-green-700" />
-                        <span className="font-medium text-green-900">Minimum Appearances</span>
+                        <span className="font-medium text-green-900">Min Market Value (€)</span>
                       </div>
                       <input
                         type="number"
-                        value={defaultMinApps}
-                        onChange={(e) => setDefaultMinApps(parseInt(e.target.value) || 0)}
+                        value={defaultMinMarket}
+                        onChange={(e) => setDefaultMinMarket(parseInt(e.target.value) || 0)}
                         min="0"
-                        max="100"
                         className="w-full px-3 py-2 border rounded-md text-center"
                       />
-                      <div className="text-xs text-gray-500 text-center mt-1">Minimum appearances in a season</div>
+                      <div className="text-xs text-gray-500 text-center mt-1">Maximum career market value threshold</div>
                     </div>
                   </div>
 

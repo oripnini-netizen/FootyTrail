@@ -1,5 +1,8 @@
 // routes/api.js
-// Unified backend API routes — STRICT RPC-ONLY (uses aggregated SUM(appearences) RPCs)
+// Unified backend API routes — STRICT RPC-ONLY
+// Now using the *new* schema for pool building (competitions + players_in_seasons)
+// and "minimum market value" filters.
+// We still use the legacy players_seasons table only to build the player card (photo, etc.).
 
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
@@ -22,10 +25,15 @@ if (!supabaseUrl || !serviceKey) {
 
 const supabase = createClient(supabaseUrl, serviceKey);
 
-// ---------- Schema ----------
-const TABLE_PS = 'players_seasons';
-const TABLE_LS = 'leagues_seasons';
+// ---------- Legacy tables (for player card only) ----------
+const TABLE_PS = 'players_seasons';      // legacy
+const TABLE_LS = 'leagues_seasons';      // legacy (kept for BC endpoints)
 
+// ---------- New tables (filters + pool) ----------
+const TABLE_COMP = 'competitions';
+const TABLE_PIS = 'players_in_seasons';
+
+// ---------- Legacy PS column map (for card) ----------
 const PS = {
   seasonYear: 'season_year',
   playerId: 'player_id',
@@ -33,22 +41,8 @@ const PS = {
   playerAge: 'player_age',
   playerNationality: 'player_nationality',
   playerPhoto: 'player_photo',
-  playerApps: 'player_appearences', // original spelling in your table
   playerPosition: 'player_position',
   leagueId: 'league_id',
-  playerNormName: 'player_norm_name',
-  plsId: 'player_league_season_id',
-};
-
-const LS = {
-  leagueSeasonId: 'league_season_id',
-  leagueId: 'league_id',
-  leagueName: 'league_name',
-  type: 'type',
-  logo: 'logo',
-  countryName: 'country_name',
-  countryFlag: 'country_flag',
-  seasonYear: 'season_year',
 };
 
 // ---------- RapidAPI transfers ----------
@@ -56,8 +50,31 @@ const RAPID_API_HOST = 'api-football-v1.p.rapidapi.com';
 const RAPID_API_BASE = `https://${RAPID_API_HOST}/v3`;
 
 // ---------- Helpers ----------
-function normalizeFilters(raw = {}) {
-  // Convert arrays to numbers; empty arrays -> null (so SQL "param is null OR ..." works)
+/**
+ * Normalize filters coming from client (new model).
+ * competitions: text[]
+ * seasons: text[]
+ * minMarketValue: number (EUR)
+ */
+function normalizeNewFilters(raw = {}) {
+  const competitionsArr = Array.isArray(raw.competitions)
+    ? raw.competitions.map(String).filter(Boolean)
+    : null;
+  const seasonsArr = Array.isArray(raw.seasons)
+    ? raw.seasons.map(String).filter(Boolean)
+    : null;
+
+  return {
+    competitions: competitionsArr && competitionsArr.length ? competitionsArr : null,
+    seasons: seasonsArr && seasonsArr.length ? seasonsArr : null,
+    minMarketValue: Number(raw.minMarketValue) || 0,
+  };
+}
+
+/**
+ * Legacy helper (kept so /filters/leagues keeps working for anything else that still calls it).
+ */
+function normalizeLegacyFilters(raw = {}) {
   const leaguesArr = Array.isArray(raw.leagues)
     ? raw.leagues.map((x) => Number(x)).filter(Number.isFinite)
     : null;
@@ -66,13 +83,14 @@ function normalizeFilters(raw = {}) {
     : null;
 
   return {
-    leagues: leaguesArr && leaguesArr.length ? leaguesArr : null, // bigint[]
-    seasons: seasonsArr && seasonsArr.length ? seasonsArr : null, // bigint[]
+    leagues: leaguesArr && leaguesArr.length ? leaguesArr : null,   // bigint[]
+    seasons: seasonsArr && seasonsArr.length ? seasonsArr : null,   // bigint[]
     minAppearances: Number(raw.minAppearances) || 0,
   };
 }
 
 async function getPlayerCard(playerId) {
+  // We still build the "card" from the legacy players_seasons table
   const idStr = String(playerId); // player_id column is TEXT
   const { data, error } = await supabase
     .from(TABLE_PS)
@@ -95,30 +113,29 @@ async function getPlayerCard(playerId) {
   return data?.[0] || null;
 }
 
-// ---------- RPC wrappers (aggregated SUM(appearences) logic) ----------
-async function rpcCountPlayersAggregated({ leagues, seasons, minAppearances }) {
-  const { data, error } = await supabase.rpc('rpc_count_players_sumapps', {
-    leagues,             // bigint[] or null
-    seasons,             // bigint[] or null
-    min_app: minAppearances || 0,
+// ---------- RPC wrappers (new model) ----------
+async function rpcCountPlayersPool({ competitions, seasons, minMarketValue }) {
+  const { data, error } = await supabase.rpc('rpc_count_players_pool', {
+    competitions,               // text[] or null
+    seasons,                    // text[] or null
+    min_market_value: minMarketValue || 0,
   });
   if (error) throw error;
   return typeof data === 'number' ? data : Number(data);
 }
 
-async function rpcGetPlayerIdsAggregated({ leagues, seasons, minAppearances }) {
-  const { data, error } = await supabase.rpc('rpc_get_player_ids_sumapps', {
-    leagues,             // bigint[] or null
-    seasons,             // bigint[] or null
-    min_app: minAppearances || 0,
+async function rpcGetPlayerIdsMarket({ competitions, seasons, minMarketValue }) {
+  const { data, error } = await supabase.rpc('rpc_get_player_ids_market', {
+    competitions,               // text[] or null
+    seasons,                    // text[] or null
+    min_market_value: minMarketValue || 0,
   });
   if (error) throw error;
-  // Returned as bigint[]; coerce to Number for JS work
-  return (data || []).map((id) => Number(id)).filter(Number.isFinite);
+  return (data || []).map(String); // player_id text[]
 }
 
-async function rpcTotalPlayers() {
-  const { data, error } = await supabase.rpc('rpc_total_players');
+async function rpcTotalPlayersDb() {
+  const { data, error } = await supabase.rpc('rpc_total_players_db');
   if (error) throw error;
   return typeof data === 'number' ? data : Number(data);
 }
@@ -173,7 +190,70 @@ async function getPlayerTransfers(playerId) {
 
 // ---------- Routes ----------
 
-// LEAGUES (unique by league_id, grouped by country)
+/**
+ * NEW FILTERS — competitions grouped by country (from public.competitions)
+ */
+router.get('/filters/competitions', async (_req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from(TABLE_COMP)
+      .select('competition_id, competition_name, logo_url, country, flag_url, tier, total_value_eur');
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    // group by country
+    const groupedByCountry = {};
+    for (const r of data || []) {
+      const country = r.country || 'Unknown';
+      if (!groupedByCountry[country]) groupedByCountry[country] = [];
+      groupedByCountry[country].push({
+        competition_id: String(r.competition_id),
+        competition_name: r.competition_name,
+        logo_url: r.logo_url,
+        flag_url: r.flag_url,
+        tier: r.tier,
+        total_value_eur: r.total_value_eur,
+      });
+    }
+
+    // sort competitions within each country
+    for (const key of Object.keys(groupedByCountry)) {
+      groupedByCountry[key].sort((a, b) => a.competition_name.localeCompare(b.competition_name));
+    }
+
+    res.json({ groupedByCountry });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load competitions.' });
+  }
+});
+
+/**
+ * NEW FILTERS — seasons (distinct from players_in_seasons, sorted desc)
+ */
+router.get('/filters/seasons', async (_req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from(TABLE_PIS)
+      .select('season_id');
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    const seasons = Array.from(
+      new Set((data || []).map((r) => String(r.season_id)).filter(Boolean))
+    ).sort((a, b) => b.localeCompare(a));
+
+    res.json({ seasons });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load seasons.' });
+  }
+});
+
+/**
+ * LEGACY FILTERS — keep these for backward compatibility elsewhere if needed.
+ * (GamePage no longer calls them after this change.)
+ */
 router.get('/filters/leagues', async (_req, res) => {
   try {
     const { data, error } = await supabase
@@ -182,14 +262,12 @@ router.get('/filters/leagues', async (_req, res) => {
 
     if (error) return res.status(500).json({ error: error.message });
 
-    // dedupe by league_id
     const byId = new Map();
     for (const r of data || []) {
       const lid = String(r.league_id);
       if (!byId.has(lid)) byId.set(lid, { ...r, league_id: lid });
     }
 
-    // group by country
     const groupedByCountry = {};
     for (const r of byId.values()) {
       const country = r.country_name || 'Unknown';
@@ -201,50 +279,26 @@ router.get('/filters/leagues', async (_req, res) => {
         country_flag: r.country_flag,
       });
     }
-
-    // sort leagues within each country
     for (const key of Object.keys(groupedByCountry)) {
       groupedByCountry[key].sort((a, b) => a.league_name.localeCompare(b.league_name));
     }
 
-    // quick tags: popular/first unique names (cap 8)
-    const tags = Array.from(
-      new Set(Array.from(byId.values()).map((r) => r.league_name))
-    ).slice(0, 8);
-
-    res.json({ groupedByCountry, tags });
+    res.json({ groupedByCountry, tags: [] });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to load leagues.' });
   }
 });
 
-// SEASONS (unique + sorted desc)
-router.get('/filters/seasons', async (_req, res) => {
-  try {
-    const { data, error } = await supabase.from(TABLE_LS).select('season_year');
-    if (error) return res.status(500).json({ error: error.message });
-
-    const seasons = Array.from(
-      new Set((data || []).map((r) => Number(r.season_year)).filter(Boolean))
-    ).sort((a, b) => b - a);
-
-    res.json({ seasons });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Failed to load seasons.' });
-  }
-});
-
-// COUNTS (RPC-only; optional user exclusion of last 30 days)
+// COUNTS (new model; RPC-only; optional user exclusion of last 30 days)
 router.post('/counts', async (req, res) => {
   try {
-    const filters = normalizeFilters(req.body);
+    const filters = normalizeNewFilters(req.body);
     const userId = req.body?.userId;
 
-    // 1) Base counts via RPC
-    let poolCount = await rpcCountPlayersAggregated(filters);
-    const totalCount = await rpcTotalPlayers();
+    // 1) Base counts via RPC (new model)
+    let poolCount = await rpcCountPlayersPool(filters);
+    const totalCount = await rpcTotalPlayersDb();
 
     // 2) Optionally exclude players seen by this user in the last 30 days
     if (userId && poolCount > 0) {
@@ -259,13 +313,12 @@ router.post('/counts', async (req, res) => {
         .gte('created_at', dateString);
 
       if (!recentError && Array.isArray(recentGames) && recentGames.length) {
-        // Need exact filtered pool to subtract overlap
-        const filteredIds = await rpcGetPlayerIdsAggregated(filters); // numbers
-        const filteredSet = new Set(filteredIds);
+        const filteredIds = await rpcGetPlayerIdsMarket(filters); // text[]
+        const filteredSet = new Set(filteredIds.map(String));
         let overlap = 0;
         for (const g of recentGames) {
-          const pid = Number(g?.player_id);
-          if (Number.isFinite(pid) && filteredSet.has(pid)) overlap += 1;
+          const pid = String(g?.player_id);
+          if (pid && filteredSet.has(pid)) overlap += 1;
         }
         if (overlap > 0) poolCount = Math.max(0, poolCount - overlap);
       }
@@ -278,14 +331,14 @@ router.post('/counts', async (req, res) => {
   }
 });
 
-// RANDOM PLAYER (RPC-only; build pool -> optional user exclusion -> sample)
+// RANDOM PLAYER (new model; RPC-only)
 router.post('/random-player', async (req, res) => {
   try {
-    const filters = normalizeFilters(req.body);
+    const filters = normalizeNewFilters(req.body);
     const userId = req.body?.userId;
 
-    // 1) Eligible pool (after SUM(appearences) >= min_app)
-    let poolIds = await rpcGetPlayerIdsAggregated(filters); // numbers
+    // 1) Eligible pool
+    let poolIds = await rpcGetPlayerIdsMarket(filters); // text[]
 
     // 2) Optionally exclude last 30 days for this user
     if (userId && poolIds.length) {
@@ -300,10 +353,8 @@ router.post('/random-player', async (req, res) => {
         .gte('created_at', dateString);
 
       if (!error && Array.isArray(recentGames) && recentGames.length) {
-        const exclude = new Set(
-          recentGames.map((g) => Number(g.player_id)).filter(Number.isFinite)
-        );
-        poolIds = poolIds.filter((id) => !exclude.has(id));
+        const exclude = new Set(recentGames.map((g) => String(g.player_id)).filter(Boolean));
+        poolIds = poolIds.filter((id) => !exclude.has(String(id)));
       }
     }
 
@@ -311,7 +362,7 @@ router.post('/random-player', async (req, res) => {
       return res.status(400).json({ error: 'No players found with these filters.' });
     }
 
-    // 3) Pick random and return a "card"
+    // 3) Pick random and return a "card" (still from legacy PS for rich fields)
     const randomId = poolIds[Math.floor(Math.random() * poolIds.length)];
     const card = await getPlayerCard(randomId);
     if (!card) return res.status(500).json({ error: 'Failed to get player data.' });
@@ -323,7 +374,7 @@ router.post('/random-player', async (req, res) => {
       nationality: card[PS.playerNationality],
       position: card[PS.playerPosition],
       photo: card[PS.playerPhoto] || null,
-      transferHistory: card.transferHistory || [],
+      transferHistory: [], // fetched elsewhere if needed
     });
   } catch (e) {
     console.error('POST /random-player error:', e);
@@ -331,7 +382,7 @@ router.post('/random-player', async (req, res) => {
   }
 });
 
-// AUTOCOMPLETE across ALL players (by player_norm_name)
+// AUTOCOMPLETE (kept as before; still uses legacy PS for now)
 router.get('/names', async (req, res) => {
   try {
     const q = (req.query.q || '').toString().trim();
@@ -339,8 +390,8 @@ router.get('/names', async (req, res) => {
 
     const { data, error } = await supabase
       .from(TABLE_PS)
-      .select(`${PS.playerId}, ${PS.playerNormName}, ${PS.playerName}, ${PS.playerPhoto}`)
-      .ilike(PS.playerNormName, `%${q}%`)
+      .select(`player_id, player_norm_name, player_name, player_photo`)
+      .ilike('player_norm_name', `%${q}%`)
       .limit(25);
 
     if (error) return res.status(500).json({ error: error.message });
@@ -348,14 +399,14 @@ router.get('/names', async (req, res) => {
     const seen = new Set();
     const out = [];
     for (const r of data || []) {
-      const id = r[PS.playerId];
+      const id = r.player_id;
       if (seen.has(id)) continue;
       seen.add(id);
       out.push({
         id: String(id),
-        norm_name: r[PS.playerNormName],
-        name: r[PS.playerName],
-        photo: r[PS.playerPhoto],
+        norm_name: r.player_norm_name,
+        name: r.player_name,
+        photo: r.player_photo,
       });
     }
     res.json(out);
@@ -403,7 +454,7 @@ router.get('/transfers/:playerId', async (req, res) => {
   }
 });
 
-// DAILY CHALLENGE
+// DAILY CHALLENGE (unchanged)
 router.get('/daily', async (_req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
@@ -424,12 +475,12 @@ router.get('/daily', async (_req, res) => {
   }
 });
 
+// GENERATE DAILY (kept legacy for now; can be migrated later if you want)
 router.post('/generate-daily-challenge', async (req, res) => {
   try {
     const { date, filters } = req.body;
-
-    // 1) If not provided, pull default filters
     let challengeFilters = filters;
+
     if (!challengeFilters || !challengeFilters.leagues || !challengeFilters.seasons) {
       const { data: settings, error: settingsError } = await supabase
         .from('daily_challenge_settings')
@@ -440,7 +491,7 @@ router.post('/generate-daily-challenge', async (req, res) => {
       challengeFilters = settings;
     }
 
-    // 2) Build eligible IDs via SUM(appearences) RPC and sample in Node
+    // Legacy RPC (sum(appearances))
     const ids = await supabase
       .rpc('rpc_get_player_ids_sumapps', {
         leagues: (challengeFilters.leagues && challengeFilters.leagues.length)
@@ -491,17 +542,15 @@ router.get('/player/:playerId', async (req, res) => {
   }
 });
 
-// -------- NEW: LIMITS for a user (games/points + daily status) --------
+// -------- LIMITS for a user (unchanged) --------
 router.get('/limits/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
     if (!userId) return res.status(400).json({ error: 'Missing userId' });
 
-    // Start of "today" in UTC
     const startOfTodayUtc = new Date();
     startOfTodayUtc.setUTCHours(0, 0, 0, 0);
 
-    // Fetch today's games and all-time points
     const [{ data: todayGames, error: todayErr }, { data: allGames, error: allErr }] =
       await Promise.all([
         supabase
@@ -535,7 +584,7 @@ router.get('/limits/:userId', async (req, res) => {
     let dailyPlayerName = null;
     let dailyPlayerPhoto = null;
     if (dailyGame?.player_id != null) {
-      const card = await getPlayerCard(Number(dailyGame.player_id));
+      const card = await getPlayerCard(String(dailyGame.player_id));
       dailyPlayerName = card?.[PS.playerName] || null;
       dailyPlayerPhoto = card?.[PS.playerPhoto] || null;
     }
@@ -548,7 +597,6 @@ router.get('/limits/:userId', async (req, res) => {
       pointsTotal,
       dailyPlayerName,
       dailyPlayerPhoto,
-      // dailyBonus: dailyPlayed ? false : true, // optional if you later want 10+1 display
     });
   } catch (error) {
     console.error('GET /limits/:userId error:', error);
@@ -559,10 +607,8 @@ router.get('/limits/:userId', async (req, res) => {
 // Simple player pool count (kept; not used by main flow)
 router.get('/player-pool-count', async (_req, res) => {
   try {
-    // You can wire this to rpcTotalPlayers() if you want:
-    // const total = await rpcTotalPlayers();
-    // return res.json({ count: total });
-    res.json({ count: 64380 });
+    const total = await rpcTotalPlayersDb();
+    res.json({ count: total });
   } catch (error) {
     console.error('Error fetching player pool count:', error);
     res.status(500).json({ error: error.message });
