@@ -13,7 +13,9 @@ import {
   UsersRound,
   Trophy,
   Clock,
-  TrendingUp
+  TrendingUp,
+  CheckSquare,
+  CalendarClock
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import SelectedChips from '../components/SelectedChips';
@@ -21,6 +23,47 @@ import { getCompetitions, getSeasons } from '../api';
 
 function classNames(...s) {
   return s.filter(Boolean).join(' ');
+}
+const fmtCurrency = (n) =>
+  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(Number(n || 0));
+
+function Section({ title, icon, collapsed, onToggle, actions, children }) {
+  // Header actions won't toggle collapse.
+  return (
+    <div className="rounded-lg border bg-white/60">
+      <div className="flex items-center justify-between px-3 py-2">
+        <button type="button" onClick={onToggle} className="inline-flex items-center gap-2">
+          {icon}
+          <span className="font-medium text-green-900">{title}</span>
+          {collapsed ? <ChevronDown className="h-4 w-4 ml-1" /> : <ChevronUp className="h-4 w-4 ml-1" />}
+        </button>
+        <div className="flex items-center gap-2">{actions}</div>
+      </div>
+      {!collapsed && <div className="p-3 pt-0">{children}</div>}
+    </div>
+  );
+}
+
+function PresetButton({ onClick, children, title, active = false }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onClick();
+      }}
+      title={title}
+      className={classNames(
+        'inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md border transition-colors',
+        active
+          ? 'bg-green-600 text-white border-green-700'
+          : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+      )}
+    >
+      {children}
+    </button>
+  );
 }
 
 export default function ProfilePage() {
@@ -43,7 +86,11 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [loadingFilters, setLoadingFilters] = useState(true);
+
   const [filtersCollapsed, setFiltersCollapsed] = useState(true);
+  const [compCollapsed, setCompCollapsed] = useState(false);
+  const [seasonsCollapsed, setSeasonsCollapsed] = useState(false);
+  const [mvCollapsed, setMvCollapsed] = useState(false);
 
   // NEW model state
   const [groupedCompetitions, setGroupedCompetitions] = useState({});
@@ -87,8 +134,6 @@ export default function ProfilePage() {
       if (!user?.id) return;
       try {
         setLoading(true);
-
-        // Recent 20 for the list
         const { data: games, error: recentErr } = await supabase
           .from('games_records')
           .select('id, player_name, won, points_earned, time_taken_seconds, guesses_attempted, hints_used, created_at, is_daily_challenge')
@@ -99,7 +144,6 @@ export default function ProfilePage() {
         if (recentErr) throw recentErr;
         setRecentGames(games || []);
 
-        // ALL games for stats (no limit)
         const { data: allGames, error: allErr } = await supabase
           .from('games_records')
           .select('won, points_earned, time_taken_seconds')
@@ -120,13 +164,7 @@ export default function ProfilePage() {
         });
       } catch (e) {
         console.error('Error fetching profile stats:', e);
-        // Fall back to zeros on error
-        setLocalStats({
-          games_played: 0,
-          total_points: 0,
-          avg_time: 0,
-          success_rate: 0
-        });
+        setLocalStats({ games_played: 0, total_points: 0, avg_time: 0, success_rate: 0 });
         setRecentGames([]);
       } finally {
         setLoading(false);
@@ -146,15 +184,15 @@ export default function ProfilePage() {
   // Load filters (NEW model)
   useEffect(() => {
     let cancelled = false;
-
     async function loadFilters() {
       try {
         setLoadingFilters(true);
         const compsRes = await getCompetitions();
         if (!cancelled) {
-          setGroupedCompetitions(compsRes.groupedByCountry || {});
+          const grouped = compsRes.groupedByCountry || {};
+          setGroupedCompetitions(grouped);
           const initialCollapse = {};
-          Object.keys(compsRes.groupedByCountry || {}).forEach((c) => (initialCollapse[c] = false));
+          Object.keys(grouped).forEach((c) => (initialCollapse[c] = false));
           setExpandedCountries(initialCollapse);
         }
         const seasonsRes = await getSeasons();
@@ -165,7 +203,6 @@ export default function ProfilePage() {
         if (!cancelled) setLoadingFilters(false);
       }
     }
-
     loadFilters();
     return () => { cancelled = true; };
   }, []);
@@ -214,7 +251,6 @@ export default function ProfilePage() {
     try {
       setError(null);
       setLoading(true);
-
       const publicUrl = await uploadAvatar(file);
       const { error: authError } = await supabase.auth.updateUser({
         data: { avatar_url: publicUrl, profile_photo_url: publicUrl }
@@ -277,12 +313,28 @@ export default function ProfilePage() {
     return enriched;
   }, [groupedCompetitions]);
 
-  const handleClearCompetitions = () => setDefaultCompetitionIds([]);
   const toggleCountry = (country) => setExpandedCountries(prev => ({ ...prev, [country]: !prev[country] }));
   const toggleCompetition = (competitionId) =>
     setDefaultCompetitionIds(prev => (prev.includes(competitionId) ? prev.filter(id => id !== competitionId) : [...prev, competitionId]));
+
+  const handleClearCompetitions = () => setDefaultCompetitionIds([]);
+  const handleSelectAllCompetitions = () => {
+    const all = [];
+    Object.values(competitionsWithCountry).forEach(arr => (arr || []).forEach(c => all.push(String(c.competition_id))));
+    setDefaultCompetitionIds(all);
+  };
+
+  const top10Ids = useMemo(() => {
+    const arr = [];
+    Object.values(competitionsWithCountry).forEach(arrC => (arrC || []).forEach(c => arr.push(c)));
+    arr.sort((a, b) => (Number(b.total_value_eur || 0) - Number(a.total_value_eur || 0)));
+    return arr.slice(0, 10).map(c => String(c.competition_id));
+  }, [competitionsWithCountry]);
+  const handleTop10Competitions = () => setDefaultCompetitionIds(top10Ids);
+
   const handleLast5Seasons = () => setDefaultSeasons(allSeasons.slice(0, 5));
   const handleClearSeasons = () => setDefaultSeasons([]);
+  const handleSelectAllSeasons = () => setDefaultSeasons(allSeasons);
   const toggleSeason = (season) =>
     setDefaultSeasons(prev => (prev.includes(season) ? prev.filter(s => s !== season) : [...prev, season]));
 
@@ -446,34 +498,33 @@ export default function ProfilePage() {
                   <Filter className="h-5 w-5 text-green-700" />
                   <h3 className="text-lg font-semibold text-green-900">Default Filters</h3>
                 </div>
-                <button
-                  className="text-gray-600 hover:text-gray-800"
-                  onClick={() => setFiltersCollapsed(c => !c)}
-                >
+                <button className="text-gray-600 hover:text-gray-800" onClick={() => setFiltersCollapsed(c => !c)} type="button">
                   {filtersCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
                 </button>
               </div>
 
               {!filtersCollapsed && !loadingFilters && (
                 <div className="mt-4 space-y-6">
-                  {/* Competitions Filter */}
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
+                  {/* Competitions */}
+                  <Section
+                    title="Competitions"
+                    icon={<Star className="h-4 w-4 text-green-700" />}
+                    collapsed={compCollapsed}
+                    onToggle={() => setCompCollapsed(v => !v)}
+                    actions={
                       <div className="flex items-center gap-2">
-                        <Star className="h-4 w-4 text-green-700" />
-                        <span className="font-medium text-green-900">Competitions</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={handleClearCompetitions}
-                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                          Clear
+                        <button onClick={handleTop10Competitions} type="button" className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
+                          <Star className="h-3 w-3" /> Top 10
+                        </button>
+                        <button onClick={handleSelectAllCompetitions} type="button" className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
+                          <CheckSquare className="h-3 w-3" /> Select All
+                        </button>
+                        <button onClick={handleClearCompetitions} type="button" className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
+                          <Trash2 className="h-3 w-3" />Clear All
                         </button>
                       </div>
-                    </div>
-
+                    }
+                  >
                     <SelectedChips
                       title="Chosen competitions"
                       items={defaultCompetitionIds}
@@ -482,23 +533,19 @@ export default function ProfilePage() {
                       onRemoveItem={(id) => setDefaultCompetitionIds(prev => prev.filter(x => x !== id))}
                       hoverClose
                     />
-
                     <div className="max-h-96 overflow-y-auto pr-2">
                       {Object.entries(competitionsWithCountry)
                         .sort(([a], [b]) => a.localeCompare(b))
                         .map(([country, comps]) => (
                           <div key={country} className="mb-2">
                             <button
+                              type="button"
                               onClick={() => toggleCountry(country)}
                               className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
                             >
                               <div className="flex items-center gap-2">
                                 {comps[0]?.flag_url && (
-                                  <img
-                                    src={comps[0].flag_url}
-                                    alt={country}
-                                    className="w-6 h-4 object-cover rounded"
-                                  />
+                                  <img src={comps[0].flag_url} alt={country} className="w-6 h-4 object-cover rounded" />
                                 )}
                                 <span>{country}</span>
                                 <span className="text-xs text-gray-500">({comps.length})</span>
@@ -509,16 +556,14 @@ export default function ProfilePage() {
                             {expandedCountries[country] && (
                               <div className="ml-8 space-y-2 mt-2">
                                 {comps.map((c) => (
-                                  <label key={c.competition_id} className="flex items-center gap-2 cursor-pointer">
+                                  <label key={c.competition_id} className="flex items-center gap-2 cursor-pointer" onClick={(e) => e.stopPropagation()}>
                                     <input
                                       type="checkbox"
                                       checked={defaultCompetitionIds.includes(String(c.competition_id))}
                                       onChange={() => toggleCompetition(String(c.competition_id))}
                                       className="rounded"
                                     />
-                                    {c.logo_url && (
-                                      <img src={c.logo_url} alt={c.competition_name} className="w-5 h-5 object-contain" />
-                                    )}
+                                    {c.logo_url && <img src={c.logo_url} alt={c.competition_name} className="w-5 h-5 object-contain" />}
                                     <span className="text-sm">{c.competition_name}</span>
                                   </label>
                                 ))}
@@ -527,69 +572,95 @@ export default function ProfilePage() {
                           </div>
                         ))}
                     </div>
-                  </div>
+                  </Section>
 
-                  {/* Seasons + Min Market Value */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
-                    <div className="md:col-span-2">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <UsersRound className="h-4 w-4 text-green-700" />
-                          <span className="font-medium text-green-900">Seasons</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={handleLast5Seasons}
-                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                          >
-                            Last 5
-                          </button>
-                          <button
-                            onClick={handleClearSeasons}
-                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                            Clear
-                          </button>
-                        </div>
+                  {/* Seasons */}
+                  <Section
+                    title="Seasons"
+                    icon={<UsersRound className="h-4 w-4 text-green-700" />}
+                    collapsed={seasonsCollapsed}
+                    onToggle={() => setSeasonsCollapsed(v => !v)}
+                    actions={
+                      <div className="flex items-center gap-2">
+                        <button type="button" onClick={handleLast5Seasons} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
+                          <CalendarClock className="h-3 w-3" /> Last 5
+                        </button>
+                        <button type="button" onClick={handleSelectAllSeasons} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
+                          <CheckSquare className="h-3 w-3" /> Select All
+                        </button>
+                        <button type="button" onClick={handleClearSeasons} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
+                          <Trash2 className="h-3 w-3" />Clear All
+                        </button>
                       </div>
+                    }
+                  >
+                    <SelectedChips title="Chosen seasons" items={defaultSeasons} onClear={handleClearSeasons} />
+                    <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-2">
+                      {allSeasons.map((season) => (
+                        <button
+                          key={season}
+                          type="button"
+                          onClick={() => toggleSeason(season)}
+                          className={classNames(
+                            'px-2 py-1 text-sm rounded-md border',
+                            defaultSeasons.includes(season)
+                              ? 'bg-green-100 border-green-500 text-green-700'
+                              : 'bg-white hover:bg-gray-50'
+                          )}
+                        >
+                          {season}
+                        </button>
+                      ))}
+                    </div>
+                  </Section>
 
-                      <SelectedChips title="Chosen seasons" items={defaultSeasons} onClear={handleClearSeasons} />
-
-                      <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-2">
-                        {allSeasons.map((season) => (
-                          <button
-                            key={season}
-                            onClick={() => toggleSeason(season)}
-                            className={classNames(
-                              'px-2 py-1 text-sm rounded-md border',
-                              defaultSeasons.includes(season)
-                                ? 'bg-green-100 border-green-500 text-green-700'
-                                : 'bg-white hover:bg-gray-50'
-                            )}
-                          >
-                            {season}
-                          </button>
-                        ))}
+                  {/* Min Market Value (€) — step 100k + presets */}
+                  <Section
+                    title="Minimum Market Value (€)"
+                    icon={<UsersRound className="h-4 w-4 text-green-700" />}
+                    collapsed={mvCollapsed}
+                    onToggle={() => setMvCollapsed(v => !v)}
+                  >
+                    <div className="flex flex-col gap-3">
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="number"
+                          value={defaultMinMarket}
+                          onChange={(e) => setDefaultMinMarket(parseInt(e.target.value) || 0)}
+                          min="0"
+                          step="100000"
+                          className="w-40 border rounded-md px-2 py-1 text-center"
+                        />
+                        <div className="text-sm text-gray-600">Current: {fmtCurrency(defaultMinMarket)}</div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <PresetButton title="Clear" onClick={() => setDefaultMinMarket(0)} active={defaultMinMarket === 0}>
+                          <Trash2 size={14} /> Clear
+                        </PresetButton>
+                        <PresetButton onClick={() => setDefaultMinMarket(100000)} active={defaultMinMarket === 100000}>
+                          <Star size={14} /> 100K €
+                        </PresetButton>
+                        <PresetButton onClick={() => setDefaultMinMarket(500000)} active={defaultMinMarket === 500000}>
+                          <Star size={14} /> 500K €
+                        </PresetButton>
+                        <PresetButton onClick={() => setDefaultMinMarket(1000000)} active={defaultMinMarket === 1000000}>
+                          <Star size={14} /> 1M €
+                        </PresetButton>
+                        <PresetButton onClick={() => setDefaultMinMarket(5000000)} active={defaultMinMarket === 5000000}>
+                          <Star size={14} /> 5M €
+                        </PresetButton>
+                        <PresetButton onClick={() => setDefaultMinMarket(10000000)} active={defaultMinMarket === 10000000}>
+                          <Star size={14} /> 10M €
+                        </PresetButton>
+                        <PresetButton onClick={() => setDefaultMinMarket(25000000)} active={defaultMinMarket === 25000000}>
+                          <Star size={14} /> 25M €
+                        </PresetButton>
+                        <PresetButton onClick={() => setDefaultMinMarket(50000000)} active={defaultMinMarket === 50000000}>
+                          <Star size={14} /> 50M €
+                        </PresetButton>
                       </div>
                     </div>
-
-                    {/* Min Market Value (€) */}
-                    <div className="flex flex-col items-center">
-                      <div className="flex items-center gap-2 mb-2">
-                        <UsersRound className="h-4 w-4 text-green-700" />
-                        <span className="font-medium text-green-900">Min Market Value (€)</span>
-                      </div>
-                      <input
-                        type="number"
-                        value={defaultMinMarket}
-                        onChange={(e) => setDefaultMinMarket(parseInt(e.target.value) || 0)}
-                        min="0"
-                        className="w-full px-3 py-2 border rounded-md text-center"
-                      />
-                      <div className="text-xs text-gray-500 text-center mt-1">Maximum career market value threshold</div>
-                    </div>
-                  </div>
+                  </Section>
 
                   <div className="flex justify-end mt-4">
                     <button

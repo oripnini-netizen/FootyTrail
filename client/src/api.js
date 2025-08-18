@@ -26,10 +26,10 @@ async function jfetch(path, opts = {}) {
   return res.json();
 }
 
-/* === Legacy leagues (kept for pages still importing getLeagues) === */
+/* === Legacy leagues (kept for any old imports that still call it) === */
 export const getLeagues = () => jfetch('/filters/leagues');
 
-/* === New filters === */
+/* === New filters (competitions + seasons) === */
 export const getCompetitions = () => jfetch('/filters/competitions');
 export const getSeasons       = () => jfetch('/filters/seasons');
 
@@ -60,7 +60,7 @@ export async function getLimits(userId) {
 
 export const getDailyChallenge = () => jfetch('/daily');
 
-/* === Names, profile, uploads (unchanged placeholders) === */
+/* === Names, profile, uploads (placeholders unchanged here) === */
 export const suggestNames  = (q) => jfetch(`/names?q=${encodeURIComponent(q)}`);
 export const getProfile    = async () => ({});
 export const updateProfile = async () => ({});
@@ -81,6 +81,7 @@ export async function saveGameCompleted(gameData) {
   return response.json();
 }
 
+/** Transfers via our backend proxy to Transfermarkt CE API */
 export const fetchTransfers = async (playerId) => {
   try {
     const response = await jfetch(`/transfers/${playerId}`);

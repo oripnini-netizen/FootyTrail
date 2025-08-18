@@ -1,8 +1,7 @@
 // routes/api.js
-// Unified backend API routes — STRICT RPC-ONLY
-// Now using the *new* schema for pool building (competitions + players_in_seasons)
-// and "minimum market value" filters.
-// We still use the legacy players_seasons table only to build the player card (photo, etc.).
+// Backend API routes — STRICT RPC-ONLY for DB work
+// Built entirely on NEW players_in_seasons (no players_seasons fallback).
+// Transfer history proxied from Transfermarkt CE (no RapidAPI).
 
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
@@ -16,52 +15,45 @@ const router = express.Router();
 
 // ---------- Env / Supabase ----------
 const supabaseUrl = process.env.SUPABASE_URL;
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const rapidKey = process.env.RAPIDAPI_KEY || '';
-
+const serviceKey  = process.env.SUPABASE_SERVICE_ROLE_KEY;
 if (!supabaseUrl || !serviceKey) {
   throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env');
 }
-
 const supabase = createClient(supabaseUrl, serviceKey);
 
-// ---------- Legacy tables (for player card only) ----------
-const TABLE_PS = 'players_seasons';      // legacy
-const TABLE_LS = 'leagues_seasons';      // legacy (kept for BC endpoints)
-
-// ---------- New tables (filters + pool) ----------
-const TABLE_COMP = 'competitions';
-const TABLE_PIS = 'players_in_seasons';
-
-// ---------- Legacy PS column map (for card) ----------
-const PS = {
-  seasonYear: 'season_year',
-  playerId: 'player_id',
-  playerName: 'player_name',
-  playerAge: 'player_age',
-  playerNationality: 'player_nationality',
-  playerPhoto: 'player_photo',
-  playerPosition: 'player_position',
-  leagueId: 'league_id',
-};
-
-// ---------- RapidAPI transfers ----------
-const RAPID_API_HOST = 'api-football-v1.p.rapidapi.com';
-const RAPID_API_BASE = `https://${RAPID_API_HOST}/v3`;
+// ---------- Tables (new model) ----------
+const TABLE_COMP   = 'competitions';
+const TABLE_PIS    = 'players_in_seasons';
+const TABLE_NOTIFS = 'notifications'; // for navbar unread checks
+// (Legacy list endpoint only)
+const TABLE_LS     = 'leagues_seasons';
 
 // ---------- Helpers ----------
-/**
- * Normalize filters coming from client (new model).
- * competitions: text[]
- * seasons: text[]
- * minMarketValue: number (EUR)
- */
+/** Try to safely stringify a value that might be a scalar or an object. */
+function toIdString(v) {
+  if (v == null) return null;
+  if (typeof v === 'object') {
+    // Common keys we might see coming from the client or RPCs
+    const guess =
+      v.player_id ??
+      v.id ??
+      v.value ??
+      v.competition_id ??
+      v.season_id ??
+      null;
+    return guess != null ? String(guess) : String(v);
+  }
+  return String(v);
+}
+
+/** Normalize filters coming from client (new model). */
 function normalizeNewFilters(raw = {}) {
   const competitionsArr = Array.isArray(raw.competitions)
-    ? raw.competitions.map(String).filter(Boolean)
+    ? raw.competitions.map(toIdString).filter(Boolean)
     : null;
+
   const seasonsArr = Array.isArray(raw.seasons)
-    ? raw.seasons.map(String).filter(Boolean)
+    ? raw.seasons.map(toIdString).filter(Boolean)
     : null;
 
   return {
@@ -71,67 +63,71 @@ function normalizeNewFilters(raw = {}) {
   };
 }
 
-/**
- * Legacy helper (kept so /filters/leagues keeps working for anything else that still calls it).
- */
-function normalizeLegacyFilters(raw = {}) {
-  const leaguesArr = Array.isArray(raw.leagues)
-    ? raw.leagues.map((x) => Number(x)).filter(Number.isFinite)
-    : null;
-  const seasonsArr = Array.isArray(raw.seasons)
-    ? raw.seasons.map((x) => Number(x)).filter(Number.isFinite)
-    : null;
-
-  return {
-    leagues: leaguesArr && leaguesArr.length ? leaguesArr : null,   // bigint[]
-    seasons: seasonsArr && seasonsArr.length ? seasonsArr : null,   // bigint[]
-    minAppearances: Number(raw.minAppearances) || 0,
-  };
+function parseAgeFromDobAge(dobAge) {
+  // examples: "1992-05-01 (33)"
+  if (!dobAge) return null;
+  const m = String(dobAge).match(/\((\d{1,2})\)/);
+  return m ? Number(m[1]) : null;
 }
 
-async function getPlayerCard(playerId) {
-  // We still build the "card" from the legacy players_seasons table
-  const idStr = String(playerId); // player_id column is TEXT
+// ---------- Player card from players_in_seasons ----------
+async function getPlayerCardFromPIS(playerId) {
+  const pid = toIdString(playerId);
+  if (!pid) return null;
+
   const { data, error } = await supabase
-    .from(TABLE_PS)
+    .from(TABLE_PIS)
     .select(
-      [
-        PS.playerId,
-        PS.playerName,
-        PS.playerAge,
-        PS.playerNationality,
-        PS.playerPhoto,
-        PS.playerPosition,
-        PS.seasonYear,
-        PS.leagueId,
-      ].join(',')
+      'player_id, player_name, player_position, player_nationality, player_dob_age, player_photo, season_id'
     )
-    .eq(PS.playerId, idStr)
-    .order(PS.seasonYear, { ascending: false })
+    .eq('player_id', pid)          // player_id is BIGINT; string works fine
+    .order('season_id', { ascending: false }) // season_id is text "2025"
     .limit(1);
+
   if (error) throw error;
-  return data?.[0] || null;
+  const row = data?.[0];
+  if (!row) return null;
+
+  return {
+    id: String(row.player_id),
+    name: row.player_name || null,
+    nationality: row.player_nationality || null,
+    position: row.player_position || null,
+    age: parseAgeFromDobAge(row.player_dob_age),
+    season_id: row.season_id || null,
+    photo: row.player_photo || null,
+  };
 }
 
 // ---------- RPC wrappers (new model) ----------
 async function rpcCountPlayersPool({ competitions, seasons, minMarketValue }) {
   const { data, error } = await supabase.rpc('rpc_count_players_pool', {
-    competitions,               // text[] or null
-    seasons,                    // text[] or null
+    competitions,                 // text[] or null
+    seasons,                      // text[] or null
     min_market_value: minMarketValue || 0,
   });
   if (error) throw error;
   return typeof data === 'number' ? data : Number(data);
 }
 
+/** Accepts either [123, 456] OR [{player_id:123}, {player_id:456}] from the RPC. */
 async function rpcGetPlayerIdsMarket({ competitions, seasons, minMarketValue }) {
   const { data, error } = await supabase.rpc('rpc_get_player_ids_market', {
-    competitions,               // text[] or null
-    seasons,                    // text[] or null
+    competitions,
+    seasons,
     min_market_value: minMarketValue || 0,
   });
   if (error) throw error;
-  return (data || []).map(String); // player_id text[]
+
+  return (data || [])
+    .map((row) => {
+      // row can be a scalar or an object with player_id
+      if (typeof row === 'object' && row !== null) {
+        return toIdString(row.player_id ?? row);
+      }
+      return toIdString(row);
+    })
+    .filter(Boolean);
 }
 
 async function rpcTotalPlayersDb() {
@@ -140,59 +136,71 @@ async function rpcTotalPlayersDb() {
   return typeof data === 'number' ? data : Number(data);
 }
 
-// ---------- External Transfers ----------
-async function getPlayerTransfers(playerId) {
-  try {
-    const response = await fetch(
-      `${RAPID_API_BASE}/transfers?player=${encodeURIComponent(playerId)}`,
-      {
-        headers: {
-          'X-RapidAPI-Key': rapidKey,
-          'X-RapidAPI-Host': RAPID_API_HOST,
-        },
-      }
-    );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Transfers API error:', response.status, errorText);
-      return [];
-    }
-
-    const data = await response.json();
-    const transfers = data.response?.[0]?.transfers || [];
-
-    const transformed = transfers.map((t) => ({
-      date: t?.date || null,
-      type: t?.type || null,
-      in: {
-        name: t?.teams?.in?.name || null,
-        logo: t?.teams?.in?.logo || null,
-      },
-      out: {
-        name: t?.teams?.out?.name || null,
-        logo: t?.teams?.out?.logo || null,
-      },
-    }));
-
-    transformed.sort((a, b) => {
-      const da = Date.parse(a.date || 0);
-      const db = Date.parse(b.date || 0);
-      return da - db;
-    });
-
-    return transformed;
-  } catch (err) {
-    console.error('Transfers fetch failed:', err);
-    return [];
-  }
+// ---------- Transfermarkt CE API proxy ----------
+function standardizeFee(feeRaw = '') {
+  const x = (feeRaw || '').toLowerCase();
+  if (!x) return null;
+  if (x.includes('free')) return 'Free transfer';
+  if (x.includes('end of')) return 'End of loan';
+  if (x.includes('fee') && x.includes('loan')) return 'Paid loan';
+  if (x.includes('loan')) return 'Loan';
+  if (/[mk]|th\./.test(x)) return 'Transfer';
+  return null;
 }
 
-// ---------- Routes ----------
+const transfersCache = new Map(); // key: playerId -> { ts, data }
+const TRANSFERS_TTL_MS = 10 * 60 * 1000;
 
-/**
- * NEW FILTERS — competitions grouped by country (from public.competitions)
- */
+async function getTransfermarktTransfers(playerId) {
+  const now = Date.now();
+  const cached = transfersCache.get(playerId);
+  if (cached && now - cached.ts < TRANSFERS_TTL_MS) return cached.data;
+
+  const url = `https://www.transfermarkt.com/ceapi/transferHistory/list/${encodeURIComponent(
+    playerId
+  )}`;
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36',
+      Accept: 'application/json,text/plain,*/*',
+      'Accept-Language': 'en-US,en;q=0.9',
+      Referer: 'https://www.transfermarkt.com/',
+    },
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    console.error('Transfermarkt CE API error', res.status, txt);
+    return [];
+  }
+
+  const json = await res.json().catch(() => null);
+  const rawTransfers = json?.transfers || [];
+
+  const normalized = rawTransfers.map((t) => {
+    const inTeam  = t?.to   || {};
+    const outTeam = t?.from || {};
+    const dateStr = t?.dateUnformatted
+      ? new Date(t.dateUnformatted).toISOString().slice(0, 10)
+      : null;
+
+    return {
+      season: t?.season || null,
+      date: dateStr,
+      type: standardizeFee(t?.fee),
+      valueRaw: t?.fee || null,
+      in:  { name: inTeam.clubName || null,  logo: inTeam['clubEmblem-2x'] || inTeam.clubEmblem || null,  flag: inTeam.countryFlag || null },
+      out: { name: outTeam.clubName || null, logo: outTeam['clubEmblem-2x'] || outTeam.clubEmblem || null, flag: outTeam.countryFlag || null },
+    };
+  });
+
+  normalized.sort((a, b) => Date.parse(a.date || 0) - Date.parse(b.date || 0));
+  transfersCache.set(playerId, { ts: now, data: normalized });
+  return normalized;
+}
+
+// ---------- Filters endpoints ----------
 router.get('/filters/competitions', async (_req, res) => {
   try {
     const { data, error } = await supabase
@@ -201,7 +209,6 @@ router.get('/filters/competitions', async (_req, res) => {
 
     if (error) return res.status(500).json({ error: error.message });
 
-    // group by country
     const groupedByCountry = {};
     for (const r of data || []) {
       const country = r.country || 'Unknown';
@@ -215,8 +222,6 @@ router.get('/filters/competitions', async (_req, res) => {
         total_value_eur: r.total_value_eur,
       });
     }
-
-    // sort competitions within each country
     for (const key of Object.keys(groupedByCountry)) {
       groupedByCountry[key].sort((a, b) => a.competition_name.localeCompare(b.competition_name));
     }
@@ -228,38 +233,28 @@ router.get('/filters/competitions', async (_req, res) => {
   }
 });
 
-/**
- * NEW FILTERS — seasons (distinct from players_in_seasons, sorted desc)
- */
+// seasons via RPC (no 1k page limit)
 router.get('/filters/seasons', async (_req, res) => {
   try {
-    const { data, error } = await supabase
-      .from(TABLE_PIS)
-      .select('season_id');
-
-    if (error) return res.status(500).json({ error: error.message });
-
-    const seasons = Array.from(
-      new Set((data || []).map((r) => String(r.season_id)).filter(Boolean))
-    ).sort((a, b) => b.localeCompare(a));
-
+    const { data, error } = await supabase.rpc('rpc_distinct_seasons');
+    if (error) throw error;
+    const seasons = (data || [])
+      .map((s) => String(s).trim())
+      .filter(Boolean)
+      .sort((a, b) => Number(b) - Number(a));
     res.json({ seasons });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Failed to load seasons.' });
+  } catch (err) {
+    console.error('[filters/seasons] error:', err);
+    res.status(500).json({ error: 'Failed to load seasons' });
   }
 });
 
-/**
- * LEGACY FILTERS — keep these for backward compatibility elsewhere if needed.
- * (GamePage no longer calls them after this change.)
- */
+// (legacy, not used by new UI)
 router.get('/filters/leagues', async (_req, res) => {
   try {
     const { data, error } = await supabase
       .from(TABLE_LS)
       .select('league_id, league_name, logo, country_name, country_flag');
-
     if (error) return res.status(500).json({ error: error.message });
 
     const byId = new Map();
@@ -290,14 +285,14 @@ router.get('/filters/leagues', async (_req, res) => {
   }
 });
 
-// COUNTS (new model; RPC-only; optional user exclusion of last 30 days)
+// ---------- Counts / Random player ----------
 router.post('/counts', async (req, res) => {
   try {
     const filters = normalizeNewFilters(req.body);
-    const userId = req.body?.userId;
+    const userId  = req.body?.userId;
 
-    // 1) Base counts via RPC (new model)
-    let poolCount = await rpcCountPlayersPool(filters);
+    // 1) Base counts via RPC
+    let poolCount  = await rpcCountPlayersPool(filters);
     const totalCount = await rpcTotalPlayersDb();
 
     // 2) Optionally exclude players seen by this user in the last 30 days
@@ -331,14 +326,13 @@ router.post('/counts', async (req, res) => {
   }
 });
 
-// RANDOM PLAYER (new model; RPC-only)
 router.post('/random-player', async (req, res) => {
   try {
     const filters = normalizeNewFilters(req.body);
-    const userId = req.body?.userId;
+    const userId  = req.body?.userId;
 
     // 1) Eligible pool
-    let poolIds = await rpcGetPlayerIdsMarket(filters); // text[]
+    let poolIds = await rpcGetPlayerIdsMarket(filters); // array of strings
 
     // 2) Optionally exclude last 30 days for this user
     if (userId && poolIds.length) {
@@ -362,19 +356,19 @@ router.post('/random-player', async (req, res) => {
       return res.status(400).json({ error: 'No players found with these filters.' });
     }
 
-    // 3) Pick random and return a "card" (still from legacy PS for rich fields)
+    // 3) Pick random and return a "card" from NEW PIS table
     const randomId = poolIds[Math.floor(Math.random() * poolIds.length)];
-    const card = await getPlayerCard(randomId);
+    const card = await getPlayerCardFromPIS(randomId);
     if (!card) return res.status(500).json({ error: 'Failed to get player data.' });
 
     return res.json({
-      id: card[PS.playerId],
-      name: card[PS.playerName],
-      age: card[PS.playerAge],
-      nationality: card[PS.playerNationality],
-      position: card[PS.playerPosition],
-      photo: card[PS.playerPhoto] || null,
-      transferHistory: [], // fetched elsewhere if needed
+      id: card.id,
+      name: card.name,
+      age: card.age,
+      nationality: card.nationality,
+      position: card.position,
+      photo: card.photo,
+      transferHistory: [], // fetched separately if needed
     });
   } catch (e) {
     console.error('POST /random-player error:', e);
@@ -382,41 +376,46 @@ router.post('/random-player', async (req, res) => {
   }
 });
 
-// AUTOCOMPLETE (kept as before; still uses legacy PS for now)
+// ---------- Autocomplete (new table, norm_name) ----------
 router.get('/names', async (req, res) => {
   try {
     const q = (req.query.q || '').toString().trim();
     if (!q) return res.json([]);
 
+    // token-aware LIKE: "%word1%word2%...%"
+    const tokens  = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const pattern = `%${tokens.join('%')}%`;
+
     const { data, error } = await supabase
-      .from(TABLE_PS)
-      .select(`player_id, player_norm_name, player_name, player_photo`)
-      .ilike('player_norm_name', `%${q}%`)
-      .limit(25);
+      .from(TABLE_PIS)
+      .select('player_id, player_norm_name, player_name, player_photo')
+      .ilike('player_norm_name', pattern)
+      .limit(50);
 
     if (error) return res.status(500).json({ error: error.message });
 
+    // unique by player_id (since table has multiple seasons per player)
     const seen = new Set();
-    const out = [];
+    const out  = [];
     for (const r of data || []) {
-      const id = r.player_id;
+      const id = String(r.player_id);
       if (seen.has(id)) continue;
       seen.add(id);
       out.push({
-        id: String(id),
+        id,
         norm_name: r.player_norm_name,
         name: r.player_name,
-        photo: r.player_photo,
+        photo: r.player_photo || null,
       });
     }
-    res.json(out);
+    res.json(out.slice(0, 25));
   } catch (e) {
     console.error('GET /names error:', e);
     res.status(500).json({ error: 'Failed to get name suggestions.' });
   }
 });
 
-// SAVE GAME RECORD
+// ---------- Save game ----------
 router.post('/games', authRequired, async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -442,11 +441,11 @@ router.post('/games', authRequired, async (req, res) => {
   }
 });
 
-// TRANSFERS by player
+// ---------- Transfers by player (Transfermarkt proxy) ----------
 router.get('/transfers/:playerId', async (req, res) => {
   try {
     const { playerId } = req.params;
-    const transfers = await getPlayerTransfers(playerId);
+    const transfers = await getTransfermarktTransfers(String(playerId));
     res.json({ transfers: transfers || [] });
   } catch (error) {
     console.error('Error fetching transfers:', error);
@@ -454,7 +453,7 @@ router.get('/transfers/:playerId', async (req, res) => {
   }
 });
 
-// DAILY CHALLENGE (unchanged)
+// ---------- Daily challenge ----------
 router.get('/daily', async (_req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
@@ -475,50 +474,58 @@ router.get('/daily', async (_req, res) => {
   }
 });
 
-// GENERATE DAILY (kept legacy for now; can be migrated later if you want)
 router.post('/generate-daily-challenge', async (req, res) => {
   try {
-    const { date, filters } = req.body;
-    let challengeFilters = filters;
+    const date = (req.body?.date || '').toString() || new Date().toISOString().slice(0, 10);
 
-    if (!challengeFilters || !challengeFilters.leagues || !challengeFilters.seasons) {
+    // Prefer request body; else read saved settings (new columns first, legacy fallback)
+    let filters = null;
+    if (req.body?.filters) {
+      filters = normalizeNewFilters(req.body.filters);
+    } else {
       const { data: settings, error: settingsError } = await supabase
         .from('daily_challenge_settings')
-        .select('leagues, seasons, appearances')
+        .select('competitions, seasons, min_market_value, leagues, seasons as legacy_seasons, appearances')
         .eq('id', 1)
         .single();
       if (settingsError) throw settingsError;
-      challengeFilters = settings;
+
+      const competitions =
+        settings?.competitions?.length
+          ? settings.competitions.map(toIdString)
+          : settings?.leagues?.length
+          ? settings.leagues.map(toIdString)
+          : null;
+
+      const seasons =
+        settings?.seasons?.length
+          ? settings.seasons.map(toIdString)
+          : settings?.legacy_seasons?.length
+          ? settings.legacy_seasons.map(toIdString)
+          : null;
+
+      const minMarketValue = Number(settings?.min_market_value || 0);
+      filters = normalizeNewFilters({ competitions, seasons, minMarketValue });
     }
 
-    // Legacy RPC (sum(appearances))
-    const ids = await supabase
-      .rpc('rpc_get_player_ids_sumapps', {
-        leagues: (challengeFilters.leagues && challengeFilters.leagues.length)
-          ? challengeFilters.leagues.map(Number)
-          : null,
-        seasons: (challengeFilters.seasons && challengeFilters.seasons.length)
-          ? challengeFilters.seasons.map(Number)
-          : null,
-        min_app: challengeFilters.appearances || 0,
-      })
-      .then(({ data, error }) => {
-        if (error) throw error;
-        return (data || []).map((n) => Number(n)).filter(Number.isFinite);
-      });
-
-    if (!ids.length) {
+    const poolIds = await rpcGetPlayerIdsMarket(filters);
+    if (!poolIds?.length) {
       return res.status(404).json({ success: false, error: 'No player found for these filters.' });
     }
 
-    const playerId = ids[Math.floor(Math.random() * ids.length)];
-    const card = await getPlayerCard(playerId);
+    // deterministic pick by date
+    const idx =
+      Math.abs(Array.from(date).reduce((h, ch) => ((h << 5) - h + ch.charCodeAt(0)) | 0, 0)) %
+      poolIds.length;
+
+    const playerId = poolIds[idx];
+    const card = await getPlayerCardFromPIS(playerId);
     if (!card) return res.status(500).json({ success: false, error: 'Failed to get player data.' });
 
     const { error: upsertError } = await supabase.from('daily_challenges').upsert({
       challenge_date: date,
-      player_id: card[PS.playerId],
-      player_name: card[PS.playerName],
+      player_id: card.id,
+      player_name: card.name,
       created_at: new Date().toISOString(),
     });
     if (upsertError) throw upsertError;
@@ -530,11 +537,11 @@ router.post('/generate-daily-challenge', async (req, res) => {
   }
 });
 
-// Player by ID (card)
+// ---------- Player by ID ----------
 router.get('/player/:playerId', async (req, res) => {
   try {
     const { playerId } = req.params;
-    const card = await getPlayerCard(playerId);
+    const card = await getPlayerCardFromPIS(playerId);
     if (!card) return res.status(404).json({ error: 'Player not found' });
     res.json(card);
   } catch (error) {
@@ -542,7 +549,7 @@ router.get('/player/:playerId', async (req, res) => {
   }
 });
 
-// -------- LIMITS for a user (unchanged) --------
+// ---------- Limits ----------
 router.get('/limits/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
@@ -558,35 +565,26 @@ router.get('/limits/:userId', async (req, res) => {
           .select('points_earned, is_daily_challenge, won, player_id, created_at')
           .eq('user_id', userId)
           .gte('created_at', startOfTodayUtc.toISOString()),
-        supabase
-          .from('games_records')
-          .select('points_earned')
-          .eq('user_id', userId),
+        supabase.from('games_records').select('points_earned').eq('user_id', userId),
       ]);
 
     if (todayErr) throw todayErr;
     if (allErr) throw allErr;
 
-    const gamesToday = (todayGames || []).length;
-    const pointsToday = (todayGames || []).reduce(
-      (sum, g) => sum + (Number(g.points_earned) || 0),
-      0
-    );
-    const pointsTotal = (allGames || []).reduce(
-      (sum, g) => sum + (Number(g.points_earned) || 0),
-      0
-    );
+    const gamesToday  = (todayGames || []).length;
+    const pointsToday = (todayGames || []).reduce((sum, g) => sum + (Number(g.points_earned) || 0), 0);
+    const pointsTotal = (allGames || []).reduce((sum, g) => sum + (Number(g.points_earned) || 0), 0);
 
-    const dailyGame = (todayGames || []).find((g) => g.is_daily_challenge);
+    const dailyGame  = (todayGames || []).find((g) => g.is_daily_challenge);
     const dailyPlayed = !!dailyGame;
-    const dailyWin = !!(dailyGame && dailyGame.won);
+    const dailyWin    = !!(dailyGame && dailyGame.won);
 
     let dailyPlayerName = null;
     let dailyPlayerPhoto = null;
     if (dailyGame?.player_id != null) {
-      const card = await getPlayerCard(String(dailyGame.player_id));
-      dailyPlayerName = card?.[PS.playerName] || null;
-      dailyPlayerPhoto = card?.[PS.playerPhoto] || null;
+      const card = await getPlayerCardFromPIS(String(dailyGame.player_id));
+      dailyPlayerName = card?.name  || null;
+      dailyPlayerPhoto = card?.photo || null;
     }
 
     res.json({
@@ -604,7 +602,7 @@ router.get('/limits/:userId', async (req, res) => {
   }
 });
 
-// Simple player pool count (kept; not used by main flow)
+// ---------- Misc ----------
 router.get('/player-pool-count', async (_req, res) => {
   try {
     const total = await rpcTotalPlayersDb();

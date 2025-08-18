@@ -1,5 +1,9 @@
 // src/pages/GamePage.jsx
-// Switched to new data model: Competitions + Seasons + Min Market Value (€)
+// New data model: Competitions + Seasons + Min Market Value (€)
+// Fixes:
+// 1) Show ALL seasons returned by API (dedup, sort desc).
+// 2) No "full page reload" on every filter change (page stays; only counts refresh).
+// 3) Min Market Value quick-presets: Clear, 100K, 500K, 1M, 5M, 10M, 25M, 50M (with active styling).
 
 import React, { useEffect, useMemo, useState, useLayoutEffect, useRef } from 'react';
 import {
@@ -17,7 +21,7 @@ import { motion } from 'framer-motion';
 import { saveGamePageCache, loadGamePageCache, clearGamePageCache } from '../state/gamePageCache.js';
 
 import {
-  UsersRound,
+  Users,         // use this (stable) instead of UsersRound
   Star,
   Trash2,
   Filter,
@@ -26,6 +30,8 @@ import {
   Sparkles,
   UserSearch,
   Timer,
+  CheckSquare,
+  CalendarClock
 } from 'lucide-react';
 
 function classNames(...s) {
@@ -53,23 +59,35 @@ function CountdownToTomorrow() {
 }
 
 const fmt = (n) => new Intl.NumberFormat('en-US').format(n || 0);
+const fmtCurrency = (n) =>
+  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(Number(n || 0));
 
 export default function GamePage() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
-  // Page readiness
+  // Page readiness (initial boot only)
   const [pageReady, setPageReady] = useState(false);
 
   // Data + UI state
   const [daily, setDaily] = useState(null);
   const [loadingFilters, setLoadingFilters] = useState(true);
-  const [collapsed, setCollapsed] = useState(true);
+
+  // Entire “Difficulty Filters” wrapper toggle
+  const [filtersCollapsed, setFiltersCollapsed] = useState(true);
+
+  // Inner section toggles
+  const [compCollapsed, setCompCollapsed] = useState(false);
+  const [seasonsCollapsed, setSeasonsCollapsed] = useState(false);
+  const [mvCollapsed, setMvCollapsed] = useState(false);
+
   const [groupedCompetitions, setGroupedCompetitions] = useState({});
   const [allSeasons, setAllSeasons] = useState([]);
+
   const [selectedCompetitionIds, setSelectedCompetitionIds] = useState([]);
   const [selectedSeasons, setSelectedSeasons] = useState([]);
   const [minMarketValue, setMinMarketValue] = useState(0);
+
   const [loadingCounts, setLoadingCounts] = useState(false);
   const [expandedCountries, setExpandedCountries] = useState({});
 
@@ -81,7 +99,6 @@ export default function GamePage() {
 
   // Limits
   const [limits, setLimits] = useState({ gamesToday: 0, dailyPlayed: false, dailyWin: false, pointsToday: 0, pointsTotal: 0 });
-  const [dailyLoading, setDailyLoading] = useState(false);
 
   // Counts
   const [poolCount, setPoolCount] = useState(0);
@@ -91,19 +108,19 @@ export default function GamePage() {
   // Start button state
   const [gameLoading, setGameLoading] = useState(false);
 
-  // --------- Cache management ---------
+  // --------- Cache management (to keep state when switching tabs) ---------
   const hasRestoredRef = useRef(false);
   const restoredFromCacheRef = useRef(false);
-
-  const initialFiltersRef = useRef(null);
-  const filtersDirtyRef = useRef(false);
 
   const gatherStateForCache = () => ({
     scrollY: window.scrollY,
     selectedCompetitionIds,
     selectedSeasons,
     minMarketValue,
-    collapsed,
+    filtersCollapsed,
+    compCollapsed,
+    seasonsCollapsed,
+    mvCollapsed,
     expandedCountries,
     poolCount,
     totalCount,
@@ -118,19 +135,16 @@ export default function GamePage() {
         if (Array.isArray(cached.selectedCompetitionIds)) setSelectedCompetitionIds(cached.selectedCompetitionIds);
         if (Array.isArray(cached.selectedSeasons)) setSelectedSeasons(cached.selectedSeasons);
         if (Number.isFinite(cached.minMarketValue)) setMinMarketValue(cached.minMarketValue);
-        if (typeof cached.collapsed === 'boolean') setCollapsed(cached.collapsed);
+        if (typeof cached.filtersCollapsed === 'boolean') setFiltersCollapsed(cached.filtersCollapsed);
+        if (typeof cached.compCollapsed === 'boolean') setCompCollapsed(cached.compCollapsed);
+        if (typeof cached.seasonsCollapsed === 'boolean') setSeasonsCollapsed(cached.seasonsCollapsed);
+        if (typeof cached.mvCollapsed === 'boolean') setMvCollapsed(cached.mvCollapsed);
         if (cached.expandedCountries && typeof cached.expandedCountries === 'object') {
           setExpandedCountries(cached.expandedCountries);
         }
         if (Number.isFinite(cached.poolCount)) setPoolCount(cached.poolCount);
         if (Number.isFinite(cached.totalCount)) setTotalCount(cached.totalCount);
         if (typeof cached.gamePrompt === 'string') setGamePrompt(cached.gamePrompt);
-
-        initialFiltersRef.current = {
-          competitions: (cached.selectedCompetitionIds || []).slice(),
-          seasons: (cached.selectedSeasons || []).slice(),
-          minMarketValue: cached.minMarketValue ?? 0
-        };
 
         setPageReady(true);
         setLoadingFilters(false);
@@ -148,8 +162,11 @@ export default function GamePage() {
   }, []);
 
   useEffect(() => () => saveGamePageCache(gatherStateForCache()), [
-    selectedCompetitionIds, selectedSeasons, minMarketValue, collapsed, expandedCountries, gamePrompt, poolCount, totalCount
+    selectedCompetitionIds, selectedSeasons, minMarketValue,
+    filtersCollapsed, compCollapsed, seasonsCollapsed, mvCollapsed,
+    expandedCountries, gamePrompt, poolCount, totalCount
   ]);
+
   useEffect(() => {
     const handleHide = () => saveGamePageCache(gatherStateForCache());
     document.addEventListener('visibilitychange', handleHide, { passive: true });
@@ -158,57 +175,27 @@ export default function GamePage() {
       document.removeEventListener('visibilitychange', handleHide);
       window.removeEventListener('pagehide', handleHide);
     };
-  }, [selectedCompetitionIds, selectedSeasons, minMarketValue, collapsed, expandedCountries, gamePrompt, poolCount, totalCount]);
+  }, [selectedCompetitionIds, selectedSeasons, minMarketValue, filtersCollapsed, compCollapsed, seasonsCollapsed, mvCollapsed, expandedCountries, gamePrompt, poolCount, totalCount]);
 
-  // Apply user defaults only if NOT restored (support future fields, fallback to legacy ones)
+  // Apply user defaults if not restored from cache
   useEffect(() => {
     if (!restoredFromCacheRef.current && user) {
       const defaultsComp = (user.default_competitions || user.default_leagues || []).map(String);
       const defaultsSeasons = user.default_seasons || [];
-      const defaultsMinMV = user.default_min_market_value ?? user.default_min_appearances ?? 0;
+      const defaultsMinMV = user.default_min_market_value ?? 0;
 
       setSelectedCompetitionIds(defaultsComp);
       setSelectedSeasons(defaultsSeasons);
       setMinMarketValue(defaultsMinMV);
-
-      initialFiltersRef.current = {
-        competitions: defaultsComp.slice(),
-        seasons: defaultsSeasons.slice(),
-        minMarketValue: defaultsMinMV
-      };
     }
   }, [user]);
-
-  // Detect when filters change vs initial
-  useEffect(() => {
-    const init = initialFiltersRef.current;
-    if (!init) {
-      initialFiltersRef.current = { competitions: selectedCompetitionIds, seasons: selectedSeasons, minMarketValue };
-      return;
-    }
-    const eqArray = (a, b) => {
-      if (!Array.isArray(a) || !Array.isArray(b)) return false;
-      const aa = [...a].map(String).sort();
-      const bb = [...b].map(String).sort();
-      if (aa.length !== bb.length) return false;
-      for (let i = 0; i < aa.length; i++) if (aa[i] !== bb[i]) return false;
-      return true;
-    };
-    const changed =
-      !eqArray(init.competitions, selectedCompetitionIds) ||
-      !eqArray(init.seasons, selectedSeasons) ||
-      init.minMarketValue !== minMarketValue;
-    if (changed) filtersDirtyRef.current = true;
-  }, [selectedCompetitionIds, selectedSeasons, minMarketValue]);
 
   // Start daily
   const onStartDaily = async () => {
     try {
-      setDailyLoading(true);
       const dailyChallenge = await getDailyChallenge();
       if (!dailyChallenge || !dailyChallenge.player_id) {
         alert("No daily challenge available for today.");
-        setDailyLoading(false);
         return;
       }
       const res = await fetch(`${API_BASE}/player/${dailyChallenge.player_id}`);
@@ -233,36 +220,36 @@ export default function GamePage() {
       });
     } catch {
       alert('Failed to start daily challenge. Please try again.');
-    } finally {
-      setDailyLoading(false);
     }
   };
 
-  // Load competitions/seasons/limits/daily
+  // Load competitions, seasons, limits, daily (initial)
   useEffect(() => {
     let cancelled = false;
-    const background = restoredFromCacheRef.current;
 
     (async () => {
       try {
-        if (!background) {
-          setLoadingFilters(true);
-          setPageReady(false);
-        }
+        setLoadingFilters(true);
+        setPageReady(false);
 
+        // Competitions
         const compsRes = await getCompetitions();
         if (!cancelled) {
-          setGroupedCompetitions(compsRes.groupedByCountry || {});
+          const grouped = compsRes.groupedByCountry || {};
+          setGroupedCompetitions(grouped);
           const initialCollapse = {};
-          Object.keys(compsRes.groupedByCountry || {}).forEach((c) => {
-            initialCollapse[c] = false;
-          });
+          Object.keys(grouped).forEach((c) => (initialCollapse[c] = false));
           setExpandedCountries((prev) => Object.keys(prev).length ? prev : initialCollapse);
         }
 
+        // Seasons — accept multiple shapes and normalize into an array of strings
         const seasonsRes = await getSeasons();
-        if (!cancelled) setAllSeasons(seasonsRes.seasons || []);
+        if (!cancelled) {
+          const seasons = normalizeSeasons(seasonsRes);
+          setAllSeasons(seasons);
+        }
 
+        // Limits/daily
         if (user?.id) {
           try {
             const lim = await getLimits(user.id);
@@ -279,12 +266,9 @@ export default function GamePage() {
         const d = await getDailyChallenge().catch(() => null);
         if (!cancelled) setDaily(d || null);
       } finally {
-        if (!cancelled && !background) {
+        if (!cancelled) {
           setLoadingFilters(false);
           setPageReady(true);
-        }
-        if (background) {
-          setLoadingFilters(false);
         }
       }
     })();
@@ -292,7 +276,7 @@ export default function GamePage() {
     return () => { cancelled = true; };
   }, [user?.id]);
 
-  // Game prompt (skip if restored)
+  // Game prompt (initial)
   useEffect(() => {
     if (restoredFromCacheRef.current) {
       setIsLoadingPrompt(false);
@@ -317,19 +301,15 @@ export default function GamePage() {
     })();
   }, []);
 
-  // Recalculate counts
+  // Recalculate counts on-the-fly when filters change
   useEffect(() => {
     let cancelled = false;
 
-    const shouldSkip =
-      restoredFromCacheRef.current && !filtersDirtyRef.current;
-
-    if (shouldSkip || loadingFilters) return;
+    if (loadingFilters) return;
 
     (async () => {
       try {
         setLoadingCounts(true);
-        if (!restoredFromCacheRef.current) setPageReady(false);
 
         const payload = {
           competitions: selectedCompetitionIds,
@@ -344,13 +324,11 @@ export default function GamePage() {
         if (!cancelled) {
           setPoolCount(filteredCount || 0);
           setTotalCount(dbTotal || 0);
-          setPageReady(true);
         }
       } catch {
         if (!cancelled) {
           setPoolCount(0);
           setTotalCount(0);
-          setPageReady(true);
         }
       } finally {
         if (!cancelled) setLoadingCounts(false);
@@ -371,6 +349,21 @@ export default function GamePage() {
     return map;
   }, [groupedCompetitions]);
 
+  // Flatten competitions helpers
+  const flatCompetitions = useMemo(() => {
+    const out = [];
+    Object.values(groupedCompetitions).forEach(arr => {
+      (arr || []).forEach(c => out.push(c));
+    });
+    return out;
+  }, [groupedCompetitions]);
+
+  const top10CompetitionIds = useMemo(() => {
+    const arr = [...flatCompetitions];
+    arr.sort((a, b) => (Number(b.total_value_eur || 0) - Number(a.total_value_eur || 0)));
+    return arr.slice(0, 10).map(c => String(c.competition_id));
+  }, [flatCompetitions]);
+
   // Helpers
   const toggleCompetition = (id) => {
     const sid = String(id);
@@ -379,8 +372,14 @@ export default function GamePage() {
     );
   };
   const clearCompetitions = () => setSelectedCompetitionIds([]);
+  const selectAllCompetitions = () =>
+    setSelectedCompetitionIds(flatCompetitions.map(c => String(c.competition_id)));
+  const selectTop10Competitions = () => setSelectedCompetitionIds(top10CompetitionIds);
+
   const clearSeasons = () => setSelectedSeasons([]);
+  const selectAllSeasons = () => setSelectedSeasons(allSeasons);
   const handleLast5Seasons = () => setSelectedSeasons(allSeasons.slice(0, 5));
+
   const toggleCountry = (country) => setExpandedCountries(prev => ({ ...prev, [country]: !prev[country] }));
 
   // Start regular game
@@ -418,7 +417,6 @@ export default function GamePage() {
   const maxGames = limits?.dailyWin ? 11 : 10;
   const pointsToday = limits?.pointsToday ?? 0;
   const pointsTotal = limits?.pointsTotal ?? 0;
-
   const isAdmin = (user?.role === 'admin');
   const reachedLimit = !isAdmin && (Number(limits?.gamesToday || 0) >= maxGames);
 
@@ -466,14 +464,10 @@ export default function GamePage() {
                       : 'bg-gradient-to-r from-yellow-500 to-yellow-700 text-white hover:scale-105'
                   }`}
                   onClick={onStartDaily}
-                  disabled={limits.dailyPlayed || dailyLoading}
+                  disabled={limits.dailyPlayed}
                 >
                   <Sparkles className="h-5 w-5" />
-                  {dailyLoading
-                    ? "Loading..."
-                    : limits.dailyPlayed
-                    ? "Already Played"
-                    : "Play Daily Challenge"}
+                  {limits.dailyPlayed ? "Already Played" : "Play Daily Challenge"}
                 </button>
                 {daily && limits.dailyPlayed && (
                   <div className="mt-4 text-sm text-gray-700">
@@ -532,12 +526,14 @@ export default function GamePage() {
               <div className="bg-yellow-50 rounded-lg p-4 mb-6">
                 <div className="flex justify-between items-center">
                   <div>
-                    <div className="text-lg font-semibold text-yellow-800">{fmt(potentialPoints)}</div>
+                    <div className="text-lg font-semibold text-yellow-800">
+                      {loadingCounts ? '—' : fmt(potentialPoints)}
+                    </div>
                     <div className="text-sm text-yellow-600">Potential Points</div>
                   </div>
                   <div className="text-right">
                     <div className="text-lg font-semibold text-yellow-800">
-                      {fmt(poolCount)} / {fmt(totalCount)}
+                      {loadingCounts ? '—' : fmt(poolCount)} / {loadingCounts ? '—' : fmt(totalCount)}
                     </div>
                     <div className="text-sm text-yellow-600">Player Pool</div>
                   </div>
@@ -568,7 +564,7 @@ export default function GamePage() {
                 </button>
               </div>
 
-              {/* Selected Filters */}
+              {/* Selected Filters (chips) */}
               <div className="mb-4">
                 <div className="text-sm text-gray-600 mb-2">Competitions</div>
                 <SelectedChips
@@ -593,7 +589,7 @@ export default function GamePage() {
                     <SelectedChips
                       items={[minMarketValue]}
                       onClear={() => setMinMarketValue(0)}
-                      getLabel={(v) => `Min MV: €${fmt(v)}`}
+                      getLabel={(v) => `Min MV: ${fmtCurrency(v)}`}
                       onRemoveItem={() => setMinMarketValue(0)}
                       hoverClose
                     />
@@ -601,38 +597,53 @@ export default function GamePage() {
                 )}
               </div>
 
-              {/* Filters Panel */}
+              {/* Filters Panel (3 collapsibles) */}
               <div className="rounded-xl shadow-md transition-all hover:shadow-lg border bg-green-50/60 p-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Filter className="h-5 w-5 text-green-700" />
                     <h3 className="text-lg font-semibold text-green-900">Difficulty Filters</h3>
                   </div>
-                  <button className="text-gray-600 hover:text-gray-800" onClick={() => setCollapsed(c => !c)}>
-                    {collapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
+                  <button className="text-gray-600 hover:text-gray-800" onClick={() => setFiltersCollapsed(c => !c)} type="button">
+                    {filtersCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
                   </button>
                 </div>
 
-                {!collapsed && !loadingFilters && (
+                {!filtersCollapsed && !loadingFilters && (
                   <div className="mt-4 space-y-6">
-                    {/* Competitions */}
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <Star className="h-4 w-4 text-green-700" />
-                          <span className="font-medium text-green-900">Competitions Filter</span>
-                        </div>
+                    {/* Competitions section */}
+                    <Section
+                      title="Competitions"
+                      icon={<Star className="h-4 w-4 text-green-700" />}
+                      collapsed={compCollapsed}
+                      onToggle={() => setCompCollapsed(v => !v)}
+                      actions={
                         <div className="flex items-center gap-2">
                           <button
-                            onClick={clearCompetitions}
+                            type="button"
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); selectTop10Competitions(); }}
+                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                          >
+                            <Star className="h-3 w-3" /> Top 10
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); selectAllCompetitions(); }}
+                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                          >
+                            <CheckSquare className="h-3 w-3" /> Select All
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); clearCompetitions(); }}
                             className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
                           >
                             <Trash2 className="h-3 w-3" />
-                            Clear
+                            Clear All
                           </button>
                         </div>
-                      </div>
-
+                      }
+                    >
                       <SelectedChips
                         title="Chosen competitions"
                         items={selectedCompetitionIds}
@@ -641,14 +652,13 @@ export default function GamePage() {
                         onRemoveItem={(id) => setSelectedCompetitionIds(prev => prev.filter(x => x !== id))}
                         hoverClose
                       />
-
                       <div className="max-h-96 overflow-y-auto pr-2">
                         {Object.entries(groupedCompetitions)
                           .sort(([a], [b]) => a.localeCompare(b))
                           .map(([country, comps]) => (
                             <div key={country} className="mb-2">
                               <button
-                                onClick={(e) => { e.preventDefault(); toggleCountry(country); }}
+                                onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleCountry(country); }}
                                 type="button"
                                 className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
                               >
@@ -672,7 +682,11 @@ export default function GamePage() {
                                     const cid = String(c.competition_id);
                                     const checked = selectedCompetitionIds.includes(cid);
                                     return (
-                                      <label key={cid} className="flex items-center gap-2 cursor-pointer" onClick={(e) => e.stopPropagation()}>
+                                      <label
+                                        key={cid}
+                                        className="flex items-center gap-2 cursor-pointer"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
                                         <input type="checkbox" checked={checked} onChange={() => toggleCompetition(cid)} className="rounded" />
                                         {c.logo_url && (
                                           <img src={c.logo_url} alt={c.competition_name} className="w-5 h-5 object-contain" />
@@ -687,66 +701,111 @@ export default function GamePage() {
                             </div>
                           ))}
                       </div>
-                    </div>
+                    </Section>
 
-                    {/* Seasons + Min Market Value */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
-                      <div className="md:col-span-2">
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-2">
-                            <UsersRound className="h-4 w-4 text-green-700" />
-                            <span className="font-medium text-green-900">Season Filter</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button onClick={handleLast5Seasons} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
-                              Last 5
-                            </button>
-                            <button onClick={clearSeasons} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
-                              <Trash2 className="h-3 w-3" />
-                              Clear
-                            </button>
-                          </div>
+                    {/* Seasons section */}
+                    <Section
+                      title="Seasons"
+                      icon={<Users className="h-4 w-4 text-green-700" />}
+                      collapsed={seasonsCollapsed}
+                      onToggle={() => setSeasonsCollapsed(v => !v)}
+                      actions={
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleLast5Seasons(); }}
+                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                          >
+                            <CalendarClock className="h-3 w-3" /> Last 5
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); selectAllSeasons(); }}
+                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                          >
+                            <CheckSquare className="h-3 w-3" /> Select All
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); clearSeasons(); }}
+                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            Clear All
+                          </button>
                         </div>
+                      }
+                    >
+                      <SelectedChips title="Chosen seasons" items={selectedSeasons} onClear={clearSeasons} />
+                      <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-2">
+                        {allSeasons.map((season) => (
+                          <button
+                            key={season}
+                            type="button"
+                            onClick={() =>
+                              setSelectedSeasons(prev => prev.includes(season) ? prev.filter(s => s !== season) : [...prev, season])
+                            }
+                            className={classNames(
+                              'px-2 py-1 text-sm rounded-md border',
+                              selectedSeasons.includes(season)
+                                ? 'bg-green-100 border-green-500 text-green-700'
+                                : 'bg-white hover:bg-gray-50'
+                            )}
+                          >
+                            {season}
+                          </button>
+                        ))}
+                      </div>
+                    </Section>
 
-                        <SelectedChips title="Chosen seasons" items={selectedSeasons} onClear={clearSeasons} />
-
-                        <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-2">
-                          {allSeasons.map((season) => (
-                            <button
-                              key={season}
-                              onClick={() =>
-                                setSelectedSeasons(prev => prev.includes(season) ? prev.filter(s => s !== season) : [...prev, season])
-                              }
-                              className={classNames(
-                                'px-2 py-1 text-sm rounded-md border',
-                                selectedSeasons.includes(season)
-                                  ? 'bg-green-100 border-green-500 text-green-700'
-                                  : 'bg-white hover:bg-gray-50'
-                              )}
-                            >
-                              {season}
-                            </button>
-                          ))}
+                    {/* Minimum Market Value section */}
+                    <Section
+                      title="Minimum Market Value (€)"
+                      icon={<Users className="h-4 w-4 text-green-700" />}
+                      collapsed={mvCollapsed}
+                      onToggle={() => setMvCollapsed(v => !v)}
+                    >
+                      <div className="flex flex-col gap-3">
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="number"
+                            value={minMarketValue}
+                            onChange={(e) => setMinMarketValue(parseInt(e.target.value) || 0)}
+                            min="0"
+                            step="100000"
+                            className="w-40 border rounded-md px-2 py-1"
+                          />
+                          <div className="text-sm text-gray-600">{fmtCurrency(minMarketValue)}</div>
+                        </div>
+                        {/* Quick presets */}
+                        <div className="flex flex-wrap gap-2">
+                          <PresetButton title="Clear" onClick={() => setMinMarketValue(0)} active={minMarketValue === 0}>
+                            <Trash2 size={14} /> Clear
+                          </PresetButton>
+                          <PresetButton onClick={() => setMinMarketValue(100000)} active={minMarketValue === 100000}>
+                            <Star size={14} /> 100K €
+                          </PresetButton>
+                          <PresetButton onClick={() => setMinMarketValue(500000)} active={minMarketValue === 500000}>
+                            <Star size={14} /> 500K €
+                          </PresetButton>
+                          <PresetButton onClick={() => setMinMarketValue(1000000)} active={minMarketValue === 1000000}>
+                            <Star size={14} /> 1M €
+                          </PresetButton>
+                          <PresetButton onClick={() => setMinMarketValue(5000000)} active={minMarketValue === 5000000}>
+                            <Star size={14} /> 5M €
+                          </PresetButton>
+                          <PresetButton onClick={() => setMinMarketValue(10000000)} active={minMarketValue === 10000000}>
+                            <Star size={14} /> 10M €
+                          </PresetButton>
+                          <PresetButton onClick={() => setMinMarketValue(25000000)} active={minMarketValue === 25000000}>
+                            <Star size={14} /> 25M €
+                          </PresetButton>
+                          <PresetButton onClick={() => setMinMarketValue(50000000)} active={minMarketValue === 50000000}>
+                            <Star size={14} /> 50M €
+                          </PresetButton>
                         </div>
                       </div>
-
-                      {/* Minimum Market Value (€) */}
-                      <div className="flex flex-col items-center">
-                        <div className="flex items-center gap-2 mb-2">
-                          <UsersRound className="h-4 w-4 text-green-700" />
-                          <span className="font-medium text-green-900">Minimum Market Value (€)</span>
-                        </div>
-                        <input
-                          type="number"
-                          value={minMarketValue}
-                          onChange={(e) => setMinMarketValue(parseInt(e.target.value) || 0)}
-                          min="0"
-                          step="100000"
-                          className="w-full px-3 py-2 border rounded-md text-center"
-                        />
-                        <div className="text-xs text-gray-500 text-center mt-1">Players whose max value ≥ this number</div>
-                      </div>
-                    </div>
+                    </Section>
                   </div>
                 )}
               </div>
@@ -772,6 +831,82 @@ export default function GamePage() {
         </motion.div>
       )}
     </div>
+  );
+}
+
+// ---------- helpers ----------
+
+// normalize seasons payload into a sorted (desc) string array
+function normalizeSeasons(payload) {
+  let raw = [];
+
+  // Cases:
+  // - ['2020','2021',...]
+  // - { seasons: [...] }
+  // - { data: [...] }
+  // - any object with season-like values
+  if (Array.isArray(payload)) {
+    raw = payload;
+  } else if (payload && Array.isArray(payload.seasons)) {
+    raw = payload.seasons;
+  } else if (payload && Array.isArray(payload.data)) {
+    raw = payload.data;
+  } else if (payload && typeof payload === 'object') {
+    // scan any values that look like seasons
+    const collected = [];
+    Object.values(payload).forEach((v) => {
+      if (Array.isArray(v)) collected.push(...v);
+      else if (typeof v === 'string' || typeof v === 'number') collected.push(v);
+    });
+    raw = collected.length ? collected : [];
+  }
+
+  const uniq = Array.from(new Set(raw.map(String)));
+  // Sort desc so "Last 5" is newest 5 (e.g., 2025..2021)
+  uniq.sort((a, b) => String(b).localeCompare(String(a)));
+  return uniq;
+}
+
+// Section header + body (action buttons don't toggle collapse)
+function Section({ title, icon, collapsed, onToggle, actions, children }) {
+  return (
+    <div className="rounded-lg border bg-white/60">
+      <div className="flex items-center justify-between px-3 py-2">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="inline-flex items-center gap-2"
+        >
+          {icon}
+          <span className="font-medium text-green-900">{title}</span>
+          {collapsed ? <ChevronDown className="h-4 w-4 ml-1" /> : <ChevronUp className="h-4 w-4 ml-1" />}
+        </button>
+        <div className="flex items-center gap-2">{actions}</div>
+      </div>
+      {!collapsed && <div className="p-3 pt-0">{children}</div>}
+    </div>
+  );
+}
+
+function PresetButton({ onClick, children, title, active = false }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onClick();
+      }}
+      title={title}
+      className={classNames(
+        'inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md border transition-colors',
+        active
+          ? 'bg-green-600 text-white border-green-700'
+          : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+      )}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -806,7 +941,7 @@ function SelectedChips({ title, items, onClear, getLabel, onRemoveItem, hoverClo
             </span>
           );
         })}
-        <button onClick={onClear} className="text-xs text-gray-600 underline hover:text-gray-800">
+        <button type="button" onClick={onClear} className="text-xs text-gray-600 underline hover:text-gray-800">
           Clear
         </button>
       </div>
