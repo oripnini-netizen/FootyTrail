@@ -10,6 +10,8 @@ import {
   Star,
   CheckSquare,
   CalendarClock,
+  CalendarPlus,
+  X,
   Globe2,
   Trophy,
   Layers,
@@ -20,9 +22,8 @@ import { supabase } from '../supabase';
 import {
   getCompetitions,
   getSeasons,
-  getCounts,
   generateDailyChallenge,
-  getPlayersCoverage, // <-- RPC
+  getPlayersCoverage, // RPC
 } from '../api';
 
 function cx(...a) {
@@ -75,7 +76,7 @@ export default function AdminPage() {
   const [selectedSeasons, setSelectedSeasons] = useState([]);
   const [minMarketValue, setMinMarketValue] = useState(0);
 
-  // Collapses (both cards collapsed by default)
+  // Collapses (cards collapsed by default)
   const [filtersCollapsed, setFiltersCollapsed] = useState(true);
   const [compCollapsed, setCompCollapsed] = useState(false);
   const [seasonsCollapsed, setSeasonsCollapsed] = useState(false);
@@ -86,14 +87,15 @@ export default function AdminPage() {
   // Save-button enabling
   const [filtersChanged, setFiltersChanged] = useState(false);
 
-  // Generate DC
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  // Daily challenge: multi-date
+  const [dateInput, setDateInput] = useState(new Date().toISOString().slice(0, 10));
+  const [selectedDates, setSelectedDates] = useState([]); // array of YYYY-MM-DD
   const [status, setStatus] = useState('');
   const [dailyChallenges, setDailyChallenges] = useState([]);
 
   // Players coverage card
   const [coverageCollapsed, setCoverageCollapsed] = useState(true);
-  const [coverage, setCoverage] = useState(null);
+  const [coverage, setCoverage] = useState(null); // { countries: { [country]: { total, competitions: { [compId]: { name, logo_url, total, seasons: { [season]: count } } } } } }
   const [coverageCountryOpen, setCoverageCountryOpen] = useState({});
   const [coverageCompOpen, setCoverageCompOpen] = useState({}); // key: `${country}|${compId}`
 
@@ -119,6 +121,16 @@ export default function AdminPage() {
     arr.sort((a, b) => (Number(b.total_value_eur || 0) - Number(a.total_value_eur || 0)));
     return arr.slice(0, 10).map((c) => String(c.competition_id));
   }, [flatCompetitions]);
+
+  // Map: country -> flag_url (from competitions list)
+  const countryFlagMap = useMemo(() => {
+    const map = {};
+    Object.entries(groupedCompetitions).forEach(([country, comps]) => {
+      const flag = comps?.[0]?.flag_url || null;
+      map[country] = flag;
+    });
+    return map;
+  }, [groupedCompetitions]);
 
   const toggleCountry = (country) =>
     setExpandedCountries((p) => ({ ...p, [country]: !p[country] }));
@@ -179,7 +191,7 @@ export default function AdminPage() {
         .order('challenge_date', { ascending: false });
       setDailyChallenges(challenges || []);
 
-      // -------- Coverage via RPC (complete & fast) ----------
+      // -------- Coverage via RPC ----------
       try {
         const rows = await getPlayersCoverage(); // [{country, competition_id, competition_name, logo_url, season_id, players_count}]
         const countries = {};
@@ -208,7 +220,7 @@ export default function AdminPage() {
         console.error('coverage rpc error:', err.message);
         setCoverage({ countries: {} });
       }
-      // ------------------------------------------------------
+      // ------------------------------------
     })();
   }, []);
 
@@ -250,15 +262,35 @@ export default function AdminPage() {
     setFiltersChanged(false);
   };
 
-  const handleGenerate = async () => {
-    setStatus('Generating daily challenge…');
+  // ---- Multi-date Daily Challenge generation ----
+  const addDate = () => {
+    const d = (dateInput || '').trim();
+    if (!d) return;
+    setSelectedDates((prev) => (prev.includes(d) ? prev : [...prev, d].sort()));
+  };
+  const removeDate = (d) => setSelectedDates((prev) => prev.filter((x) => x !== d));
+
+  const handleGenerateForSelected = async () => {
+    if (!selectedDates.length) {
+      setStatus('Pick at least one date.');
+      return;
+    }
+    setStatus('Generating daily challenges…');
     const filters = {
       competitions: selectedCompetitionIds,
       seasons: selectedSeasons,
       minMarketValue: Number(minMarketValue) || 0,
     };
-    const res = await generateDailyChallenge({ date, filters });
-    setStatus(res.success ? `Daily challenge generated for ${date}` : `Error: ${res.error || 'Unknown error'}`);
+
+    const tasks = selectedDates.map((d) => generateDailyChallenge({ date: d, filters }));
+    const results = await Promise.allSettled(tasks);
+
+    const ok = results.filter((r) => r.status === 'fulfilled' && r.value?.success).length;
+    const fail = results.length - ok;
+
+    setStatus(`Generated: ${ok}, Failed: ${fail}`);
+
+    // refresh list
     const { data: challenges } = await supabase
       .from('daily_challenges')
       .select('challenge_date, player_id, player_name, created_at')
@@ -425,7 +457,8 @@ export default function AdminPage() {
                     </div>
                   </div>
                 )}
-                <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-2">
+                {/* Exactly 3 columns (responsive still OK) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 mt-2">
                   {allSeasons.map((season) => (
                     <button
                       key={season}
@@ -484,32 +517,104 @@ export default function AdminPage() {
           )}
 
           {/* Save & Generate Row */}
-          <div className="px-5 pb-5 pt-3 border-t flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleSaveDefaults}
-                className={cx(
-                  'bg-blue-600 text-white px-4 py-2 rounded transition',
-                  !filtersChanged && 'opacity-50 cursor-not-allowed'
-                )}
-                disabled={!filtersChanged}
-              >
-                Save Default Filters
-              </button>
-              {status && <span className="text-sm text-green-700 ml-2">{status}</span>}
+          <div className="px-5 pb-5 pt-3 border-t space-y-4">
+            <div className="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleSaveDefaults}
+                  className={cx(
+                    'bg-blue-600 text-white px-4 py-2 rounded transition',
+                    !filtersChanged && 'opacity-50 cursor-not-allowed'
+                  )}
+                  disabled={!filtersChanged}
+                >
+                  Save Default Filters
+                </button>
+                {status && <span className="text-sm text-green-700 ml-2">{status}</span>}
+              </div>
+
+              {/* Single date quick-generate (still kept) */}
+              <div className="flex items-center gap-2">
+                <label className="text-sm">Date</label>
+                <input
+                  type="date"
+                  value={dateInput}
+                  onChange={(e) => setDateInput(e.target.value)}
+                  className="border rounded px-3 py-2"
+                />
+                <button
+                  onClick={async () => {
+                    setStatus('Generating daily challenge…');
+                    const filters = {
+                      competitions: selectedCompetitionIds,
+                      seasons: selectedSeasons,
+                      minMarketValue: Number(minMarketValue) || 0,
+                    };
+                    const res = await generateDailyChallenge({ date: dateInput, filters });
+                    setStatus(res.success ? `Daily challenge generated for ${dateInput}` : `Error: ${res.error || 'Unknown error'}`);
+                    const { data: challenges } = await supabase
+                      .from('daily_challenges')
+                      .select('challenge_date, player_id, player_name, created_at')
+                      .order('challenge_date', { ascending: false });
+                    setDailyChallenges(challenges || []);
+                  }}
+                  className="bg-green-600 text-white px-4 py-2 rounded inline-flex items-center gap-2"
+                >
+                  <CalendarPlus className="h-4 w-4" />
+                  Generate (single)
+                </button>
+              </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <label className="text-sm">Date</label>
-              <input
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="border rounded px-3 py-2"
-              />
-              <button onClick={handleGenerate} className="bg-green-600 text-white px-4 py-2 rounded">
-                Generate Daily Challenge
-              </button>
+            {/* Multi-date selection */}
+            <div className="rounded-lg border bg-white/70 p-3">
+              <div className="flex items-center gap-2">
+                <input
+                  type="date"
+                  value={dateInput}
+                  onChange={(e) => setDateInput(e.target.value)}
+                  className="border rounded px-3 py-2"
+                />
+                <button
+                  type="button"
+                  onClick={addDate}
+                  className="bg-emerald-600 text-white px-3 py-2 rounded inline-flex items-center gap-2"
+                >
+                  <CalendarPlus className="h-4 w-4" />
+                  Add date
+                </button>
+                <button
+                  type="button"
+                  onClick={handleGenerateForSelected}
+                  className="bg-indigo-600 text-white px-3 py-2 rounded"
+                >
+                  Generate for selected dates
+                </button>
+              </div>
+
+              {selectedDates.length > 0 && (
+                <div className="mt-3">
+                  <div className="text-sm text-gray-600 mb-1">Selected dates</div>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedDates.map((d) => (
+                      <span
+                        key={d}
+                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-indigo-100 text-indigo-800"
+                      >
+                        {d}
+                        <button
+                          type="button"
+                          title="Remove date"
+                          onClick={() => removeDate(d)}
+                          className="text-red-600 hover:text-red-700"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -528,11 +633,11 @@ export default function AdminPage() {
                 </thead>
                 <tbody>
                   {(dailyChallenges || []).map((dc) => (
-                    <tr key={dc.challenge_date}>
-                      <td className="px-2 py-1 border">{dc.challenge_date}</td>
-                      <td className="px-2 py-1 border">{dc.player_id}</td>
+                    <tr key={`${dc.challenge_date}-${dc.player_id}`}>
+                      <td className="px-2 py-1 border whitespace-nowrap">{dc.challenge_date}</td>
+                      <td className="px-2 py-1 border whitespace-nowrap">{dc.player_id}</td>
                       <td className="px-2 py-1 border">{dc.player_name}</td>
-                      <td className="px-2 py-1 border">
+                      <td className="px-2 py-1 border whitespace-nowrap">
                         {dc.created_at ? new Date(dc.created_at).toLocaleString() : ''}
                       </td>
                     </tr>
@@ -572,6 +677,7 @@ export default function AdminPage() {
                     .sort(([a], [b]) => a.localeCompare(b))
                     .map(([country, cData]) => {
                       const open = !!coverageCountryOpen[country];
+                      const flagUrl = countryFlagMap[country] || null;
                       return (
                         <div key={country} className="border rounded-md bg-white/60">
                           <div
@@ -579,6 +685,13 @@ export default function AdminPage() {
                             onClick={() => setCoverageCountryOpen((p) => ({ ...p, [country]: !p[country] }))}
                           >
                             <div className="flex items-center gap-2">
+                              {flagUrl && (
+                                <img
+                                  src={flagUrl}
+                                  alt={country}
+                                  className="w-6 h-4 object-cover rounded"
+                                />
+                              )}
                               <span className="font-medium">{country}</span>
                               <span className="text-xs text-gray-600">Players: {cData.total}</span>
                             </div>
@@ -610,7 +723,8 @@ export default function AdminPage() {
 
                                       {compOpen && (
                                         <div className="px-3 pb-3">
-                                          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2">
+                                          {/* EXACTLY 3 columns for seasons */}
+                                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
                                             {Object.entries(comp.seasons || {})
                                               .sort(([a], [b]) => String(b).localeCompare(String(a))) // desc
                                               .map(([season, count]) => (
