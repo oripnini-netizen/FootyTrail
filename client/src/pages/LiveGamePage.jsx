@@ -125,6 +125,8 @@ export default function LiveGamePage() {
                         stats: { pointsEarned: 0, timeSec: INITIAL_TIME, guessesUsed: 3, usedHints },
                         filters,
                         isDaily,
+                        // PASS previous round potential points:
+                        potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
                       },
                       replace: true,
                     })
@@ -299,6 +301,8 @@ export default function LiveGamePage() {
             stats: { pointsEarned: 0, timeSec: INITIAL_TIME, guessesUsed: 3, usedHints },
             filters,
             isDaily,
+            // PASS previous round potential points:
+            potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
           },
           replace: true,
         })
@@ -424,6 +428,8 @@ export default function LiveGamePage() {
           },
           filters,
           isDaily,
+          // PASS previous round potential points:
+          potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
         },
         replace: true,
       });
@@ -457,6 +463,8 @@ export default function LiveGamePage() {
           },
           filters,
           isDaily,
+          // PASS previous round potential points:
+          potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
         },
         replace: true,
       });
@@ -643,6 +651,8 @@ export default function LiveGamePage() {
                         },
                         filters,
                         isDaily,
+                        // PASS previous round potential points:
+                        potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
                       },
                       replace: true,
                     })

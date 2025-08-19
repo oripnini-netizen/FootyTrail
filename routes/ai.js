@@ -421,7 +421,6 @@ Tone:
 Content constraints:
 - 1 single sentence only (max ~22 words).
 - No emojis, no hashtags, no URLs or sources.
-- You MAY mention the player's name once if provided.
 - Avoid filler like "overall", "in conclusion", etc.`
       },
       {
