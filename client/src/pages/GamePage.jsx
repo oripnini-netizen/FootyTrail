@@ -4,6 +4,7 @@
 // 1) Show ALL seasons returned by API (dedup, sort desc).
 // 2) No "full page reload" on every filter change (page stays; only counts refresh).
 // 3) Min Market Value quick-presets: Clear, 100K, 500K, 1M, 5M, 10M, 25M, 50M (with active styling).
+// 4) Daily Challenge -> fetch player details and navigate to /live with correct shape.
 
 import React, { useEffect, useMemo, useState, useLayoutEffect, useRef } from 'react';
 import {
@@ -198,6 +199,7 @@ export default function GamePage() {
         alert("No daily challenge available for today.");
         return;
       }
+      // fetch detailed player info (photo/pos/nationality/age if present)
       const res = await fetch(`${API_BASE}/player/${dailyChallenge.player_id}`);
       if (!res.ok) throw new Error('Failed to fetch player data');
       const playerData = await res.json();
