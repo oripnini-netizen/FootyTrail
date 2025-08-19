@@ -1,9 +1,8 @@
 // src/pages/LiveGamePage.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { suggestNames, saveGameCompleted, fetchTransfers, API_BASE } from '../api';
+import { suggestNames, saveGameCompleted, fetchTransfers } from '../api';
 import {
-  Clock,
   AlarmClock,
   Lightbulb,
   Trophy,
@@ -34,6 +33,7 @@ function multiTokenStartsWithMatch(query, candidate) {
   const qTokens = tokenize(query);
   const cTokens = tokenize(candidate);
   if (!qTokens.length || !cTokens.length) return false;
+  // every query token must match the start of at least one candidate token
   return qTokens.every((qt) => cTokens.some((ct) => ct.startsWith(qt)));
 }
 function longestToken(s) {
@@ -81,6 +81,7 @@ export default function LiveGamePage() {
   const [guessesLeft, setGuessesLeft] = useState(3);
   const [guess, setGuess] = useState('');
   const [suggestions, setSuggestions] = useState([]);
+  const [highlightIndex, setHighlightIndex] = useState(-1);
 
   const [usedHints, setUsedHints] = useState({
     age: false,
@@ -107,7 +108,7 @@ export default function LiveGamePage() {
 
     const bootstrap = async () => {
       try {
-        // 1) If navigated with a prepared card in state (normal round)
+        // If navigated with a prepared card in state
         if (location.state && location.state.id && location.state.name) {
           // kick off timer
           timerRef.current = setInterval(() => {
@@ -143,7 +144,7 @@ export default function LiveGamePage() {
           return;
         }
 
-        // 2) Otherwise we can't start
+        // Otherwise we can't start
         throw new Error('No game payload found.');
       } catch (err) {
         console.error('Failed to start game', err);
@@ -162,7 +163,7 @@ export default function LiveGamePage() {
   }, [location.state?.id, location.state?.name]);
 
   // -------------------------
-  // Suggestions
+  // Suggestions (wired to player_norm_name)
   // -------------------------
   useEffect(() => {
     let active = true;
@@ -170,24 +171,65 @@ export default function LiveGamePage() {
       const raw = guess.trim();
       if (!raw) {
         if (active) setSuggestions([]);
+        setHighlightIndex(-1);
         return;
       }
 
       const serverQ = longestToken(raw);
       if (serverQ.length < 2) {
         if (active) setSuggestions([]);
+        setHighlightIndex(-1);
         return;
       }
 
       try {
         const res = await suggestNames(serverQ);
         const list = Array.isArray(res) ? res : [];
-        const filtered = list.filter((item) =>
-          multiTokenStartsWithMatch(raw, item.name || item.displayName || '')
-        );
-        if (active) setSuggestions(filtered.slice(0, 20));
+
+        // Prefer searching on player_norm_name
+        const filtered = list.filter((item) => {
+          const norm =
+            item.player_norm_name ||
+            item.norm_name ||
+            item.normalized ||
+            item.name ||
+            item.displayName ||
+            '';
+          return multiTokenStartsWithMatch(raw, norm);
+        });
+
+        // shape each suggestion with a consistent display and value
+        const shaped = filtered.map((it) => ({
+          id: it.id ?? it.player_id ?? it.pid ?? it.name,
+          // prefer the real display name if present; fallback to normalized or name
+          display:
+            it.player_name ||
+            it.name ||
+            it.displayName ||
+            (it.player_norm_name
+              ? it.player_norm_name
+                  .split(' ')
+                  .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+                  .join(' ')
+              : ''),
+          norm:
+            it.player_norm_name ||
+            it.norm_name ||
+            it.normalized ||
+            normalize(
+              it.player_name || it.name || it.displayName || ''
+            ),
+        }));
+
+        if (active) {
+          setSuggestions(shaped.slice(0, 50)); // allow way more than 5
+          setHighlightIndex(shaped.length ? 0 : -1);
+        }
       } catch {
-        if (active) setSuggestions([]);
+        if (active) {
+          setSuggestions([]);
+          setHighlightIndex(-1);
+        }
       }
     }, 200);
 
@@ -196,15 +238,6 @@ export default function LiveGamePage() {
       clearTimeout(id);
     };
   }, [guess]);
-
-  // Guard when we truly can't bootstrap
-  const [bootError, setBootError] = useState('');
-  useEffect(() => {
-    if (bootError) {
-      const t = setTimeout(() => navigate('/game'), 1200);
-      return () => clearTimeout(t);
-    }
-  }, [bootError, navigate]);
 
   // -------------------------
   // Hints / Points
@@ -416,8 +449,9 @@ export default function LiveGamePage() {
 
       {/* Header Card */}
       <div className="rounded-xl bg-white shadow p-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="grid md:grid-cols-3 items-center">
+          {/* Left: Round type */}
+          <div className="flex items-center gap-3 justify-start">
             <Trophy className="h-5 w-5 text-purple-600" />
             <div className="text-sm">
               {isDaily ? (
@@ -425,16 +459,24 @@ export default function LiveGamePage() {
               ) : (
                 <span className="text-gray-600">Regular Round</span>
               )}
-              <div className="text-xs text-gray-500">
-                Potential points: <span className="font-semibold">{gameData.potentialPoints}</span>
-              </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
-            <div className={classNames('flex items-center gap-1 text-lg font-semibold', timeColorClass)}>
-              <AlarmClock className="h-5 w-5" />
+          {/* Center: Current points (gold) */}
+          <div className="flex items-center justify-center">
+            <div className="text-2xl font-extrabold text-amber-600">
+              Current points: <span>{points}</span>
+            </div>
+          </div>
+
+          {/* Right: timer + potential + guesses */}
+          <div className="flex flex-col items-end gap-1">
+            <div className={classNames('flex items-center gap-3 text-2xl font-semibold', timeColorClass)}>
+              <AlarmClock className="h-6 w-6" />
               {formatTime(timeSec)}
+              <span className="text-gray-900 text-base">
+                • Potential: <span className="font-bold">{gameData.potentialPoints}</span>
+              </span>
             </div>
             <div className="text-sm text-gray-600">
               Guesses left: <span className="font-semibold">{guessesLeft}</span>
@@ -493,10 +535,6 @@ export default function LiveGamePage() {
             onClick={() => reveal('firstLetter')}
             valueShown={usedHints.firstLetter ? String(gameData?.name?.[0]?.toUpperCase() || '') : null}
           />
-
-          <div className="pt-2 text-sm text-gray-500">
-            Current points: <span className="font-semibold text-gray-800">{points}</span>
-          </div>
         </div>
 
         {/* Guess + Suggestions */}
@@ -512,6 +550,13 @@ export default function LiveGamePage() {
           <form
             onSubmit={(e) => {
               e.preventDefault();
+              if (highlightIndex >= 0 && highlightIndex < suggestions.length) {
+                const chosen = suggestions[highlightIndex];
+                if (chosen?.display) {
+                  submitGuess(chosen.display);
+                  return;
+                }
+              }
               submitGuess(guess);
             }}
             className="space-y-4"
@@ -519,7 +564,23 @@ export default function LiveGamePage() {
             <input
               type="text"
               value={guess}
-              onChange={(e) => setGuess(e.target.value)}
+              onChange={(e) => {
+                setGuess(e.target.value);
+                setHighlightIndex(-1);
+              }}
+              onKeyDown={(e) => {
+                if (!suggestions.length) return;
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setHighlightIndex((i) => (i + 1) % suggestions.length);
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setHighlightIndex((i) => (i - 1 + suggestions.length) % suggestions.length);
+                } else if (e.key === 'Escape') {
+                  setSuggestions([]);
+                  setHighlightIndex(-1);
+                }
+              }}
               placeholder="Type a player's name"
               className="w-full px-4 py-3 rounded border"
               autoFocus
@@ -555,7 +616,7 @@ export default function LiveGamePage() {
                     })
                   );
                 }}
-                className="px-4 py-2 rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
+                className="px-4 py-2 rounded bg-red-600 hover:bg-red-700 text-white"
               >
                 Give up
               </button>
@@ -564,16 +625,25 @@ export default function LiveGamePage() {
 
           {suggestions?.length ? (
             <ul className="mt-3 border rounded divide-y max-h-56 overflow-auto">
-              {suggestions.map((sug) => (
+              {suggestions.map((sug, idx) => (
                 <li
-                  key={sug.id ?? sug.name}
-                  className="px-3 py-2 hover:bg-gray-50 cursor-pointer text-sm"
+                  key={sug.id ?? sug.display}
+                  className={classNames(
+                    'px-3 py-2 cursor-pointer text-sm',
+                    idx === highlightIndex ? 'bg-sky-50' : 'hover:bg-gray-50'
+                  )}
+                  onMouseEnter={() => setHighlightIndex(idx)}
+                  onMouseDown={(e) => {
+                    // prevent input blur before click handler
+                    e.preventDefault();
+                  }}
                   onClick={() => {
-                    setGuess(sug.name);
-                    submitGuess(sug.name);
+                    setGuess(sug.display);
+                    setSuggestions([]);
+                    submitGuess(sug.display);
                   }}
                 >
-                  {sug.name}
+                  {sug.display}
                 </li>
               ))}
             </ul>
