@@ -8,12 +8,12 @@ import {
   Trophy,
   Clock,
   Target,
-  Lightbulb,
   ArrowLeft,
+  Share2,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../supabase/client';
-import { getRandomPlayer, API_BASE } from '../api';
+import { getRandomPlayer, API_BASE, getGamePrompt } from '../api';
 import {
   loadPostGameCache,
   savePostGameCache,
@@ -29,13 +29,20 @@ export default function PostGamePage() {
   const [loading, setLoading] = useState(false);
   const [gamesLeft, setGamesLeft] = useState(null);
 
-  // LLM-only fact
+  // LLM-only fact (still shown when available)
   const [aiGeneratedFact, setAiGeneratedFact] = useState('');
 
-  // Gate the entire page until fact is ready (no "generating..." on screen)
+  // Dynamic banner line (LLM first; has graceful local fallback)
+  const [outroLine, setOutroLine] = useState('');
+
+  // Gate the entire page until fact is ready (so no “generating...” flashes)
   const [pageReady, setPageReady] = useState(false);
 
   const [scope, animate] = useAnimate();
+
+  // For “share” (copy) we capture only the card (minus buttons)
+  const cardRef = useRef(null);
+  const actionsRef = useRef(null);
 
   // ---- cache guards ----
   const hasRestoredRef = useRef(false);
@@ -50,7 +57,7 @@ export default function PostGamePage() {
     }
   }, [didWin]);
 
-  // ✅ Run the shake animation ONLY after the card is mounted (pageReady) and the ref exists
+  // Shake animation only on losses after page mounts
   useEffect(() => {
     if (didWin) return;
     if (!pageReady) return;
@@ -67,14 +74,12 @@ export default function PostGamePage() {
         await animate(scope.current, { x: -2 }, { duration: 0.05 });
         await animate(scope.current, { x: 2 }, { duration: 0.05 });
         await animate(scope.current, { x: 0 }, { duration: 0.05 });
-      } catch {
-        // StrictMode dev double-invoke etc. -> ignore
-      }
+      } catch {/* dev StrictMode double-invoke safe to ignore */}
     };
     sequence();
-  }, [didWin, pageReady, animate, scope]);
+  }, [didWin, pageReady, animate]);
 
-  // ---------- Restore from cache instantly (no re-fetch, no spinner) ----------
+  // ---------- Restore from cache instantly ----------
   useLayoutEffect(() => {
     if (hasRestoredRef.current) return;
 
@@ -86,6 +91,9 @@ export default function PostGamePage() {
         }
         if (typeof cached.gamesLeft === 'number') {
           setGamesLeft(cached.gamesLeft);
+        }
+        if (typeof cached.outroLine === 'string') {
+          setOutroLine(cached.outroLine);
         }
         // Show page right away
         setPageReady(true);
@@ -109,12 +117,12 @@ export default function PostGamePage() {
       savePostGameCache({
         playerKey,
         aiGeneratedFact,
+        outroLine,
         gamesLeft,
         scrollY: window.scrollY,
       });
     };
 
-    // save on backgrounding and when leaving the page
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') saveNow();
     };
@@ -124,12 +132,11 @@ export default function PostGamePage() {
     return () => {
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('pagehide', saveNow);
-      // also save on unmount
       saveNow();
     };
-  }, [playerKey, aiGeneratedFact, gamesLeft]);
+  }, [playerKey, aiGeneratedFact, outroLine, gamesLeft]);
 
-  // ---------- Fetch "games left" (background OK) ----------
+  // ---------- Fetch "games left" ----------
   useEffect(() => {
     if (!user?.id) return;
     let cancelled = false;
@@ -149,12 +156,11 @@ export default function PostGamePage() {
           const remaining = 10 - (data?.length || 0);
           setGamesLeft(Math.max(0, remaining));
         }
-      } catch (e) {
+      } catch {
         if (!cancelled) setGamesLeft(null);
       }
     }
 
-    // If restored, we might already have gamesLeft; still refresh in background
     fetchGamesLeft();
     return () => { cancelled = true; };
   }, [user?.id]);
@@ -178,23 +184,27 @@ export default function PostGamePage() {
     return <span>{timeLeft}</span>;
   }
 
-  // ---------- AI fun fact ----------
+  // ---------- AI bits: fun fact + outro line ----------
   useEffect(() => {
-    // If we restored a fact from cache, skip fetching.
-    if (restoredFromCacheRef.current && aiGeneratedFact) {
-      // ensure page is visible
+    if (!player) {
+      navigate('/game', { replace: true });
+      return;
+    }
+
+    // If we restored both from cache, just show the page.
+    if (restoredFromCacheRef.current && (aiGeneratedFact || outroLine)) {
       setPageReady(true);
       return;
     }
 
-    const getAIFact = async () => {
-      if (!player) {
-        navigate('/game', { replace: true });
-        return;
-      }
+    const fetchAll = async () => {
+      let fact = '';
+      let outro = '';
+
+      // 1) Fun fact (existing server endpoint)
       try {
         const transfers = player.transfers || player.transferHistory || [];
-        const response = await fetch(`${API_BASE}/ai/generate-player-fact`, {
+        const res = await fetch(`${API_BASE}/ai/generate-player-fact`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -207,29 +217,75 @@ export default function PostGamePage() {
             transferHistory: transfers
           }),
         });
+        if (res.ok) {
+          const data = await res.json();
+          fact = (data && typeof data.fact === 'string') ? data.fact.trim() : '';
+        }
+      } catch {/* ignore */ }
 
-        if (!response.ok) throw new Error(`Failed to generate fact: ${response.status}`);
-        const data = await response.json();
-        const fact = (data && typeof data.fact === 'string') ? data.fact.trim() : '';
-        setAiGeneratedFact(fact);
-      } catch (error) {
-        console.error('Error fetching AI fact:', error);
-        setAiGeneratedFact(''); // show nothing if it fails
-      } finally {
-        // Show the page now and persist to cache
-        setPageReady(true);
-        savePostGameCache({
-          playerKey,
-          aiGeneratedFact: (prev => prev)(), // harmless; next save happens in save effect
-          gamesLeft,
-          scrollY: window.scrollY,
-        });
+      // 2) Dynamic top banner line (LLM endpoint if present; otherwise rich local fallback)
+      try {
+        // If you already have a server helper, try it first
+        // (Many projects already expose something like this for the GamePage “engaging line”)
+        // Reuse getGamePrompt() if it exists; if not, try a dedicated endpoint; else fallback.
+        let line = '';
+        try {
+          if (typeof getGamePrompt === 'function') {
+            const promptRes = await getGamePrompt({
+              mode: 'postgame',
+              didWin: !!didWin,
+              stats: stats || {},
+              player: {
+                name: player?.name,
+                position: player?.position,
+                nationality: player?.nationality,
+              },
+            });
+            if (promptRes && typeof promptRes.text === 'string') {
+              line = promptRes.text.trim();
+            }
+          }
+        } catch {/* ignore and try direct endpoint */}
+
+        if (!line) {
+          const res2 = await fetch(`${API_BASE}/ai/game-outro`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ didWin, stats, player }),
+          });
+          if (res2.ok) {
+            const data = await res2.json();
+            line = (data && typeof data.line === 'string') ? data.line.trim() : '';
+          }
+        }
+
+        if (!line) {
+          line = localOutroLine({ didWin: !!didWin, stats, player });
+        }
+        outro = line;
+      } catch {
+        outro = localOutroLine({ didWin: !!didWin, stats, player });
       }
+
+      setAiGeneratedFact(fact);
+      setOutroLine(outro);
+
+      // Page is ready to show
+      setPageReady(true);
+
+      // persist to cache
+      savePostGameCache({
+        playerKey,
+        aiGeneratedFact: fact,
+        outroLine: outro,
+        gamesLeft,
+        scrollY: window.scrollY,
+      });
     };
 
-    getAIFact();
+    fetchAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playerKey]); // re-run only if it's a different result
+  }, [playerKey]);
 
   // If user somehow hits this without state, redirect
   useEffect(() => {
@@ -266,6 +322,37 @@ export default function PostGamePage() {
     }
   };
 
+  // ---- Share card (copy to clipboard as rich HTML; fallback to plain text) ----
+  const onShare = async () => {
+    try {
+      const html = buildShareHTML({ didWin, outroLine, player, stats, aiGeneratedFact });
+      const text = buildShareText({ didWin, outroLine, player, stats, aiGeneratedFact });
+
+      if (navigator.clipboard && 'write' in navigator.clipboard && window.ClipboardItem) {
+        const blobHTML = new Blob([html], { type: 'text/html' });
+        const blobText = new Blob([text], { type: 'text/plain' });
+        await navigator.clipboard.write([new window.ClipboardItem({
+          'text/html': blobHTML,
+          'text/plain': blobText,
+        })]);
+        alert('Post-game card copied to clipboard!');
+        return;
+      }
+
+      // Fallback: copy text
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        alert('Post-game summary copied to clipboard!');
+        return;
+      }
+
+      alert('Sorry, your browser blocked clipboard access.');
+    } catch (e) {
+      console.error('Share failed:', e);
+      alert('Could not copy the card. Please try again.');
+    }
+  };
+
   // ----- Loading screen while page prepares -----
   if (!pageReady) {
     return <LoadingWalk />;
@@ -280,23 +367,16 @@ export default function PostGamePage() {
     <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
       <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-4xl mx-auto px-4 py-8">
-        <div ref={scope} className={`bg-white rounded-xl shadow-sm p-6 ${!didWin ? 'border-red-200' : ''}`}>
-          {/* Banner */}
-          {didWin ? (
-            <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-6 text-center">
-              <h2 className="text-xl font-bold text-green-700">
-                <Trophy className="inline-block w-6 h-6 mr-1 mb-1" />
-                Great job! You guessed it!
-              </h2>
-            </div>
-          ) : (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-6 text-center">
-              <h2 className="text-xl font-bold text-red-700">
-                <Target className="inline-block w-6 h-6 mr-1 mb-1" />
-                Not quite! The player was {player?.name}
-              </h2>
-            </div>
-          )}
+        <div ref={cardRef} className="bg-white rounded-xl shadow-sm p-6" >
+          {/* Dynamic top banner (LLM if available) */}
+          <div
+            ref={scope}
+            className={`${didWin ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'} rounded-lg p-3 mb-6 text-center`}
+          >
+            <h2 className={`text-xl font-bold ${didWin ? 'text-green-700' : 'text-red-700'}`}>
+              {outroLine || (didWin ? 'Great job! You guessed it!' : `Not quite! The player was ${player?.name}`)}
+            </h2>
+          </div>
 
           {/* Player Info */}
           <div className="flex gap-6 mb-6">
@@ -317,14 +397,10 @@ export default function PostGamePage() {
             </div>
           </div>
 
-          {/* AI Fact (render only if LLM returned something) */}
+          {/* AI Fact (title removed as requested) */}
           {aiGeneratedFact && (
             <div className="bg-blue-50 rounded-lg p-4 mb-6">
-              <h3 className="font-semibold mb-2 flex items-center text-blue-700">
-                <Lightbulb className="h-5 w-5 mr-1 text-blue-600" />
-                Did you know…
-              </h3>
-              <p className="italic text-gray-700">{aiGeneratedFact}</p>
+              <p className="italic text-gray-800">{aiGeneratedFact}</p>
               <p className="mt-2 text-xs text-gray-500">
                 And now you'll have to google that to see if I made it all up...
               </p>
@@ -336,45 +412,66 @@ export default function PostGamePage() {
             <StatCard label="Points Earned" value={stats?.pointsEarned} icon={<Trophy className="h-5 w-5 text-yellow-600" />} />
             <StatCard label="Time Taken" value={`${stats?.timeSec}s`} icon={<Clock className="h-5 w-5 text-blue-600" />} />
             <StatCard label="Guesses Used" value={stats?.guessesUsed} icon={<Target className="h-5 w-5 text-green-600" />} />
-            <StatCard label="Hints Used" value={Object.values(stats?.usedHints || {}).filter(Boolean).length} icon={<Lightbulb className="h-5 w-5 text-amber-600" />} />
+            <StatCard label="Hints Used" value={Object.values(stats?.usedHints || {}).filter(Boolean).length} icon={<Target className="h-5 w-5 text-amber-600" />} />
           </div>
 
-          {/* Actions */}
-          {!isDaily && (
-            <div className="flex gap-3">
-              <button
-                onClick={() => { clearPostGameCache(); navigate('/game'); }}
-                className="flex-none bg-gray-100 hover:bg-gray-200 p-2 rounded-lg"
-                title="Back to Game Setup"
-              >
-                <ArrowLeft className="h-5 w-5 text-gray-700" />
-              </button>
-              <button
-                onClick={playAgainWithSameFilters}
-                disabled={loading || gamesLeft <= 0}
-                className={`flex-1 ${gamesLeft <= 0 ? 'bg-gray-300 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'} text-white py-2 rounded-lg font-medium flex items-center justify-center`}
-              >
-                {loading ? 'Loading...' : <>Play Again (Same Filters) <span className="ml-1 text-sm">{gamesLeft !== null ? `(${gamesLeft} left)` : ''}</span></>}
-              </button>
-            </div>
-          )}
-          {isDaily && (
-            <div className="mt-6 text-center">
-              <div className="text-xl font-bold text-yellow-700 mb-2">This was today's Daily Challenge!</div>
-              <div className="text-lg text-gray-700">
-                {didWin
-                  ? <>Congratulations! You won the daily challenge and earned <span className="font-bold text-green-700">10,000 points</span>!<br /><span className="text-green-700 font-semibold">You also earned an extra game for today!</span></>
-                  : 'Better luck next time! Try again tomorrow for another chance at 10,000 points.'}
+          {/* Actions (not included in “Share” HTML) */}
+          <div ref={actionsRef} className="flex gap-3">
+            {!isDaily && (
+              <>
+                <button
+                  onClick={() => { clearPostGameCache(); navigate('/game'); }}
+                  className="flex-none bg-gray-100 hover:bg-gray-200 p-2 rounded-lg"
+                  title="Back to Game Setup"
+                >
+                  <ArrowLeft className="h-5 w-5 text-gray-700" />
+                </button>
+                <button
+                  onClick={onShare}
+                  className="flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-3 rounded-lg flex items-center gap-2"
+                  title="Copy post-game card"
+                >
+                  <Share2 className="h-4 w-4" />
+                  Share
+                </button>
+                <button
+                  onClick={playAgainWithSameFilters}
+                  disabled={loading || gamesLeft <= 0}
+                  className={`flex-1 ${gamesLeft <= 0 ? 'bg-gray-300 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'} text-white py-2 rounded-lg font-medium flex items-center justify-center`}
+                >
+                  {loading ? 'Loading...' : <>Play Again (Same Filters) <span className="ml-1 text-sm">{gamesLeft !== null ? `(${gamesLeft} left)` : ''}</span></>}
+                </button>
+              </>
+            )}
+
+            {isDaily && (
+              <div className="w-full flex flex-col items-center text-center">
+                <div className="text-xl font-bold text-yellow-700 mb-2">This was today's Daily Challenge!</div>
+                <div className="text-lg text-gray-700">
+                  {didWin
+                    ? <>Congratulations! You won the daily challenge and earned <span className="font-bold text-green-700">10,000 points</span>!<br /><span className="text-green-700 font-semibold">You also earned an extra game for today!</span></>
+                    : 'Better luck next time! Try again tomorrow for another chance at 10,000 points.'}
+                </div>
+                <div className="mt-2 text-sm text-gray-500">Next daily challenge in <CountdownToTomorrow /></div>
+                <div className="mt-4 flex gap-3">
+                  <button
+                    onClick={onShare}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg flex items-center gap-2"
+                    title="Copy post-game card"
+                  >
+                    <Share2 className="h-4 w-4" />
+                    Share
+                  </button>
+                  <button
+                    onClick={() => { clearPostGameCache(); navigate('/game'); }}
+                    className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg"
+                  >
+                    Back to Game Setup
+                  </button>
+                </div>
               </div>
-              <div className="mt-2 text-sm text-gray-500">Next daily challenge in <CountdownToTomorrow /></div>
-              <button
-                onClick={() => { clearPostGameCache(); navigate('/game'); }}
-                className="mt-4 bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg"
-              >
-                Back to Game Setup
-              </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </motion.div>
     </div>
@@ -398,22 +495,115 @@ function getPlayerKey(p) {
   if (!p) return '';
   return String(
     p.id ??
-      p.player_id ??
-      p.player_league_season_id ??
-      p.name ??
-      ''
+    p.player_id ??
+    p.player_league_season_id ??
+    p.name ??
+    ''
   );
+}
+
+/** Local, rich fallback line if LLM endpoint isn’t available */
+function localOutroLine({ didWin, stats, player }) {
+  const name = player?.name || 'the player';
+  const t = Number(stats?.timeSec || 0);
+  const g = Number(stats?.guessesUsed || 0);
+  const hints = Object.values(stats?.usedHints || {}).filter(Boolean).length;
+
+  if (didWin) {
+    if (t <= 30 && g <= 2) return `Lightning! You nailed ${name} in ${t}s with just ${g} guess${g === 1 ? '' : 'es'} ⚡`;
+    if (g === 1) return `Perfect memory! ${name} in a single guess — sensational 🎯`;
+    if (hints === 0) return `Pure skill! You cracked ${name} with no hints used 👏`;
+    return `Well played — ${name} solved in ${g} guess${g === 1 ? '' : 'es'} after ${t}s ✅`;
+  } else {
+    if (g >= 6) return `Close, but not quite — ${name} slipped away after ${g} guesses 😬`;
+    if (hints >= 2) return `Even with hints, ${name} stayed elusive — tough one! 😵`;
+    return `So close! ${name} was the answer — tomorrow’s your day 💪`;
+  }
+}
+
+/** Build a rich HTML snippet for clipboard share (no buttons included) */
+function buildShareHTML({ didWin, outroLine, player, stats, aiGeneratedFact }) {
+  const color = didWin ? '#166534' : '#991b1b'; // green-700 / red-700
+  const badgeBG = didWin ? '#dcfce7' : '#fee2e2'; // green-100 / red-100
+  const factHTML = aiGeneratedFact
+    ? `<div style="background:#eff6ff;padding:12px;border-radius:10px;margin:16px 0;">
+         <div style="font-style:italic;color:#111827;">${escapeHTML(aiGeneratedFact)}</div>
+         <div style="margin-top:6px;font-size:11px;color:#6b7280;">And now you'll have to google that to see if I made it all up...</div>
+       </div>`
+    : '';
+
+  return `
+  <div style="max-width:720px;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Helvetica,Arial,sans-serif;line-height:1.5;background:#ffffff;border-radius:12px;padding:16px;border:1px solid #e5e7eb;">
+    <div style="text-align:center;background:${badgeBG};border:1px solid #e5e7eb;padding:10px;border-radius:10px;margin-bottom:16px;">
+      <div style="font-weight:700;color:${color};font-size:18px;">${escapeHTML(outroLine || (didWin ? 'Great job! You guessed it!' : `Not quite! The player was ${player?.name || ''}`))}</div>
+    </div>
+
+    <div style="display:flex;gap:16px;margin-bottom:16px;align-items:center;">
+      ${player?.photo || player?.player_photo
+        ? `<img src="${player.photo || player.player_photo}" alt="${escapeHTML(player?.name || '')}" style="width:96px;height:96px;border-radius:10px;object-fit:cover;border:1px solid #e5e7eb;" />`
+        : `<div style="width:96px;height:96px;border-radius:10px;background:#f3f4f6;display:flex;align-items:center;justify-content:center;color:#9ca3af;">👤</div>`
+      }
+      <div>
+        <div style="font-weight:800;font-size:20px;margin-bottom:6px;">${escapeHTML(player?.name || '')}</div>
+        <div style="color:#4b5563;font-size:14px;">Age: ${escapeHTML(String(player?.age ?? '—'))}</div>
+        <div style="color:#4b5563;font-size:14px;">Nationality: ${escapeHTML(player?.nationality || '—')}</div>
+        <div style="color:#4b5563;font-size:14px;">Position: ${escapeHTML(player?.position || '—')}</div>
+      </div>
+    </div>
+
+    ${factHTML}
+
+    <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;">
+      ${shareStat('Points Earned', String(stats?.pointsEarned ?? '—'))}
+      ${shareStat('Time Taken', `${String(stats?.timeSec ?? '—')}s`)}
+      ${shareStat('Guesses Used', String(stats?.guessesUsed ?? '—'))}
+      ${shareStat('Hints Used', String(Object.values(stats?.usedHints || {}).filter(Boolean).length))}
+    </div>
+  </div>`;
+}
+
+function shareStat(label, value) {
+  return `<div style="border:1px solid #e5e7eb;border-radius:10px;padding:10px;">
+      <div style="color:#6b7280;font-size:12px;margin-bottom:4px;">${escapeHTML(label)}</div>
+      <div style="font-weight:700;font-size:18px;color:#111827;">${escapeHTML(value)}</div>
+    </div>`;
+}
+
+function buildShareText({ didWin, outroLine, player, stats, aiGeneratedFact }) {
+  const lines = [];
+  lines.push(outroLine || (didWin ? 'Great job! You guessed it!' : `Not quite! The player was ${player?.name || ''}`));
+  lines.push('');
+  lines.push(`${player?.name || ''}`);
+  lines.push(`Age: ${player?.age ?? '—'}`);
+  lines.push(`Nationality: ${player?.nationality || '—'}`);
+  lines.push(`Position: ${player?.position || '—'}`);
+  if (aiGeneratedFact) {
+    lines.push('');
+    lines.push(`Fun fact: ${aiGeneratedFact}`);
+  }
+  lines.push('');
+  lines.push(`Points Earned: ${stats?.pointsEarned ?? '—'}`);
+  lines.push(`Time Taken: ${stats?.timeSec ?? '—'}s`);
+  lines.push(`Guesses Used: ${stats?.guessesUsed ?? '—'}`);
+  lines.push(`Hints Used: ${Object.values(stats?.usedHints || {}).filter(Boolean).length}`);
+  return lines.join('\n');
+}
+
+function escapeHTML(s) {
+  return String(s)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 /** Full-screen loader with a spinning football and walking footprints */
 function LoadingWalk() {
-  // generate a few trailing footprints that keep walking to the right
   const steps = Array.from({ length: 6 });
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-gradient-to-b from-green-50 to-transparent">
       <div className="flex items-center gap-8">
-        {/* Spinning ball */}
         <motion.div
           aria-label="Loading"
           role="img"
@@ -423,8 +613,6 @@ function LoadingWalk() {
         >
           ⚽️
         </motion.div>
-
-        {/* Footprints trail */}
         <div className="relative w-56 h-10">
           {steps.map((_, i) => (
             <motion.span

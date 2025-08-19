@@ -108,3 +108,15 @@ export const updateProfile = async () => ({});
 export const uploadAvatar  = async () => ({});
 export const saveGame      = async () => ({});
 export const getGameById   = async () => ({});
+
+export const getGameOutro = async (payload) => {
+  const res = await fetch(`${API_BASE}/ai/game-outro`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to generate outro: ${res.status}`);
+  }
+  return res.json(); // { line: string }
+};

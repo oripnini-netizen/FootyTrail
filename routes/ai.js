@@ -51,6 +51,13 @@ function summarizeClubs(transferHistory = []) {
   return Array.from(clubs).slice(0, 10).join(', ') || 'N/A';
 }
 
+function secondsToClock(s = 0) {
+  const n = Math.max(0, Math.floor(Number(s) || 0));
+  const mm = String(Math.floor(n / 60)).padStart(2, '0');
+  const ss = String(n % 60).padStart(2, '0');
+  return `${mm}:${ss}`;
+}
+
 // ---------- routes ----------
 
 // POST /api/ai/generate-player-fact
@@ -65,10 +72,9 @@ router.post('/generate-player-fact', async (req, res) => {
     const name = player?.name?.trim();
     if (!name) return res.status(400).json({ error: 'Player data required: name' });
 
-    const model = process.env.OPENAI_MODEL || 'gpt-4o'; // stronger default; set OPENAI_MODEL to tweak
+    const model = process.env.OPENAI_MODEL || 'gpt-4o';
     const transferHistorySummary = summarizeClubs(transferHistory);
 
-    // Your original prompt, with variables filled in
     const userPrompt = `
 You are a football trivia expert. Your task is to provide a short, single-sentence 'Did you know...' style fun fact about a football player.
 
@@ -84,19 +90,15 @@ Now, find a NEW and INTERESTING fun fact about ${name} from your own knowledge. 
 - A famous nickname or unusual habit
 - A unique record they hold
 - A memorable goal or match moment
-- An interesting piece of personal trivia (e.g., family connections, hobbies, education)
+- An interesting piece of personal trivia (e.g., family, hobbies, education)
 - Something surprising about their career path or background
 
-Example: "Did you know that his nickname is 'The Butcher of Amsterdam' due to his aggressive playing style?"
-
 CRITICAL INSTRUCTIONS:
-- Do NOT include any source URLs, links, or citations in parentheses
-- Do NOT include markdown links like [website](url)
+- Do NOT include any source URLs, links, or citations
 - Do NOT mention where you found the information
 - Provide ONLY the fun fact as a clean, single sentence
 - Start with "Did you know that" or similar phrasing
-
-Generate the fun fact now:`.trim();
+`.trim();
 
     const completion = await openai.chat.completions.create({
       model,
@@ -162,6 +164,83 @@ router.post('/generate-game-prompt', async (_req, res) => {
     };
     console.error('[AI prompt error]', safe);
     return res.status(500).json({ error: 'Failed to generate prompt' });
+  }
+});
+
+// POST /api/ai/game-outro
+// Generate a single-sentence end-of-round line (praise/tease) based on performance.
+router.post('/game-outro', async (req, res) => {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(500).json({ error: 'OPENAI_API_KEY not configured' });
+    }
+
+    const {
+      won,
+      points = 0,
+      guesses = 0,
+      timeSeconds = 0,
+      playerName,
+      isDaily = false,
+    } = req.body || {};
+
+    const result = won ? 'win' : 'loss';
+    const timeClock = secondsToClock(timeSeconds);
+
+    // Clear, strict instruction set to keep output crisp & single-sentence
+    const messages = [
+      {
+        role: 'system',
+        content:
+`You are a witty football quiz commentator.
+Write EXACTLY ONE sentence reacting to the user's round outcome.
+Tone:
+- If win: celebratory and concise.
+- If loss: cheeky but encouraging.
+Content constraints:
+- 1 single sentence only (max ~22 words).
+- No emojis, no hashtags, no URLs or sources.
+- You MAY mention the player's name once if provided.
+- Avoid filler like "overall", "in conclusion", etc.`
+      },
+      {
+        role: 'user',
+        content:
+`Round summary:
+- Result: ${result}
+- Mode: ${isDaily ? 'Daily Challenge' : 'Regular'}
+- Points: ${points}
+- Guesses used: ${guesses}
+- Time: ${timeClock}
+- Player: ${playerName || 'N/A'}
+
+Write the one-sentence outro now.`
+      }
+    ];
+
+    const completion = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o',
+      temperature: 0.8,
+      max_tokens: 50,
+      messages,
+    });
+
+    const line = firstSentenceOnly(completion?.choices?.[0]?.message?.content?.trim() || '');
+    if (!line) {
+      return res.status(502).json({ error: 'LLM returned empty content' });
+    }
+    res.json({ line });
+  } catch (err) {
+    const safe = {
+      name: err?.name,
+      status: err?.status,
+      statusText: err?.statusText,
+      code: err?.code,
+      message: err?.message,
+      details: err?.response?.data || err?.data || null,
+    };
+    console.error('[AI game-outro error]', safe);
+    return res.status(500).json({ error: 'Failed to generate outro' });
   }
 });
 

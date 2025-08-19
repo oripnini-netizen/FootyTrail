@@ -35,12 +35,7 @@ function toIdString(v) {
   if (typeof v === 'object') {
     // Common keys we might see coming from the client or RPCs
     const guess =
-      v.player_id ??
-      v.id ??
-      v.value ??
-      v.competition_id ??
-      v.season_id ??
-      null;
+      v.player_id ?? v.id ?? v.value ?? v.competition_id ?? v.season_id ?? null;
     return guess != null ? String(guess) : String(v);
   }
   return String(v);
@@ -515,8 +510,7 @@ router.post('/generate-daily-challenge', async (req, res) => {
 
     // deterministic pick by date
     const idx =
-      Math.abs(Array.from(date).reduce((h, ch) => ((h << 5) - h + ch.charCodeAt(0)) | 0, 0)) %
-      poolIds.length;
+      Math.abs(Array.from(date).reduce((h, ch) => ((h << 5) - h + ch.charCodeAt(0)) | 0, 0)) % poolIds.length;
 
     const playerId = poolIds[idx];
     const card = await getPlayerCardFromPIS(playerId);
