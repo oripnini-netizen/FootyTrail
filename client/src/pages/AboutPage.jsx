@@ -118,8 +118,8 @@ export default function AboutPage() {
               <h3 className="font-semibold text-green-700 mb-2">Maximize Points:</h3>
               <ul className="list-disc pl-6 space-y-2 text-gray-700">
                 <li>Include more competitions for larger player pools and higher potential points.</li>
-                <li>Set a higher <strong>minimum market value</strong> for tougher pools and more points.</li>
-                <li>Use hints sparingly—image hint costs the most.</li>
+                <li>Set a lower <strong>minimum market value</strong> for tougher pools and more points.</li>
+                <li>Use hints sparingly—first letter hint costs the most.</li>
                 <li>Guess quickly to minimize time penalties.</li>
                 <li>Win the Daily Challenge to earn a bonus regular game.</li>
               </ul>
@@ -215,7 +215,7 @@ export default function AboutPage() {
           
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-5 text-gray-700">
             <ul className="list-disc pl-6 space-y-2">
-              <li>Create leagues with 2–20 friends using their FootyTrail email addresses.</li>
+              <li>Create leagues with 2–20 friends - a bot will be added for odd number of participants.</li>
               <li>Your total daily points are compared head-to-head with your opponent’s.</li>
               <li>Win = 3 points, Draw = 1 point each. League tables update live through the day.</li>
               <li>League play is independent of global rankings.</li>
