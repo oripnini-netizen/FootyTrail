@@ -1,30 +1,37 @@
 // client/src/pages/AdminPage.jsx
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { useAuth } from '../context/AuthContext';
-import { useNavigate } from 'react-router-dom';
-import { supabase } from '../supabase';
-import { getCompetitions, getSeasons, generateDailyChallenge } from '../api';
 import {
-  Filter,
   ShieldCheck,
-  Trash2,
-  UsersRound,
+  Filter as FilterIcon,
   ChevronDown,
   ChevronUp,
+  Trash2,
   Star,
   CheckSquare,
-  CalendarClock
+  CalendarClock,
+  Globe2,
+  Trophy,
+  Layers,
 } from 'lucide-react';
 
-function classNames(...s) {
-  return s.filter(Boolean).join(' ');
+import { useAuth } from '../context/AuthContext';
+import { supabase } from '../supabase';
+import {
+  getCompetitions,
+  getSeasons,
+  getCounts,
+  generateDailyChallenge,
+  getPlayersCoverage, // <-- RPC
+} from '../api';
+
+function cx(...a) {
+  return a.filter(Boolean).join(' ');
 }
 
 function Section({ title, icon, collapsed, onToggle, actions, children }) {
-  // Header actions don't toggle collapse.
   return (
-    <div className="rounded-lg border bg-white/60">
+    <div className="rounded-lg border bg-white/70">
       <div className="flex items-center justify-between px-3 py-2">
         <button type="button" onClick={onToggle} className="inline-flex items-center gap-2">
           {icon}
@@ -38,59 +45,16 @@ function Section({ title, icon, collapsed, onToggle, actions, children }) {
   );
 }
 
-const SelectedChips = ({ title, items, onClear, getLabel, onRemoveItem, hoverClose = false }) => {
-  if (!items?.length) return null;
-  return (
-    <div className="mb-2">
-      {title && <div className="text-xs text-gray-600 mb-1">{title}</div>}
-      <div className="flex flex-wrap gap-2">
-        {items.map((t, index) => {
-          const label = getLabel ? getLabel(t) : String(t);
-          return (
-            <span
-              key={`${String(t)}-${index}`}
-              className={classNames(
-                'group relative inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800',
-                hoverClose && 'pr-6'
-              )}
-            >
-              {label}
-              {hoverClose && onRemoveItem && (
-                <button
-                  type="button"
-                  onClick={() => onRemoveItem(t)}
-                  className="absolute right-0 top-0 bottom-0 hidden group-hover:flex items-center justify-center w-5 text-red-600 hover:text-red-700"
-                  title="Remove"
-                >
-                  ×
-                </button>
-              )}
-            </span>
-          );
-        })}
-        <button type="button" onClick={onClear} className="text-xs text-gray-600 underline hover:text-gray-800">
-          Clear
-        </button>
-      </div>
-    </div>
-  );
-};
-
-function PresetButton({ onClick, children, title, active = false }) {
+function PresetBtn({ onClick, children, active, title }) {
   return (
     <button
       type="button"
-      onClick={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        onClick();
-      }}
+      onClick={(e) => { e.preventDefault(); e.stopPropagation(); onClick(); }}
       title={title}
-      className={classNames(
+      className={cx(
         'inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md border transition-colors',
-        active
-          ? 'bg-green-600 text-white border-green-700'
-          : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+        active ? 'bg-green-600 text-white border-green-700'
+               : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
       )}
     >
       {children}
@@ -100,165 +64,201 @@ function PresetButton({ onClick, children, title, active = false }) {
 
 export default function AdminPage() {
   const { user } = useAuth();
-  const navigate = useNavigate();
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [loading, setLoading] = useState(true);
 
-  // NEW model: competitions + seasons + minMarketValue
+  const [loading, setLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  // Filters state
   const [groupedCompetitions, setGroupedCompetitions] = useState({});
   const [allSeasons, setAllSeasons] = useState([]);
   const [selectedCompetitionIds, setSelectedCompetitionIds] = useState([]);
   const [selectedSeasons, setSelectedSeasons] = useState([]);
   const [minMarketValue, setMinMarketValue] = useState(0);
 
+  // Collapses (both cards collapsed by default)
   const [filtersCollapsed, setFiltersCollapsed] = useState(true);
   const [compCollapsed, setCompCollapsed] = useState(false);
   const [seasonsCollapsed, setSeasonsCollapsed] = useState(false);
   const [mvCollapsed, setMvCollapsed] = useState(false);
 
   const [expandedCountries, setExpandedCountries] = useState({});
+
+  // Save-button enabling
+  const [filtersChanged, setFiltersChanged] = useState(false);
+
+  // Generate DC
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [status, setStatus] = useState('');
-  const [defaultFilters, setDefaultFilters] = useState(null);
-  const [filtersChanged, setFiltersChanged] = useState(false);
   const [dailyChallenges, setDailyChallenges] = useState([]);
 
-  const competitionIdToLabel = useMemo(() => {
-    const map = {};
-    Object.entries(groupedCompetitions || {}).forEach(([country, comps]) => {
-      (comps || []).forEach((c) => {
-        map[String(c.competition_id)] = `${country} - ${c.competition_name}`;
-      });
-    });
-    return map;
+  // Players coverage card
+  const [coverageCollapsed, setCoverageCollapsed] = useState(true);
+  const [coverage, setCoverage] = useState(null);
+  const [coverageCountryOpen, setCoverageCountryOpen] = useState({});
+  const [coverageCompOpen, setCoverageCompOpen] = useState({}); // key: `${country}|${compId}`
+
+  // ---- helpers ----
+  const flatCompetitions = useMemo(() => {
+    const arr = [];
+    Object.values(groupedCompetitions).forEach((list) => (list || []).forEach((c) => arr.push(c)));
+    return arr;
   }, [groupedCompetitions]);
 
-  const flatCompetitions = useMemo(() => {
-    const out = [];
-    Object.values(groupedCompetitions).forEach(arr => (arr || []).forEach(c => out.push(c)));
-    return out;
+  const compIdToLabel = useMemo(() => {
+    const m = {};
+    Object.entries(groupedCompetitions).forEach(([country, comps]) => {
+      (comps || []).forEach((c) => {
+        m[String(c.competition_id)] = { label: `${country} - ${c.competition_name}`, country, comp: c };
+      });
+    });
+    return m;
   }, [groupedCompetitions]);
 
   const top10CompetitionIds = useMemo(() => {
     const arr = [...flatCompetitions];
     arr.sort((a, b) => (Number(b.total_value_eur || 0) - Number(a.total_value_eur || 0)));
-    return arr.slice(0, 10).map(c => String(c.competition_id));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return arr.slice(0, 10).map((c) => String(c.competition_id));
   }, [flatCompetitions]);
 
-  // Track changes to filters
+  const toggleCountry = (country) =>
+    setExpandedCountries((p) => ({ ...p, [country]: !p[country] }));
+
+  const fmtCurrency = (n) =>
+    new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })
+      .format(Number(n || 0));
+
+  // ---- access check ----
   useEffect(() => {
-    if (!defaultFilters) return;
-    const changed =
-      JSON.stringify([...selectedCompetitionIds].sort()) !== JSON.stringify([...(defaultFilters.competitions || [])].sort()) ||
-      JSON.stringify([...selectedSeasons].sort()) !== JSON.stringify([...(defaultFilters.seasons || [])].sort()) ||
-      Number(minMarketValue) !== Number(defaultFilters.min_market_value || 0);
-    setFiltersChanged(changed);
-  }, [selectedCompetitionIds, selectedSeasons, minMarketValue, defaultFilters]);
-
-  const toggleCountry = (country) => setExpandedCountries(prev => ({ ...prev, [country]: !prev[country] }));
-  const clearCompetitions = () => setSelectedCompetitionIds([]);
-  const selectAllCompetitions = () => setSelectedCompetitionIds(flatCompetitions.map(c => String(c.competition_id)));
-  const selectTop10Competitions = () => setSelectedCompetitionIds(top10CompetitionIds);
-
-  const clearSeasons = () => setSelectedSeasons([]);
-  const selectAllSeasons = () => setSelectedSeasons(allSeasons);
-  const last5Seasons = () => setSelectedSeasons(allSeasons.slice(0, 5));
-
-  useEffect(() => {
-    async function checkAdmin() {
+    (async () => {
       if (!user?.id) {
         setIsAdmin(false);
         setLoading(false);
         return;
       }
-      const { data, error } = await supabase
-        .from('users')
-        .select('role')
-        .eq('id', user.id)
-        .single();
+      const { data, error } = await supabase.from('users').select('role').eq('id', user.id).single();
       setIsAdmin(!error && data?.role === 'admin');
       setLoading(false);
-    }
-    checkAdmin();
+    })();
   }, [user]);
 
+  // ---- initial load ----
   useEffect(() => {
-    async function loadFilters() {
+    (async () => {
+      // competitions / seasons
       const compsRes = await getCompetitions();
       const grouped = compsRes.groupedByCountry || {};
       setGroupedCompetitions(grouped);
-      const initialCollapse = {};
-      Object.keys(grouped).forEach((c) => (initialCollapse[c] = false));
-      setExpandedCountries(initialCollapse);
+
+      const expandInit = {};
+      Object.keys(grouped).forEach((c) => (expandInit[c] = false));
+      setExpandedCountries(expandInit);
 
       const seasonsRes = await getSeasons();
       setAllSeasons(seasonsRes.seasons || []);
 
-      const { data: settings } = await supabase
+      // daily challenge settings (default filters)
+      const { data: settings, error: settingsErr } = await supabase
         .from('daily_challenge_settings')
-        .select('competitions, seasons, min_market_value, leagues, appearances')
+        .select('competitions, seasons, min_market_value')
         .eq('id', 1)
-        .single();
+        .maybeSingle();
 
-      if (settings) {
-        const effective = {
-          competitions: settings.competitions || (settings.leagues || []).map(String),
-          seasons: settings.seasons || [],
-          min_market_value: settings.min_market_value ?? 0,
-        };
-        setDefaultFilters(effective);
-        setSelectedCompetitionIds(effective.competitions || []);
-        setSelectedSeasons(effective.seasons || []);
-        setMinMarketValue(Number(effective.min_market_value || 0));
+      if (settingsErr) {
+        console.error('load settings error:', settingsErr.message);
       }
 
+      setSelectedCompetitionIds(settings?.competitions || []);
+      setSelectedSeasons(settings?.seasons || []);
+      setMinMarketValue(Number(settings?.min_market_value || 0));
+      setFiltersChanged(false);
+
+      // daily challenges list
       const { data: challenges } = await supabase
         .from('daily_challenges')
         .select('challenge_date, player_id, player_name, created_at')
         .order('challenge_date', { ascending: false });
       setDailyChallenges(challenges || []);
-    }
-    loadFilters();
+
+      // -------- Coverage via RPC (complete & fast) ----------
+      try {
+        const rows = await getPlayersCoverage(); // [{country, competition_id, competition_name, logo_url, season_id, players_count}]
+        const countries = {};
+        for (const r of rows) {
+          const country = r.country || 'Unknown';
+          const compId = String(r.competition_id);
+          const season = String(r.season_id);
+
+          countries[country] = countries[country] || { total: 0, competitions: {} };
+          const cBucket = countries[country];
+
+          cBucket.competitions[compId] = cBucket.competitions[compId] || {
+            name: r.competition_name || compId,
+            logo_url: r.logo_url || null,
+            total: 0,
+            seasons: {}
+          };
+
+          const compBucket = cBucket.competitions[compId];
+          compBucket.seasons[season] = Number(r.players_count || 0);
+          compBucket.total += Number(r.players_count || 0);
+          cBucket.total += Number(r.players_count || 0);
+        }
+        setCoverage({ countries });
+      } catch (err) {
+        console.error('coverage rpc error:', err.message);
+        setCoverage({ countries: {} });
+      }
+      // ------------------------------------------------------
+    })();
   }, []);
 
-  if (loading) return <div className="p-8 text-center">Loading...</div>;
-  if (!isAdmin) return <div className="p-8 text-center text-red-600">Access denied. Admins only.</div>;
+  // mark changed on any user interaction
+  const markChanged = () => setFiltersChanged(true);
 
-  const handleDateChange = (e) => setDate(e.target.value);
+  // competitions actions
+  const clearCompetitions = () => { setSelectedCompetitionIds([]); markChanged(); };
+  const selectAllCompetitions = () => {
+    setSelectedCompetitionIds(flatCompetitions.map((c) => String(c.competition_id)));
+    markChanged();
+  };
+  const selectTop10Competitions = () => { setSelectedCompetitionIds(top10CompetitionIds); markChanged(); };
 
-  const handleSubmit = async (e) => {
+  // seasons actions
+  const clearSeasons = () => { setSelectedSeasons([]); markChanged(); };
+  const selectAllSeasons = () => { setSelectedSeasons(allSeasons); markChanged(); };
+  const selectLast5Seasons = () => { setSelectedSeasons(allSeasons.slice(0, 5)); markChanged(); };
+
+  // submit/save defaults
+  const handleSaveDefaults = async (e) => {
     e.preventDefault();
-    setStatus('Saving...');
+    setStatus('Saving…');
+
     const payload = {
       id: 1,
       competitions: selectedCompetitionIds,
       seasons: selectedSeasons,
       min_market_value: Number(minMarketValue) || 0,
-      leagues: null,
-      appearances: null,
     };
+
     const { error } = await supabase.from('daily_challenge_settings').upsert(payload);
-    setStatus(error ? 'Error saving filters: ' + error.message : 'Filters saved!');
-    if (!error) {
-      setDefaultFilters({
-        competitions: selectedCompetitionIds,
-        seasons: selectedSeasons,
-        min_market_value: Number(minMarketValue) || 0,
-      });
-      setFiltersChanged(false);
+    if (error) {
+      setStatus('Error saving filters: ' + error.message);
+      return;
     }
+
+    setStatus('Filters saved!');
+    setFiltersChanged(false);
   };
 
   const handleGenerate = async () => {
-    setStatus('Generating daily challenge...');
+    setStatus('Generating daily challenge…');
     const filters = {
       competitions: selectedCompetitionIds,
       seasons: selectedSeasons,
       minMarketValue: Number(minMarketValue) || 0,
     };
-    const result = await generateDailyChallenge({ date, filters });
-    setStatus(result.success ? 'Daily challenge generated for ' + date : 'Error: ' + (result.error || 'Unknown error'));
+    const res = await generateDailyChallenge({ date, filters });
+    setStatus(res.success ? `Daily challenge generated for ${date}` : `Error: ${res.error || 'Unknown error'}`);
     const { data: challenges } = await supabase
       .from('daily_challenges')
       .select('challenge_date, player_id, player_name, created_at')
@@ -266,238 +266,260 @@ export default function AdminPage() {
     setDailyChallenges(challenges || []);
   };
 
-  const fmtCurrency = (n) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(Number(n || 0));
+  if (loading) return <div className="p-8 text-center">Loading…</div>;
+  if (!isAdmin) return <div className="p-8 text-center text-red-600">Access denied. Admins only.</div>;
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }}>
-        <h1 className="text-2xl font-bold mb-6 flex items-center gap-2">
-          <ShieldCheck className="h-7 w-7 text-blue-600" /> Daily Challenge Admin
-        </h1>
-
-        {/* Daily Challenge Card */}
-        <div className="rounded-xl shadow-lg border bg-green-50/80 p-6 mb-8">
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="rounded-xl shadow-md border bg-green-50/60 p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Filter className="h-5 w-5 text-green-700" />
-                  <h3 className="text-lg font-semibold text-green-900">Difficulty Filters</h3>
-                </div>
-                <button className="text-gray-600 hover:text-gray-800" type="button" onClick={() => setFiltersCollapsed(c => !c)}>
-                  {filtersCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
-                </button>
-              </div>
-
-              {!filtersCollapsed && (
-                <div className="mt-4 space-y-6">
-                  {/* Competitions */}
-                  <Section
-                    title="Competitions"
-                    icon={<Star className="h-4 w-4 text-green-700" />}
-                    collapsed={compCollapsed}
-                    onToggle={() => setCompCollapsed(v => !v)}
-                    actions={
-                      <div className="flex items-center gap-2">
-                        <button type="button" onClick={selectTop10Competitions} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
-                          <Star className="h-3 w-3" /> Top 10
-                        </button>
-                        <button type="button" onClick={selectAllCompetitions} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
-                          <CheckSquare className="h-3 w-3" /> Select All
-                        </button>
-                        <button type="button" onClick={clearCompetitions} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
-                          <Trash2 className="h-3 w-3" />Clear All
-                        </button>
-                      </div>
-                    }
-                  >
-                    <SelectedChips
-                      title="Chosen competitions"
-                      items={selectedCompetitionIds}
-                      onClear={clearCompetitions}
-                      getLabel={id => competitionIdToLabel[id] || `Competition ${id}`}
-                      onRemoveItem={id => setSelectedCompetitionIds(prev => prev.filter(x => x !== id))}
-                      hoverClose
-                    />
-                    <div className="max-h-96 overflow-y-auto pr-2">
-                      {Object.entries(groupedCompetitions)
-                        .sort(([a], [b]) => a.localeCompare(b))
-                        .map(([country, comps]) => (
-                          <div key={country} className="mb-2">
-                            <button
-                              onClick={e => { e.preventDefault(); e.stopPropagation(); toggleCountry(country); }}
-                              type="button"
-                              className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
-                            >
-                              <div className="flex items-center gap-2">
-                                {comps?.[0]?.flag_url && (
-                                  <img src={comps[0].flag_url} alt={country} className="w-6 h-4 object-cover rounded" />
-                                )}
-                                <span>{country}</span>
-                                <span className="text-xs text-gray-500">({(comps || []).length})</span>
-                              </div>
-                              {expandedCountries[country] ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                            </button>
-
-                            {expandedCountries[country] && (
-                              <div className="ml-8 space-y-2 mt-2">
-                                {(comps || []).map(c => (
-                                  <label key={c.competition_id} className="flex items-center gap-2 cursor-pointer" onClick={(e) => e.stopPropagation()}>
-                                    <input
-                                      type="checkbox"
-                                      checked={selectedCompetitionIds.includes(String(c.competition_id))}
-                                      onChange={() =>
-                                        setSelectedCompetitionIds(prev =>
-                                          prev.includes(String(c.competition_id))
-                                            ? prev.filter(x => x !== String(c.competition_id))
-                                            : [...prev, String(c.competition_id)]
-                                        )
-                                      }
-                                      className="rounded"
-                                    />
-                                    {c.logo_url && <img src={c.logo_url} alt={c.competition_name} className="w-5 h-5 object-contain" />}
-                                    <span className="text-sm">{c.competition_name}</span>
-                                  </label>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                    </div>
-                  </Section>
-
-                  {/* Seasons */}
-                  <Section
-                    title="Seasons"
-                    icon={<UsersRound className="h-4 w-4 text-green-700" />}
-                    collapsed={seasonsCollapsed}
-                    onToggle={() => setSeasonsCollapsed(v => !v)}
-                    actions={
-                      <div className="flex items-center gap-2">
-                        <button type="button" onClick={last5Seasons} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
-                          <CalendarClock className="h-3 w-3" /> Last 5
-                        </button>
-                        <button type="button" onClick={selectAllSeasons} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
-                          <CheckSquare className="h-3 w-3" /> Select All
-                        </button>
-                        <button type="button" onClick={clearSeasons} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
-                          <Trash2 className="h-3 w-3" />Clear All
-                        </button>
-                      </div>
-                    }
-                  >
-                    <SelectedChips
-                      title="Chosen seasons"
-                      items={selectedSeasons}
-                      onClear={clearSeasons}
-                      onRemoveItem={season => setSelectedSeasons(prev => prev.filter(x => x !== season))}
-                      hoverClose
-                    />
-                    <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-2">
-                      {allSeasons.map(season => (
-                        <button
-                          key={season}
-                          type="button"
-                          onClick={() =>
-                            setSelectedSeasons(prev =>
-                              prev.includes(season) ? prev.filter(s => s !== season) : [...prev, season]
-                            )
-                          }
-                          className={classNames(
-                            'px-2 py-1 text-sm rounded-md border',
-                            selectedSeasons.includes(season)
-                              ? 'bg-green-100 border-green-500 text-green-700'
-                              : 'bg-white hover:bg-gray-50'
-                          )}
-                        >
-                          {season}
-                        </button>
-                      ))}
-                    </div>
-                  </Section>
-
-                  {/* Min Market Value (step = 100k + presets) */}
-                  <Section
-                    title="Minimum Market Value (€)"
-                    icon={<UsersRound className="h-4 w-4 text-green-700" />}
-                    collapsed={mvCollapsed}
-                    onToggle={() => setMvCollapsed(v => !v)}
-                  >
-                    <div className="flex flex-col gap-3">
-                      <div className="flex items-center gap-3">
-                        <input
-                          type="number"
-                          value={minMarketValue}
-                          onChange={(e) => setMinMarketValue(parseInt(e.target.value) || 0)}
-                          min="0"
-                          step="100000"
-                          className="w-40 border rounded-md px-2 py-1 text-center"
-                        />
-                        <div className="text-sm text-gray-600">Current: {fmtCurrency(minMarketValue)}</div>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <PresetButton title="Clear" onClick={() => setMinMarketValue(0)} active={minMarketValue === 0}>
-                          <Trash2 size={14} /> Clear
-                        </PresetButton>
-                        <PresetButton onClick={() => setMinMarketValue(100000)} active={minMarketValue === 100000}>
-                          <Star size={14} /> 100K €
-                        </PresetButton>
-                        <PresetButton onClick={() => setMinMarketValue(500000)} active={minMarketValue === 500000}>
-                          <Star size={14} /> 500K €
-                        </PresetButton>
-                        <PresetButton onClick={() => setMinMarketValue(1000000)} active={minMarketValue === 1000000}>
-                          <Star size={14} /> 1M €
-                        </PresetButton>
-                        <PresetButton onClick={() => setMinMarketValue(5000000)} active={minMarketValue === 5000000}>
-                          <Star size={14} /> 5M €
-                        </PresetButton>
-                        <PresetButton onClick={() => setMinMarketValue(10000000)} active={minMarketValue === 10000000}>
-                          <Star size={14} /> 10M €
-                        </PresetButton>
-                        <PresetButton onClick={() => setMinMarketValue(25000000)} active={minMarketValue === 25000000}>
-                          <Star size={14} /> 25M €
-                        </PresetButton>
-                        <PresetButton onClick={() => setMinMarketValue(50000000)} active={minMarketValue === 50000000}>
-                          <Star size={14} /> 50M €
-                        </PresetButton>
-                      </div>
-                    </div>
-                  </Section>
-                </div>
-              )}
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.35 }}>
+        {/* Main Admin Card (title inside header) */}
+        <div className="rounded-xl shadow-lg border bg-green-50/80">
+          {/* Header */}
+          <div className="flex items-center justify-between px-5 py-4 border-b">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-6 w-6 text-blue-600" />
+              <h1 className="text-xl font-bold text-green-900">Daily Challenge Admin</h1>
             </div>
 
             <button
-              type="submit"
-              className={classNames(
-                'bg-blue-600 text-white px-4 py-2 rounded mt-4 transition',
-                !filtersChanged && 'opacity-50 cursor-not-allowed'
-              )}
-              disabled={!filtersChanged}
+              type="button"
+              onClick={() => setFiltersCollapsed((v) => !v)}
+              className="text-gray-700 hover:text-gray-900 inline-flex items-center gap-1"
             >
-              Save Default Filters
+              <FilterIcon className="h-5 w-5" />
+              <span>Difficulty Filters</span>
+              {filtersCollapsed ? <ChevronDown className="h-4 w-4 ml-1" /> : <ChevronUp className="h-4 w-4 ml-1" />}
             </button>
-            {status && <div className="mt-2 text-center text-sm text-green-700">{status}</div>}
-          </form>
-
-          <hr className="my-6" />
-
-          <div className="mb-4">
-            <label className="block font-medium mb-1">Select Date</label>
-            <input type="date" value={date} onChange={handleDateChange} className="border rounded px-3 py-2" />
           </div>
-          <button onClick={handleGenerate} className="bg-green-600 text-white px-4 py-2 rounded">
-            Generate Daily Challenge
-          </button>
+
+          {!filtersCollapsed && (
+            <div className="p-5 space-y-6">
+              {/* Competitions */}
+              <Section
+                title="Competitions"
+                icon={<Trophy className="h-4 w-4 text-green-700" />}
+                collapsed={compCollapsed}
+                onToggle={() => setCompCollapsed((v) => !v)}
+                actions={
+                  <div className="flex items-center gap-2">
+                    <PresetBtn onClick={selectTop10Competitions} title="Top 10 competitions by market value">
+                      <Star size={14} /> Top 10
+                    </PresetBtn>
+                    <PresetBtn onClick={selectAllCompetitions}><CheckSquare size={14} /> Select All</PresetBtn>
+                    <PresetBtn onClick={clearCompetitions}><Trash2 size={14} /> Clear All</PresetBtn>
+                  </div>
+                }
+              >
+                {!!selectedCompetitionIds.length && (
+                  <div className="mb-2">
+                    <div className="text-xs text-gray-600 mb-1">Chosen competitions</div>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedCompetitionIds.map((id) => (
+                        <span
+                          key={id}
+                          className="inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800"
+                        >
+                          {compIdToLabel[id]?.label || `Competition ${id}`}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedCompetitionIds((prev) => prev.filter((x) => x !== id));
+                              setFiltersChanged(true);
+                            }}
+                            className="text-red-600 hover:text-red-700"
+                            title="Remove"
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="max-h-96 overflow-y-auto pr-2">
+                  {Object.entries(groupedCompetitions)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([country, comps]) => (
+                      <div key={country} className="mb-2">
+                        <button
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleCountry(country); }}
+                          type="button"
+                          className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
+                        >
+                          <div className="flex items-center gap-2">
+                            {comps?.[0]?.flag_url && (
+                              <img src={comps[0].flag_url} alt={country} className="w-6 h-4 object-cover rounded" />
+                            )}
+                            <span>{country}</span>
+                            <span className="text-xs text-gray-500">({(comps || []).length})</span>
+                          </div>
+                          {expandedCountries[country] ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                        </button>
+
+                        {expandedCountries[country] && (
+                          <div className="ml-8 space-y-2 mt-2">
+                            {(comps || []).map((c) => (
+                              <label
+                                key={c.competition_id}
+                                className="flex items-center gap-2 cursor-pointer"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={selectedCompetitionIds.includes(String(c.competition_id))}
+                                  onChange={() => {
+                                    setSelectedCompetitionIds((prev) =>
+                                      prev.includes(String(c.competition_id))
+                                        ? prev.filter((x) => x !== String(c.competition_id))
+                                        : [...prev, String(c.competition_id)]
+                                    );
+                                    setFiltersChanged(true);
+                                  }}
+                                  className="rounded"
+                                />
+                                {c.logo_url && (
+                                  <img src={c.logo_url} alt={c.competition_name} className="w-5 h-5 object-contain" />
+                                )}
+                                <span className="text-sm">{c.competition_name}</span>
+                              </label>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                </div>
+              </Section>
+
+              {/* Seasons */}
+              <Section
+                title="Seasons"
+                icon={<CalendarClock className="h-4 w-4 text-green-700" />}
+                collapsed={seasonsCollapsed}
+                onToggle={() => setSeasonsCollapsed((v) => !v)}
+                actions={
+                  <div className="flex items-center gap-2">
+                    <PresetBtn onClick={selectLast5Seasons}><CalendarClock size={14} /> Last 5</PresetBtn>
+                    <PresetBtn onClick={selectAllSeasons}><CheckSquare size={14} /> Select All</PresetBtn>
+                    <PresetBtn onClick={clearSeasons}><Trash2 size={14} /> Clear All</PresetBtn>
+                  </div>
+                }
+              >
+                {!!selectedSeasons.length && (
+                  <div className="mb-2">
+                    <div className="text-xs text-gray-600 mb-1">Chosen seasons</div>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedSeasons.map((s) => (
+                        <span key={s} className="inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800">
+                          {s}
+                          <button
+                            type="button"
+                            onClick={() => { setSelectedSeasons((p) => p.filter((x) => x !== s)); setFiltersChanged(true); }}
+                            className="text-red-600 hover:text-red-700"
+                            title="Remove"
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-2">
+                  {allSeasons.map((season) => (
+                    <button
+                      key={season}
+                      type="button"
+                      onClick={() => {
+                        setSelectedSeasons((prev) =>
+                          prev.includes(season) ? prev.filter((x) => x !== season) : [...prev, season]
+                        );
+                        setFiltersChanged(true);
+                      }}
+                      className={cx(
+                        'px-2 py-1 text-sm rounded-md border',
+                        selectedSeasons.includes(season)
+                          ? 'bg-green-100 border-green-500 text-green-700'
+                          : 'bg-white hover:bg-gray-50'
+                      )}
+                    >
+                      {season}
+                    </button>
+                  ))}
+                </div>
+              </Section>
+
+              {/* Minimum Market Value */}
+              <Section
+                title="Minimum Market Value (€)"
+                icon={<Layers className="h-4 w-4 text-green-700" />}
+                collapsed={mvCollapsed}
+                onToggle={() => setMvCollapsed((v) => !v)}
+              >
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="number"
+                      value={minMarketValue}
+                      onChange={(e) => { setMinMarketValue(parseInt(e.target.value) || 0); setFiltersChanged(true); }}
+                      min="0"
+                      step="100000"
+                      className="w-40 border rounded-md px-2 py-1 text-center"
+                    />
+                    <div className="text-sm text-gray-600">Current: {fmtCurrency(minMarketValue)}</div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <PresetBtn onClick={() => { setMinMarketValue(0);        setFiltersChanged(true); }} active={minMarketValue === 0}><Trash2 size={14}/> Clear</PresetBtn>
+                    <PresetBtn onClick={() => { setMinMarketValue(100000);   setFiltersChanged(true); }} active={minMarketValue === 100000}><Star size={14}/> 100K €</PresetBtn>
+                    <PresetBtn onClick={() => { setMinMarketValue(500000);   setFiltersChanged(true); }} active={minMarketValue === 500000}><Star size={14}/> 500K €</PresetBtn>
+                    <PresetBtn onClick={() => { setMinMarketValue(1000000);  setFiltersChanged(true); }} active={minMarketValue === 1000000}><Star size={14}/> 1M €</PresetBtn>
+                    <PresetBtn onClick={() => { setMinMarketValue(5000000);  setFiltersChanged(true); }} active={minMarketValue === 5000000}><Star size={14}/> 5M €</PresetBtn>
+                    <PresetBtn onClick={() => { setMinMarketValue(10000000); setFiltersChanged(true); }} active={minMarketValue === 10000000}><Star size={14}/> 10M €</PresetBtn>
+                    <PresetBtn onClick={() => { setMinMarketValue(25000000); setFiltersChanged(true); }} active={minMarketValue === 25000000}><Star size={14}/> 25M €</PresetBtn>
+                    <PresetBtn onClick={() => { setMinMarketValue(50000000); setFiltersChanged(true); }} active={minMarketValue === 50000000}><Star size={14}/> 50M €</PresetBtn>
+                  </div>
+                </div>
+              </Section>
+            </div>
+          )}
+
+          {/* Save & Generate Row */}
+          <div className="px-5 pb-5 pt-3 border-t flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleSaveDefaults}
+                className={cx(
+                  'bg-blue-600 text-white px-4 py-2 rounded transition',
+                  !filtersChanged && 'opacity-50 cursor-not-allowed'
+                )}
+                disabled={!filtersChanged}
+              >
+                Save Default Filters
+              </button>
+              {status && <span className="text-sm text-green-700 ml-2">{status}</span>}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label className="text-sm">Date</label>
+              <input
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="border rounded px-3 py-2"
+              />
+              <button onClick={handleGenerate} className="bg-green-600 text-white px-4 py-2 rounded">
+                Generate Daily Challenge
+              </button>
+            </div>
+          </div>
 
           {/* Daily Challenges Table */}
-          <div className="mt-8">
+          <div className="px-5 pb-6">
             <h3 className="text-lg font-semibold mb-2">All Daily Challenges</h3>
-            <div className="overflow-x-auto">
-              <table className="min-w-full border rounded">
-                <thead>
-                  <tr className="bg-green-100">
+            <div className="overflow-x-auto rounded border bg-white/60">
+              <table className="min-w-full">
+                <thead className="bg-green-100">
+                  <tr>
                     <th className="px-2 py-1 border">Date</th>
                     <th className="px-2 py-1 border">Player ID</th>
                     <th className="px-2 py-1 border">Player Name</th>
@@ -505,15 +527,17 @@ export default function AdminPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {dailyChallenges.map(dc => (
+                  {(dailyChallenges || []).map((dc) => (
                     <tr key={dc.challenge_date}>
                       <td className="px-2 py-1 border">{dc.challenge_date}</td>
                       <td className="px-2 py-1 border">{dc.player_id}</td>
                       <td className="px-2 py-1 border">{dc.player_name}</td>
-                      <td className="px-2 py-1 border">{dc.created_at ? new Date(dc.created_at).toLocaleString() : ''}</td>
+                      <td className="px-2 py-1 border">
+                        {dc.created_at ? new Date(dc.created_at).toLocaleString() : ''}
+                      </td>
                     </tr>
                   ))}
-                  {dailyChallenges.length === 0 && (
+                  {!dailyChallenges?.length && (
                     <tr>
                       <td colSpan={4} className="text-center py-4 text-gray-500">No daily challenges found.</td>
                     </tr>
@@ -522,6 +546,94 @@ export default function AdminPage() {
               </table>
             </div>
           </div>
+        </div>
+
+        {/* Players Coverage (Country → Competition → Season) */}
+        <div className="rounded-xl shadow-lg border bg-white/70 mt-8">
+          <div className="flex items-center justify-between px-4 py-3">
+            <button
+              type="button"
+              onClick={() => setCoverageCollapsed((v) => !v)}
+              className="inline-flex items-center gap-2"
+            >
+              <Globe2 className="h-5 w-5 text-green-700" />
+              <span className="font-semibold text-green-900">Players Coverage (by Country → Competition → Season)</span>
+              {coverageCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+            </button>
+          </div>
+
+          {!coverageCollapsed && (
+            <div className="px-4 pb-4">
+              {!coverage ? (
+                <div className="text-sm text-gray-600">Loading coverage…</div>
+              ) : (
+                <div className="space-y-3">
+                  {Object.entries(coverage.countries || {})
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([country, cData]) => {
+                      const open = !!coverageCountryOpen[country];
+                      return (
+                        <div key={country} className="border rounded-md bg-white/60">
+                          <div
+                            className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-green-50"
+                            onClick={() => setCoverageCountryOpen((p) => ({ ...p, [country]: !p[country] }))}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{country}</span>
+                              <span className="text-xs text-gray-600">Players: {cData.total}</span>
+                            </div>
+                            {open ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                          </div>
+
+                          {open && (
+                            <div className="px-3 pb-3 space-y-2">
+                              {Object.entries(cData.competitions || {})
+                                .sort(([a], [b]) => a.localeCompare(b))
+                                .map(([compId, comp]) => {
+                                  const key = `${country}|${compId}`;
+                                  const compOpen = !!coverageCompOpen[key];
+                                  return (
+                                    <div key={key} className="border rounded bg-white/70">
+                                      <div
+                                        className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-green-50"
+                                        onClick={() =>
+                                          setCoverageCompOpen((p) => ({ ...p, [key]: !p[key] }))
+                                        }
+                                      >
+                                        <div className="flex items-center gap-2">
+                                          {comp.logo_url && <img src={comp.logo_url} alt={comp.name} className="w-5 h-5 object-contain" />}
+                                          <span>{comp.name}</span>
+                                          <span className="text-xs text-gray-600">Players: {comp.total}</span>
+                                        </div>
+                                        {compOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                                      </div>
+
+                                      {compOpen && (
+                                        <div className="px-3 pb-3">
+                                          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2">
+                                            {Object.entries(comp.seasons || {})
+                                              .sort(([a], [b]) => String(b).localeCompare(String(a))) // desc
+                                              .map(([season, count]) => (
+                                                <div key={season} className="rounded border bg-white/90 px-2 py-1 text-sm flex items-center justify-between">
+                                                  <span>{season}</span>
+                                                  <span className="text-gray-600">{count}</span>
+                                                </div>
+                                              ))}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </motion.div>
     </div>

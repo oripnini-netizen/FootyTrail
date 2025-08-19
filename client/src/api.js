@@ -4,14 +4,12 @@ import { supabase } from './supabase';
 // Single source of truth for API base URL.
 export const API_BASE =
   process.env.NODE_ENV === 'production'
-    ? process.env.REACT_APP_API_BASE?.replace(/\/+$/, '') || 'https://footytrail.up.railway.app/api'
+    ? (process.env.REACT_APP_API_BASE?.replace(/\/+$/, '') || 'https://footytrail.up.railway.app/api')
     : 'http://localhost:3001/api';
 
-console.log('API_BASE:', API_BASE);
-
 async function jfetch(path, opts = {}) {
+  // Forward the Supabase session token to the server (for any RLS-protected routes)
   const { data: { session } } = await supabase.auth.getSession();
-
   if (!opts.headers) opts.headers = {};
   if (session?.access_token) {
     opts.headers['Authorization'] = `Bearer ${session.access_token}`;
@@ -26,68 +24,43 @@ async function jfetch(path, opts = {}) {
   return res.json();
 }
 
-/* === Legacy leagues (kept for any old imports that still call it) === */
-export const getLeagues = () => jfetch('/filters/leagues');
+/* === Filters (new datasource) === */
+export const getCompetitions = () => jfetch('/filters/competitions');   // grouped by country + top-10
+export const getSeasons       = () => jfetch('/filters/seasons');        // distinct seasons (strings)
 
-/* === New filters (competitions + seasons) === */
-export const getCompetitions = () => jfetch('/filters/competitions');
-export const getSeasons       = () => jfetch('/filters/seasons');
-
-/* === Pool counts (new model) === */
+/* === Pool counts (players_in_seasons) === */
 export const getCounts = (filters) =>
   jfetch('/counts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(filters),
+    body: JSON.stringify(filters || {}),
   });
 
-/* === Random player (new model) === */
+/* === Random player from players_in_seasons === */
 export const getRandomPlayer = (filters, userId = null) => {
-  const filtersWithUser = userId ? { ...filters, userId } : filters;
+  const payload = userId ? { ...filters, userId } : (filters || {});
   return jfetch('/random-player', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(filtersWithUser),
+    body: JSON.stringify(payload),
   });
 };
 
-/* === Limits & daily === */
 export async function getLimits(userId) {
-  const response = await fetch(`${API_BASE}/limits/${userId}?t=${Date.now()}`, { cache: 'no-store' });
-  if (!response.ok) throw new Error('Failed to fetch limits');
-  return await response.json();
+  const res = await fetch(`${API_BASE}/limits/${userId}?t=${Date.now()}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error('Failed to fetch limits');
+  return res.json();
 }
 
 export const getDailyChallenge = () => jfetch('/daily');
 
-/* === Names, profile, uploads (placeholders unchanged here) === */
-export const suggestNames  = (q) => jfetch(`/names?q=${encodeURIComponent(q)}`);
-export const getProfile    = async () => ({});
-export const updateProfile = async () => ({});
-export const uploadAvatar  = async () => ({});
-export const saveGame      = async () => ({});
-export const getGameById   = async () => ({});
-
-export async function saveGameCompleted(gameData) {
-  const response = await fetch(`${API_BASE}/game-completed`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(gameData),
-  });
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => null);
-    throw new Error(errorData?.error || errorData?.message || response.statusText || 'Error saving game record');
-  }
-  return response.json();
-}
-
-/** Transfers via our backend proxy to Transfermarkt CE API */
+/** Transfer history via backend proxy (Transfermarkt CE API) */
 export const fetchTransfers = async (playerId) => {
   try {
     const response = await jfetch(`/transfers/${playerId}`);
     return response.transfers || [];
-  } catch (error) {
-    console.error('❌ Error fetching transfers:', error);
+  } catch (e) {
+    console.error('❌ Error fetching transfers:', e);
     return [];
   }
 };
@@ -100,10 +73,38 @@ export const getGamePrompt = () =>
   });
 
 export const generateDailyChallenge = async (payload) => {
-  const response = await fetch(`${API_BASE}/generate-daily-challenge`, {
+  const res = await fetch(`${API_BASE}/generate-daily-challenge`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  return await response.json();
+  return res.json();
 };
+
+export async function saveGameCompleted(gameData) {
+  const res = await fetch(`${API_BASE}/game-completed`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(gameData),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => null);
+    throw new Error(err?.error || err?.message || res.statusText || 'Error saving game record');
+  }
+  return res.json();
+}
+
+/* === Admin: players coverage via Supabase RPC === */
+export async function getPlayersCoverage() {
+  const { data, error } = await supabase.rpc('players_coverage');
+  if (error) throw error;
+  return data || [];
+}
+
+/* === Stubs kept for compatibility === */
+export const suggestNames  = (q) => jfetch(`/names?q=${encodeURIComponent(q)}`);
+export const getProfile    = async () => ({});
+export const updateProfile = async () => ({});
+export const uploadAvatar  = async () => ({});
+export const saveGame      = async () => ({});
+export const getGameById   = async () => ({});
