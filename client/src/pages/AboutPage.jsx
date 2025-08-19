@@ -165,19 +165,23 @@ export default function AboutPage() {
                 </tr>
                 <tr>
                   <td className="py-2 pr-4 text-gray-700">Age hint</td>
-                  <td className="py-2"><span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm">×0.9</span></td>
+                  <td className="py-2"><span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm">×0.90</span></td>
                 </tr>
                 <tr>
-                  <td className="py-2 pr-4 text-gray-700">Citizenship hint</td>
-                  <td className="py-2"><span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm">×0.85</span></td>
+                  <td className="py-2 pr-4 text-gray-700">Nationality hint</td>
+                  <td className="py-2"><span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm">×0.90</span></td>
                 </tr>
                 <tr>
                   <td className="py-2 pr-4 text-gray-700">Position hint</td>
-                  <td className="py-2"><span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm">×0.75</span></td>
+                  <td className="py-2"><span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm">×0.80</span></td>
                 </tr>
                 <tr>
                   <td className="py-2 pr-4 text-gray-700">Player image hint</td>
-                  <td className="py-2"><span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm">×0.5</span></td>
+                  <td className="py-2"><span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm">×0.50</span></td>
+                </tr>
+                 <tr>
+                  <td className="py-2 pr-4 text-gray-700">First letter hint</td>
+                  <td className="py-2"><span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm">×0.25</span></td>
                 </tr>
                 <tr>
                   <td className="py-2 pr-4 text-gray-700">Wrong guess penalty</td>
