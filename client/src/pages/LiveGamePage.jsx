@@ -14,13 +14,12 @@ import {
 import { motion } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
 
-function classNames(...s) {
+// ----------------------------------
+// small helpers
+// ----------------------------------
+function cx(...s) {
   return s.filter(Boolean).join(' ');
 }
-
-// -------------------------
-// Name matching helpers
-// -------------------------
 function normalize(str) {
   return (str || '')
     .toLowerCase()
@@ -37,24 +36,26 @@ function multiTokenStartsWithMatch(queryText, candidateName) {
   const qTokens = tokenize(queryText);
   const cTokens = tokenize(candidateName);
   if (!qTokens.length || !cTokens.length) return false;
-  return qTokens.every((qt) => cTokens.some((ct) => ct.startsWith(qt)));
+  return qTokens.every(qt => cTokens.some(ct => ct.startsWith(qt)));
 }
 function longestToken(str) {
   const t = tokenize(str).sort((a, b) => b.length - a.length);
   return t[0] || '';
 }
 
+// ----------------------------------
+
 export default function LiveGamePage() {
   const location = useLocation();
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  // Pull URL params for daily challenge & fixed player id
+  // URL params for daily link support
   const params = new URLSearchParams(location.search);
   const urlIsDaily = params.get('daily') === '1';
   const fixedPid = params.get('pid');
 
-  // Game bootstrap state (either from navigation.state or fetched via pid)
+  // Game bootstrap state (can arrive via navigation.state or be fetched)
   const [gameData, setGameData] = useState(null);
   const [bootError, setBootError] = useState(null);
   const [isDaily, setIsDaily] = useState(!!location.state?.isDaily || urlIsDaily);
@@ -62,13 +63,13 @@ export default function LiveGamePage() {
   // Filters/potentialPoints passed from GamePage (for normal rounds)
   const filters = location.state?.filters || { potentialPoints: 0 };
 
-  // 2 minutes timer
-  const INITIAL_TIME = 120;
-
+  // round controls
+  const INITIAL_TIME = 120; // 2 minutes
+  const [timeSec, setTimeSec] = useState(INITIAL_TIME);
   const [guessesLeft, setGuessesLeft] = useState(3);
   const [guess, setGuess] = useState('');
   const [suggestions, setSuggestions] = useState([]);
-
+  const [isWrongGuess, setIsWrongGuess] = useState(false);
   const [usedHints, setUsedHints] = useState({
     age: false,
     nationality: false,
@@ -76,13 +77,11 @@ export default function LiveGamePage() {
     partialImage: false,
     firstLetter: false,
   });
-  const [isWrongGuess, setIsWrongGuess] = useState(false);
 
-  const [timeSec, setTimeSec] = useState(INITIAL_TIME);
-  const timerRef = useRef(null);
   const endedRef = useRef(false);
+  const timerRef = useRef(null);
 
-  // Transfers
+  // transfers
   const [transferHistory, setTransferHistory] = useState([]);
   const [loadingTransfers, setLoadingTransfers] = useState(true);
 
@@ -94,24 +93,24 @@ export default function LiveGamePage() {
 
     const bootstrap = async () => {
       try {
-        // 1) If navigated with a prepared card in state (normal round)
-        if (location.state && location.state.id && location.state.name) {
+        // (1) If a prepared game object was passed via navigation state (normal rounds)
+        // Accept common shapes: { id, name, ... } or { player_id, name, ... }
+        if (location.state && (location.state.id || location.state.player_id) && location.state.name) {
           if (!mounted) return;
           setGameData(location.state);
           setIsDaily(!!location.state.isDaily || urlIsDaily);
           return;
         }
 
-        // 2) If we have a fixed player id in the URL (daily link)
+        // (2) If a fixed player id arrived via the daily link: ?daily=1&pid=xxxx
         if (fixedPid) {
           const res = await fetch(`${API_BASE}/player/${fixedPid}`);
           if (!res.ok) throw new Error('Failed to fetch daily player');
           const card = await res.json(); // { id, name, age, nationality, position, photo }
-          // Normalize to the same shape used elsewhere in this page
           const normalized = {
             ...card,
             player_id: card.id,
-            potentialPoints: 10000, // fallback if not precomputed
+            potentialPoints: 10000, // fallback if not supplied
             isDaily: true,
           };
           if (!mounted) return;
@@ -120,7 +119,30 @@ export default function LiveGamePage() {
           return;
         }
 
-        // 3) No state and no pid → nothing to start with
+        // (3) Fallback for daily: if ?daily=1 but there is no pid or state,
+        // ask the backend who today’s player is, then fetch the card.
+        if (urlIsDaily) {
+          const dc = await fetch(`${API_BASE}/daily-challenge`);
+          if (!dc.ok) throw new Error('Failed to load daily challenge');
+          const today = await dc.json(); // expect { challenge_date, player_id, ... }
+          if (!today?.player_id) throw new Error('Daily challenge has no player');
+
+          const res = await fetch(`${API_BASE}/player/${today.player_id}`);
+          if (!res.ok) throw new Error('Failed to fetch daily player');
+          const card = await res.json();
+          const normalized = {
+            ...card,
+            player_id: card.id,
+            potentialPoints: 10000,
+            isDaily: true,
+          };
+          if (!mounted) return;
+          setGameData(normalized);
+          setIsDaily(true);
+          return;
+        }
+
+        // (4) Nothing to start with
         throw new Error('No game payload found.');
       } catch (err) {
         console.error('Failed to start game', err);
@@ -135,13 +157,13 @@ export default function LiveGamePage() {
     };
   }, [location.state, fixedPid, urlIsDaily]);
 
-  // Load transfers once we have an id
+  // Load transfers once we have a player id
   useEffect(() => {
     const load = async () => {
-      if (!gameData?.id && !gameData?.player_id) return;
+      const pid = parseInt(gameData?.player_id || gameData?.id || 0, 10);
+      if (!pid) return;
       try {
         setLoadingTransfers(true);
-        const pid = parseInt(gameData.player_id || gameData.id, 10) || 0;
         const transfers = await fetchTransfers(pid);
         setTransferHistory(Array.isArray(transfers) ? transfers : []);
       } catch (e) {
@@ -165,17 +187,15 @@ export default function LiveGamePage() {
 
   // Points incl. time decay, hint penalties, and wrong-guess halving
   const points = useMemo(() => {
-    const potentialPoints = Number(
-      gameData?.potentialPoints || filters?.potentialPoints || 0
-    );
-    let p = potentialPoints;
+    const base = Number(gameData?.potentialPoints || filters?.potentialPoints || 0);
+    let p = base;
 
     Object.keys(usedHints).forEach((k) => {
       if (usedHints[k]) p = Math.floor(p * multipliers[k]);
     });
 
     const timeElapsed = INITIAL_TIME - timeSec;
-    const timeDecay = Math.pow(0.99, timeElapsed);
+    const timeDecay = Math.pow(0.99, timeElapsed); // gentle decay per second
     p = Math.floor(p * timeDecay);
 
     const wrongAttempts = Math.max(0, 3 - guessesLeft);
@@ -200,9 +220,7 @@ export default function LiveGamePage() {
       try {
         clearInterval(timerRef.current);
         await saveGameRecord(false);
-      } catch {
-        /* ignore */
-      } finally {
+      } catch {/* ignore */} finally {
         navigate('/game', { replace: true, state: { forfeited: true } });
       }
     };
@@ -210,17 +228,12 @@ export default function LiveGamePage() {
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') forfeitAndExit();
     };
-    const onBlur = () => {
-      forfeitAndExit();
-    };
-    const onPageHide = () => {
-      forfeitAndExit();
-    };
+    const onBlur = () => forfeitAndExit();
+    const onPageHide = () => forfeitAndExit();
 
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('blur', onBlur);
     window.addEventListener('pagehide', onPageHide);
-
     return () => {
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('blur', onBlur);
@@ -263,7 +276,7 @@ export default function LiveGamePage() {
     };
   }, [gameData?.id, gameData?.player_id]); // eslint-disable-line
 
-  // Suggestions
+  // Suggestions (client filtering on top of server list)
   useEffect(() => {
     let active = true;
     const id = setTimeout(async () => {
@@ -296,15 +309,17 @@ export default function LiveGamePage() {
     };
   }, [guess]);
 
-  // Guard when we truly can't bootstrap
+  // If bootstrap failed, show a small error then go back
   useEffect(() => {
     if (bootError) {
-      // give the user a moment to see the message and then go back
       const t = setTimeout(() => navigate('/game'), 1200);
       return () => clearTimeout(t);
     }
   }, [bootError, navigate]);
 
+  // ----------------------------------
+  // actions
+  // ----------------------------------
   const submitGuess = async (value) => {
     if (!value?.trim() || endedRef.current) return;
     const correct =
@@ -403,7 +418,9 @@ export default function LiveGamePage() {
   const timeColorClass =
     timeSec <= 30 ? 'text-red-600' : timeSec <= 60 ? 'text-yellow-600' : 'text-gray-900';
 
-  // Loading and boot-failure states
+  // ----------------------------------
+  // render
+  // ----------------------------------
   if (bootError) {
     return (
       <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
@@ -451,9 +468,7 @@ export default function LiveGamePage() {
             <Clock className="h-5 w-5 text-gray-700" />
             <div>
               <div className="text-xs text-gray-500">Time Remaining</div>
-              <div className={classNames('text-lg font-semibold', timeColorClass)}>
-                {formatTime(timeSec)}
-              </div>
+              <div className={cx('text-lg font-semibold', timeColorClass)}>{formatTime(timeSec)}</div>
             </div>
           </div>
           <div className="rounded border bg-white p-4 flex items-center gap-3">
@@ -477,11 +492,7 @@ export default function LiveGamePage() {
           {/* Hints / Input (narrow column) */}
           <motion.div
             className="rounded-xl border bg-white shadow-sm p-5 lg:col-span-1"
-            animate={
-              isWrongGuess
-                ? { x: [-10, 10, -10, 10, 0], transition: { duration: 0.4 } }
-                : {}
-            }
+            animate={isWrongGuess ? { x: [-10, 10, -10, 10, 0], transition: { duration: 0.4 } } : {}}
           >
             <h3 className="text-lg font-semibold mb-3">Who are ya?!</h3>
             <form
@@ -632,7 +643,7 @@ function HintButton({ label, multiplier, disabled, onClick, valueShown }) {
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className={classNames(
+      className={cx(
         'w-full text-left border rounded p-3 hover:bg-gray-50',
         disabled ? 'opacity-60 cursor-not-allowed' : ''
       )}
@@ -643,34 +654,29 @@ function HintButton({ label, multiplier, disabled, onClick, valueShown }) {
           <div className="text-xs text-gray-500">Using this hint reduces points {multiplier}</div>
         </div>
         {valueShown ? (
-          <div className="text-sm px-2 py-1 rounded bg-green-50 border text-green-800">
-            {valueShown}
-          </div>
+          <div className="text-sm px-2 py-1 rounded bg-green-50 border text-green-800">{valueShown}</div>
         ) : null}
       </div>
     </button>
   );
 }
 
-// -------------------------
-// Transfer List (new UI)
-// -------------------------
+// ----------------------------------
+// Transfer list UI
+// ----------------------------------
 function ClubPill({ logo, name, flag }) {
   return (
     <div className="flex items-center gap-2 min-w-0">
-      {/* Icon stack: logo above flag */}
       <div className="flex flex-col items-center justify-center gap-1 shrink-0">
         {logo ? <img src={logo} alt="" className="h-6 w-6 rounded-md object-contain" /> : null}
         {flag ? <img src={flag} alt="" className="h-3.5 w-5 rounded-sm object-cover" /> : null}
       </div>
-      {/* Name */}
       <span className="text-sm font-medium whitespace-nowrap truncate max-w-[220px] md:max-w-[280px]">
         {name || 'Unknown'}
       </span>
     </div>
   );
 }
-
 function Chip({ children, tone = 'slate' }) {
   const tones = {
     slate: 'bg-slate-50 text-slate-700 border-slate-200',
@@ -680,25 +686,20 @@ function Chip({ children, tone = 'slate' }) {
     violet: 'bg-violet-50 text-violet-700 border-violet-200',
   };
   return (
-    <span className={classNames('inline-flex items-center gap-1 text-xs px-2 py-1 rounded border', tones[tone])}>
+    <span className={cx('inline-flex items-center gap-1 text-xs px-2 py-1 rounded border', tones[tone])}>
       {children}
     </span>
   );
 }
-
 function formatFee(raw) {
   const v = raw ?? '';
   if (!v) return '—';
-  // Keep already-formatted strings (e.g. "€10m", "Free transfer", "Loan")
-  // and normalize any accidental "$" to "€".
-  return String(v).replace(/^\$/, '€');
+  return String(v).replace(/^\$/, '€'); // normalize any accidental dollar to euro
 }
-
 function TransfersList({ transfers }) {
   if (!transfers?.length) {
     return <div className="text-sm text-gray-500 text-center">No transfers found.</div>;
   }
-
   return (
     <ul className="space-y-3">
       {transfers.map((t, idx) => {
@@ -708,7 +709,7 @@ function TransfersList({ transfers }) {
             key={`${t.date || t.season || 'row'}-${idx}`}
             className="grid grid-cols-12 gap-3 items-center border rounded-lg p-3"
           >
-            {/* Season + Date (centered vertical stack) */}
+            {/* Season + Date */}
             <div className="col-span-12 md:col-span-3 flex flex-col items-center text-center gap-1">
               <Chip tone="violet">
                 <CalendarDays className="h-3.5 w-3.5" />
@@ -717,14 +718,14 @@ function TransfersList({ transfers }) {
               <div className="text-xs text-gray-500">{t.date || '—'}</div>
             </div>
 
-            {/* From → To (names have max width + truncate) */}
+            {/* From -> To */}
             <div className="col-span-12 md:col-span-6 flex items-center justify-center gap-3 flex-wrap md:flex-nowrap min-w-0">
               <ClubPill logo={t.out?.logo} name={t.out?.name} flag={t.out?.flag} />
               <ArrowRight className="h-4 w-4 text-gray-400 shrink-0" />
               <ClubPill logo={t.in?.logo} name={t.in?.name} flag={t.in?.flag} />
             </div>
 
-            {/* Value + Type (stacked & centered) */}
+            {/* Value + Type */}
             <div className="col-span-12 md:col-span-3 flex flex-col items-center justify-center gap-1">
               <Chip tone="green">
                 <BadgeEuro className="h-3.5 w-3.5" />
