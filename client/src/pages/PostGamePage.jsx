@@ -20,10 +20,12 @@ import {
   clearPostGameCache,
 } from '../state/postGameCache';
 
+const REGULAR_START_POINTS = 6000; // kept for safety, but not used for "play again" anymore
+
 export default function PostGamePage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { didWin, player, stats, filters, isDaily } = location.state || {};
+  const { didWin, player, stats, filters, isDaily, potentialPoints: prevPotentialPoints } = location.state || {};
   const { user } = useAuth();
 
   const [loading, setLoading] = useState(false);
@@ -201,7 +203,7 @@ export default function PostGamePage() {
       let fact = '';
       let outro = '';
 
-      // 1) Fun fact (existing server endpoint)
+      // 1) Fun fact
       try {
         const transfers = player.transfers || player.transferHistory || [];
         const res = await fetch(`${API_BASE}/ai/generate-player-fact`, {
@@ -225,9 +227,6 @@ export default function PostGamePage() {
 
       // 2) Dynamic top banner line (LLM endpoint if present; otherwise rich local fallback)
       try {
-        // If you already have a server helper, try it first
-        // (Many projects already expose something like this for the GamePage “engaging line”)
-        // Reuse getGamePrompt() if it exists; if not, try a dedicated endpoint; else fallback.
         let line = '';
         try {
           if (typeof getGamePrompt === 'function') {
@@ -245,13 +244,18 @@ export default function PostGamePage() {
               line = promptRes.text.trim();
             }
           }
-        } catch {/* ignore and try direct endpoint */}
+        } catch { /* ignore */ }
 
         if (!line) {
           const res2 = await fetch(`${API_BASE}/ai/game-outro`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ didWin, stats, player }),
+            body: JSON.stringify({
+              didWin,
+              stats,
+              playerName: player?.name,
+              isDaily: !!isDaily
+            }),
           });
           if (res2.ok) {
             const data = await res2.json();
@@ -292,25 +296,51 @@ export default function PostGamePage() {
     if (!player) navigate('/game', { replace: true });
   }, [player, navigate]);
 
+  // ------- Play again with SAME FILTERS and next potential points = previous - 5 -------
   const playAgainWithSameFilters = async () => {
     if (loading || gamesLeft <= 0) return;
     setLoading(true);
     try {
-      const gameData = await getRandomPlayer(
-        {
-          leagues: filters?.leagues || [],
-          seasons: filters?.seasons || [],
-          minAppearances: filters?.minAppearances || 0
-        },
+      // Map filters from previous round (support both legacy & new keys)
+      const competitions =
+        (filters?.competitions && Array.isArray(filters.competitions)) ? filters.competitions : [];
+      const seasons =
+        (filters?.seasons && Array.isArray(filters.seasons)) ? filters.seasons : [];
+      const minMarketValue =
+        Number(filters?.minMarketValue ?? filters?.min_market_value ?? 0) || 0;
+
+      // Previous potential (from LiveGamePage -> PostGamePage state)
+      const prevPot = Number(prevPotentialPoints);
+      if (!Number.isFinite(prevPot) || prevPot <= 0) {
+        alert('Could not determine the previous round’s pool size. Please start from the Game page.');
+        setLoading(false);
+        return;
+      }
+      // If pool was 1 player (prevPot = 5), block restart with same filters
+      if (prevPot <= 5) {
+        alert('No players left in the pool with those filters. Please adjust your filters.');
+        setLoading(false);
+        return;
+      }
+
+      const nextPotential = prevPot - 5;
+
+      const nextCard = await getRandomPlayer(
+        { competitions, seasons, minMarketValue },
         user?.id
       );
+
       // clear cache because we are starting a new game
       clearPostGameCache();
+
       navigate('/live', {
         state: {
-          ...gameData,
+          ...nextCard,
           isDaily: false,
-          filters: filters || {},
+          // persist exactly the same filters
+          filters: { competitions, seasons, minMarketValue },
+          // next round starts with previous potential - 5
+          potentialPoints: nextPotential,
           fromPostGame: true,
         },
         replace: true

@@ -285,32 +285,45 @@ export default function LiveGamePage() {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Anti-cheat / tab leave → loss
+  // Anti-cheat / tab leave → loss  (existing visibilitychange + NEW: window blur)
   useEffect(() => {
-    const onHide = () => {
-      if (document.hidden && !endedRef.current) {
-        endedRef.current = true;
-        clearInterval(timerRef.current);
-        saveGameRecord(false).then(() =>
-          navigate('/postgame', {
-            state: {
-              didWin: false,
-              player: gameData,
-              stats: { pointsEarned: 0, timeSec: INITIAL_TIME, guessesUsed: 3, usedHints },
-              filters,
-              isDaily,
-            },
-            replace: true,
-          })
-        );
-      }
+    const lose = () => {
+      if (endedRef.current) return;
+      endedRef.current = true;
+      clearInterval(timerRef.current);
+      saveGameRecord(false).then(() =>
+        navigate('/postgame', {
+          state: {
+            didWin: false,
+            player: gameData,
+            stats: { pointsEarned: 0, timeSec: INITIAL_TIME, guessesUsed: 3, usedHints },
+            filters,
+            isDaily,
+          },
+          replace: true,
+        })
+      );
     };
+
+    const onHide = () => {
+      if (document.hidden) lose();
+    };
+    const onBlur = () => {
+      // opening a new window or switching focus away will blur the current window
+      lose();
+    };
+
     document.addEventListener('visibilitychange', onHide);
-    return () => document.removeEventListener('visibilitychange', onHide);
+    window.addEventListener('blur', onBlur);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('blur', onBlur);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gameData?.id]);
 
-  // Save record helper (FIXED to match backend: expects { userId, playerData, gameStats })
+  // Save record helper (expects { userId, playerData, gameStats })
   const saveGameRecord = async (won) => {
     try {
       const playerIdNumeric = Number(gameData?.id ?? location.state?.id);
@@ -459,7 +472,7 @@ export default function LiveGamePage() {
     <div className="max-w-5xl mx-auto p-4 space-y-6">
       {/* Warning */}
       <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 text-amber-800 font-medium text-center">
-        ⚠️ Don’t leave this page — leaving will count as a loss.
+        ⚠️ Don’t leave this page — leaving or switching windows will count as a loss.
       </div>
 
       {/* Header Card */}
@@ -541,7 +554,7 @@ export default function LiveGamePage() {
                     src={gameData?.photo}
                     alt="Player Hint"
                     className="w-32 h-32 object-cover object-top"
-                    style={{ clipPath: 'inset(0 0 34% 0)' }} // show top ~2/3, now centered & bigger
+                    style={{ clipPath: 'inset(0 0 34% 0)' }} // show top ~2/3, centered & bigger
                   />
                 </div>
               ) : null
@@ -670,11 +683,14 @@ export default function LiveGamePage() {
 
           <div className="mt-6 pt-5 border-t">
             <h4 className="font-semibold mb-2">Transfer History</h4>
-            {loadingTransfers ? (
-              <div className="text-sm text-gray-500">Loading transfers…</div>
-            ) : (
-              <TransfersList transfers={transferHistory} />
-            )}
+            {/* NO-COPY wrapper applied ONLY to the transfers area */}
+            <NoCopySection>
+              {loadingTransfers ? (
+                <div className="text-sm text-gray-500">Loading transfers…</div>
+              ) : (
+                <TransfersList transfers={transferHistory} />
+              )}
+            </NoCopySection>
           </div>
         </motion.div>
       </div>
@@ -715,7 +731,7 @@ function ClubPill({ logo, name, flag }) {
         {flag ? <img src={flag} alt="" className="h-3.5 w-5 rounded-sm object-cover" /> : null}
       </div>
       {/* Name */}
-      <span className="text-sm font-medium whitespace-nowrap truncate max-w-[260px] md:max-w-[360px] lg:max-w-[420px]">
+      <span className="text-sm font-medium whitespace-nowrap truncate max-w-[260px] md:max-w-[360px] lg:max-w-[420px] select-none">
         {name || 'Unknown'}
       </span>
     </div>
@@ -731,7 +747,7 @@ function Chip({ children, tone = 'slate' }) {
     violet: 'bg-violet-50 text-violet-700 border-violet-200',
   };
   return (
-    <span className={classNames('inline-flex items-center gap-1 text-xs px-2 py-1 rounded border', tones[tone])}>
+    <span className={classNames('inline-flex items-center gap-1 text-xs px-2 py-1 rounded border select-none', tones[tone])}>
       {children}
     </span>
   );
@@ -771,7 +787,7 @@ function TransfersList({ transfers }) {
                 <CalendarDays className="h-3.5 w-3.5" />
                 <span className="font-semibold">{t.season || '—'}</span>
               </Chip>
-              <div className="text-xs text-gray-500">{t.date || '—'}</div>
+              <div className="text-xs text-gray-500 select-none">{t.date || '—'}</div>
             </div>
 
             {/* From → To (names have max width + truncate) */}
@@ -793,5 +809,57 @@ function TransfersList({ transfers }) {
         );
       })}
     </ul>
+  );
+}
+
+/**
+ * Wrapper that disables copying/selection/drag/context menu for its children.
+ * Applied only to the Transfer History section to prevent cheating.
+ */
+function NoCopySection({ children }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    const prevent = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    };
+
+    el.addEventListener('copy', prevent);
+    el.addEventListener('cut', prevent);
+    el.addEventListener('contextmenu', prevent, { capture: true });
+    el.addEventListener('dragstart', prevent);
+    el.addEventListener('selectstart', prevent);
+
+    return () => {
+      el.removeEventListener('copy', prevent);
+      el.removeEventListener('cut', prevent);
+      el.removeEventListener('contextmenu', prevent, { capture: true });
+      el.removeEventListener('dragstart', prevent);
+      el.removeEventListener('selectstart', prevent);
+    };
+  }, []);
+
+  return (
+    <div
+      ref={ref}
+      // Make selection & long-press copy impossible visually and behaviorally
+      style={{
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        MsUserSelect: 'none',
+        MozUserSelect: 'none',
+        WebkitTouchCallout: 'none',
+      }}
+      draggable={false}
+      tabIndex={-1}
+      className="select-none"
+    >
+      {children}
+    </div>
   );
 }

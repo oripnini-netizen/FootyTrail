@@ -146,6 +146,31 @@ const randomBotName = () =>
   }`;
 
 /* =========================================================
+   Status chip
+   =======================================================*/
+function StatusChip({ status }) {
+  if (status === 'Finished') {
+    return (
+      <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-700">
+        Finished
+      </span>
+    );
+  }
+  if (status === 'Live') {
+    return (
+      <span className="px-2 py-0.5 rounded text-xs font-medium bg-sky-100 text-sky-700 animate-pulse">
+        Live
+      </span>
+    );
+  }
+  return (
+    <span className="px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800">
+      Upcoming
+    </span>
+  );
+}
+
+/* =========================================================
    Page
    =======================================================*/
 export default function MyLeaguesPage() {
@@ -709,7 +734,7 @@ function LeagueCard({ anchorId, league, creatorUser, participants, matches, dayP
     <div id={anchorId} className="rounded-2xl border bg-white shadow-sm overflow-hidden">
       <button
         onClick={() => setCollapsed((v) => !v)}
-        className="w-full flex items-center justify-between px-4 py-3 bg-emerald-100 hover:bg-emerald-200 transition" // emphasized header
+        className="w-full flex items-center justify-between px-4 py-3 bg-emerald-100 hover:bg-emerald-200 transition"
       >
         <div className="text-left">
           <div className="text-xl font-bold text-gray-900">{league.name}</div>
@@ -924,7 +949,10 @@ function NameWithBotChip({ participant, alignRight, onClick }) {
 function FixtureDay({ league, group, participantsById, dayPoints, onOpenUser }) {
   const today0 = todayUtcPlus2Midnight();
   const matchDate0 = toUtcPlus2Midnight(group.match_date);
+
   const isFuture = matchDate0 > today0;
+  const isToday = matchDate0.getTime() === today0.getTime();
+  const status = isFuture ? 'Upcoming' : isToday ? 'Live' : 'Finished';
 
   return (
     <div className="rounded-xl border overflow-hidden">
@@ -936,6 +964,7 @@ function FixtureDay({ league, group, participantsById, dayPoints, onOpenUser }) 
           <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
             {fmtShort(group.match_date)}
           </span>
+          <StatusChip status={status} />
         </div>
       </div>
 
@@ -981,12 +1010,10 @@ function FixtureDay({ league, group, participantsById, dayPoints, onOpenUser }) 
                     onClick={() => H.user && onOpenUser(H.user)}
                   />
 
-                  {/* Center score/upcoming */}
+                  {/* Center score (no 'Upcoming' chip anymore) */}
                   <div className="flex items-center justify-center">
                     {isFuture ? (
-                      <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700 text-sm">
-                        Upcoming
-                      </span>
+                      <span className="text-gray-400">—</span>
                     ) : (
                       <div className="flex items-center gap-3 text-sm text-gray-700">
                         <span className={`min-w-[60px] text-center ${homeCls}`}>
