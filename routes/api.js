@@ -143,6 +143,13 @@ function standardizeFee(feeRaw = '') {
   return null;
 }
 
+function cleanFeeText(str) {
+  if (!str) return null;
+  // strip any HTML (e.g. "Loan fee:<br /><i class='...'>€2.00m</i>")
+  const txt = String(str).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  return txt || null;
+}
+
 const transfersCache = new Map(); // key: playerId -> { ts, data }
 const TRANSFERS_TTL_MS = 10 * 60 * 1000;
 
@@ -180,11 +187,12 @@ async function getTransfermarktTransfers(playerId) {
       ? new Date(t.dateUnformatted).toISOString().slice(0, 10)
       : null;
 
+    const feeClean = cleanFeeText(t?.fee);
     return {
       season: t?.season || null,
       date: dateStr,
-      type: standardizeFee(t?.fee),
-      valueRaw: t?.fee || null,
+      type: standardizeFee(feeClean),
+      valueRaw: feeClean, // cleaned text, no HTML
       in:  { name: inTeam.clubName || null,  logo: inTeam['clubEmblem-2x'] || inTeam.clubEmblem || null,  flag: inTeam.countryFlag || null },
       out: { name: outTeam.clubName || null, logo: outTeam['clubEmblem-2x'] || outTeam.clubEmblem || null, flag: outTeam.countryFlag || null },
     };
@@ -351,20 +359,30 @@ router.post('/random-player', async (req, res) => {
       return res.status(400).json({ error: 'No players found with these filters.' });
     }
 
-    // 3) Pick random and return a "card" from NEW PIS table
-    const randomId = poolIds[Math.floor(Math.random() * poolIds.length)];
-    const card = await getPlayerCardFromPIS(randomId);
-    if (!card) return res.status(500).json({ error: 'Failed to get player data.' });
+    // 3) Pick a player that HAS transfer history (retry up to N)
+    const maxTries = Math.min(50, poolIds.length);
+    for (let i = 0; i < maxTries; i++) {
+      const randomId = poolIds[Math.floor(Math.random() * poolIds.length)];
+      const transfers = await getTransfermarktTransfers(String(randomId));
+      if (!transfers || transfers.length === 0) {
+        continue; // try another one
+      }
+      const card = await getPlayerCardFromPIS(randomId);
+      if (!card) continue;
 
-    return res.json({
-      id: card.id,
-      name: card.name,
-      age: card.age,
-      nationality: card.nationality,
-      position: card.position,
-      photo: card.photo,
-      transferHistory: [], // fetched separately if needed
-    });
+      return res.json({
+        id: card.id,
+        name: card.name,
+        age: card.age,
+        nationality: card.nationality,
+        position: card.position,
+        photo: card.photo,
+        transferHistoryCount: transfers.length, // info only; client still fetches list
+      });
+    }
+
+    // none found with transfers
+    return res.status(404).json({ error: 'No eligible player with transfer history found.' });
   } catch (e) {
     console.error('POST /random-player error:', e);
     res.status(500).json({ error: 'Failed to get random player.' });
