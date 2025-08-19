@@ -1,10 +1,11 @@
 // src/pages/GamePage.jsx
-// New data model: Competitions + Seasons + Min Market Value (€)
-// Fixes:
-// 1) Show ALL seasons returned by API (dedup, sort desc).
-// 2) No "full page reload" on every filter change (page stays; only counts refresh).
-// 3) Min Market Value quick-presets: Clear, 100K, 500K, 1M, 5M, 10M, 25M, 50M (with active styling).
-// 4) Daily Challenge -> fetch player details and navigate to /live with correct shape.
+// Data model: Competitions + Seasons + Min Market Value (€)
+// Includes:
+// - State caching (no reload on tab return)
+// - Distinct "Difficulty Filters" with 3 collapsibles (competitions, seasons, min MV)
+// - Pool counts refresh on change (no full page reload)
+// - Min MV quick presets (clear, 100K, 500K, 1M, 5M, 10M, 25M, 50M)
+// - Daily Challenge: fetches today's player and navigates with correct shape
 
 import React, { useEffect, useMemo, useState, useLayoutEffect, useRef } from 'react';
 import {
@@ -14,6 +15,7 @@ import {
   getRandomPlayer,
   getDailyChallenge,
   getLimits,
+  getGamePrompt,
   API_BASE
 } from '../api';
 import { useAuth } from '../context/AuthContext';
@@ -22,7 +24,7 @@ import { motion } from 'framer-motion';
 import { saveGamePageCache, loadGamePageCache, clearGamePageCache } from '../state/gamePageCache.js';
 
 import {
-  Users,         // use this (stable) instead of UsersRound
+  Users,         // use stable icon
   Star,
   Trash2,
   Filter,
@@ -38,6 +40,10 @@ import {
 function classNames(...s) {
   return s.filter(Boolean).join(' ');
 }
+
+const fmt = (n) => new Intl.NumberFormat('en-US').format(n || 0);
+const fmtCurrency = (n) =>
+  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(Number(n || 0));
 
 function CountdownToTomorrow() {
   const [timeLeft, setTimeLeft] = useState(getTimeLeft());
@@ -59,10 +65,6 @@ function CountdownToTomorrow() {
   return <span>{timeLeft}</span>;
 }
 
-const fmt = (n) => new Intl.NumberFormat('en-US').format(n || 0);
-const fmtCurrency = (n) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(Number(n || 0));
-
 export default function GamePage() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -70,14 +72,9 @@ export default function GamePage() {
   // Page readiness (initial boot only)
   const [pageReady, setPageReady] = useState(false);
 
-  // Data + UI state
-  const [daily, setDaily] = useState(null);
+  // UI/filters state
   const [loadingFilters, setLoadingFilters] = useState(true);
-
-  // Entire “Difficulty Filters” wrapper toggle
   const [filtersCollapsed, setFiltersCollapsed] = useState(true);
-
-  // Inner section toggles
   const [compCollapsed, setCompCollapsed] = useState(false);
   const [seasonsCollapsed, setSeasonsCollapsed] = useState(false);
   const [mvCollapsed, setMvCollapsed] = useState(false);
@@ -89,27 +86,38 @@ export default function GamePage() {
   const [selectedSeasons, setSelectedSeasons] = useState([]);
   const [minMarketValue, setMinMarketValue] = useState(0);
 
-  const [loadingCounts, setLoadingCounts] = useState(false);
   const [expandedCountries, setExpandedCountries] = useState({});
+  const [loadingCounts, setLoadingCounts] = useState(false);
 
-  // Game prompt
+  // Prompt & limits
   const [gamePrompt, setGamePrompt] = useState(
     "Get ready to outsmart your rivals and predict the game—let’s kick off a new round now!"
   );
   const [isLoadingPrompt, setIsLoadingPrompt] = useState(true);
 
-  // Limits
-  const [limits, setLimits] = useState({ gamesToday: 0, dailyPlayed: false, dailyWin: false, pointsToday: 0, pointsTotal: 0 });
+  const [limits, setLimits] = useState({
+    gamesToday: 0,
+    dailyPlayed: false,
+    dailyWin: false,
+    pointsToday: 0,
+    pointsTotal: 0,
+    dailyPlayerName: null,
+    dailyPlayerPhoto: null
+  });
+
+  // Daily record (name/photo if already played)
+  const [daily, setDaily] = useState(null);
 
   // Counts
   const [poolCount, setPoolCount] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
   const potentialPoints = useMemo(() => poolCount * 5, [poolCount]);
 
-  // Start button state
+  // Start button states
   const [gameLoading, setGameLoading] = useState(false);
+  const [dailyLoading, setDailyLoading] = useState(false);
 
-  // --------- Cache management (to keep state when switching tabs) ---------
+  // Cache management (to keep state when switching tabs)
   const hasRestoredRef = useRef(false);
   const restoredFromCacheRef = useRef(false);
 
@@ -191,41 +199,7 @@ export default function GamePage() {
     }
   }, [user]);
 
-  // Start daily
-  const onStartDaily = async () => {
-    try {
-      const dailyChallenge = await getDailyChallenge();
-      if (!dailyChallenge || !dailyChallenge.player_id) {
-        alert("No daily challenge available for today.");
-        return;
-      }
-      // fetch detailed player info (photo/pos/nationality/age if present)
-      const res = await fetch(`${API_BASE}/player/${dailyChallenge.player_id}`);
-      if (!res.ok) throw new Error('Failed to fetch player data');
-      const playerData = await res.json();
-      const mappedPlayerData = {
-        id: playerData.player_id,
-        name: playerData.player_name,
-        age: playerData.player_age,
-        nationality: playerData.player_nationality,
-        position: playerData.player_position,
-        photo: playerData.player_photo,
-      };
-      navigate('/live', {
-        state: {
-          ...mappedPlayerData,
-          isDaily: true,
-          filters: { potentialPoints: 10000 },
-          potentialPoints: 10000,
-        },
-        replace: true,
-      });
-    } catch {
-      alert('Failed to start daily challenge. Please try again.');
-    }
-  };
-
-  // Load competitions, seasons, limits, daily (initial)
+  // Init: competitions, seasons, limits, daily
   useEffect(() => {
     let cancelled = false;
 
@@ -244,7 +218,7 @@ export default function GamePage() {
           setExpandedCountries((prev) => Object.keys(prev).length ? prev : initialCollapse);
         }
 
-        // Seasons — accept multiple shapes and normalize into an array of strings
+        // Seasons — normalize payload into array of strings (desc)
         const seasonsRes = await getSeasons();
         if (!cancelled) {
           const seasons = normalizeSeasons(seasonsRes);
@@ -278,7 +252,7 @@ export default function GamePage() {
     return () => { cancelled = true; };
   }, [user?.id]);
 
-  // Game prompt (initial)
+  // Prompt
   useEffect(() => {
     if (restoredFromCacheRef.current) {
       setIsLoadingPrompt(false);
@@ -303,10 +277,9 @@ export default function GamePage() {
     })();
   }, []);
 
-  // Recalculate counts on-the-fly when filters change
+  // Counts refresh on filter changes (no full page reload)
   useEffect(() => {
     let cancelled = false;
-
     if (loadingFilters) return;
 
     (async () => {
@@ -351,12 +324,10 @@ export default function GamePage() {
     return map;
   }, [groupedCompetitions]);
 
-  // Flatten competitions helpers
+  // Flatten competitions + top 10
   const flatCompetitions = useMemo(() => {
     const out = [];
-    Object.values(groupedCompetitions).forEach(arr => {
-      (arr || []).forEach(c => out.push(c));
-    });
+    Object.values(groupedCompetitions).forEach(arr => (arr || []).forEach(c => out.push(c)));
     return out;
   }, [groupedCompetitions]);
 
@@ -384,7 +355,7 @@ export default function GamePage() {
 
   const toggleCountry = (country) => setExpandedCountries(prev => ({ ...prev, [country]: !prev[country] }));
 
-  // Start regular game
+  // Regular game start
   const onStartGame = async () => {
     try {
       setGameLoading(true);
@@ -413,6 +384,54 @@ export default function GamePage() {
       alert('Failed to start game. Please try again.');
     } finally {
       setGameLoading(false);
+    }
+  };
+
+  // DAILY GAME START — FIXED MAPPING (new backend shape with fallbacks)
+  const onStartDaily = async () => {
+    try {
+      setDailyLoading(true);
+
+      const dailyChallenge = await getDailyChallenge();
+      if (!dailyChallenge || !dailyChallenge.player_id) {
+        alert("No daily challenge available for today.");
+        setDailyLoading(false);
+        return;
+      }
+
+      // fetch detailed player info
+      const res = await fetch(`${API_BASE}/player/${dailyChallenge.player_id}`);
+      if (!res.ok) throw new Error('Failed to fetch player data');
+      const playerData = await res.json();
+
+      const mappedPlayerData = {
+        id:          playerData.id          ?? playerData.player_id,
+        name:        playerData.name        ?? playerData.player_name,
+        age:         playerData.age         ?? playerData.player_age,
+        nationality: playerData.nationality ?? playerData.player_nationality,
+        position:    playerData.position    ?? playerData.player_position,
+        photo:       playerData.photo       ?? playerData.player_photo,
+      };
+
+      if (!mappedPlayerData.id || !mappedPlayerData.name) {
+        throw new Error('Daily player payload incomplete');
+      }
+
+      const pp = 10000; // fixed potential points for daily
+      navigate('/live', {
+        state: {
+          ...mappedPlayerData,
+          isDaily: true,
+          filters: { potentialPoints: pp },
+          potentialPoints: pp,
+        },
+        replace: true,
+      });
+    } catch (e) {
+      console.error('Failed to start daily', e);
+      alert('Failed to start daily challenge. Please try again.');
+    } finally {
+      setDailyLoading(false);
     }
   };
 
@@ -461,15 +480,15 @@ export default function GamePage() {
               <>
                 <button
                   className={`inline-flex items-center gap-2 px-6 py-2 rounded-xl font-bold shadow transition-all ${
-                    limits.dailyPlayed
+                    (limits.dailyPlayed || dailyLoading)
                       ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                       : 'bg-gradient-to-r from-yellow-500 to-yellow-700 text-white hover:scale-105'
                   }`}
                   onClick={onStartDaily}
-                  disabled={limits.dailyPlayed}
+                  disabled={limits.dailyPlayed || dailyLoading}
                 >
                   <Sparkles className="h-5 w-5" />
-                  {limits.dailyPlayed ? "Already Played" : "Play Daily Challenge"}
+                  {limits.dailyPlayed ? "Already Played" : (dailyLoading ? "Loading…" : "Play Daily Challenge")}
                 </button>
                 {daily && limits.dailyPlayed && (
                   <div className="mt-4 text-sm text-gray-700">
@@ -510,7 +529,7 @@ export default function GamePage() {
             </div>
           </div>
 
-          {/* Game Setup OR Lockout */}
+          {/* Main card or lockout */}
           {!reachedLimit ? (
             <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-6">
               <div className="flex justify-center mb-6">
@@ -542,7 +561,7 @@ export default function GamePage() {
                 </div>
               </div>
 
-              {/* Play */}
+              {/* Play button */}
               <div className="flex justify-center mt-6">
                 <button
                   onClick={onStartGame}
@@ -613,7 +632,7 @@ export default function GamePage() {
 
                 {!filtersCollapsed && !loadingFilters && (
                   <div className="mt-4 space-y-6">
-                    {/* Competitions section */}
+                    {/* Competitions */}
                     <Section
                       title="Competitions"
                       icon={<Star className="h-4 w-4 text-green-700" />}
@@ -705,7 +724,7 @@ export default function GamePage() {
                       </div>
                     </Section>
 
-                    {/* Seasons section */}
+                    {/* Seasons */}
                     <Section
                       title="Seasons"
                       icon={<Users className="h-4 w-4 text-green-700" />}
@@ -760,7 +779,7 @@ export default function GamePage() {
                       </div>
                     </Section>
 
-                    {/* Minimum Market Value section */}
+                    {/* Minimum Market Value */}
                     <Section
                       title="Minimum Market Value (€)"
                       icon={<Users className="h-4 w-4 text-green-700" />}
@@ -813,7 +832,7 @@ export default function GamePage() {
               </div>
             </div>
           ) : (
-            // ======= LOCKOUT VIEW (limit reached) =======
+            // Lockout view
             <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-8 text-center">
               <div className="flex justify-center mb-4">
                 <Timer className="h-14 w-14 text-green-600" />
@@ -842,11 +861,11 @@ export default function GamePage() {
 function normalizeSeasons(payload) {
   let raw = [];
 
-  // Cases:
+  // Supported shapes:
   // - ['2020','2021',...]
   // - { seasons: [...] }
   // - { data: [...] }
-  // - any object with season-like values
+  // - any object that contains season-like values
   if (Array.isArray(payload)) {
     raw = payload;
   } else if (payload && Array.isArray(payload.seasons)) {
@@ -854,7 +873,6 @@ function normalizeSeasons(payload) {
   } else if (payload && Array.isArray(payload.data)) {
     raw = payload.data;
   } else if (payload && typeof payload === 'object') {
-    // scan any values that look like seasons
     const collected = [];
     Object.values(payload).forEach((v) => {
       if (Array.isArray(v)) collected.push(...v);
@@ -864,12 +882,11 @@ function normalizeSeasons(payload) {
   }
 
   const uniq = Array.from(new Set(raw.map(String)));
-  // Sort desc so "Last 5" is newest 5 (e.g., 2025..2021)
+  // Sort descending so "Last 5" is newest 5 (e.g., 2025..2021)
   uniq.sort((a, b) => String(b).localeCompare(String(a)));
   return uniq;
 }
 
-// Section header + body (action buttons don't toggle collapse)
 function Section({ title, icon, collapsed, onToggle, actions, children }) {
   return (
     <div className="rounded-lg border bg-white/60">
@@ -912,7 +929,6 @@ function PresetButton({ onClick, children, title, active = false }) {
   );
 }
 
-// Small chip helper
 function SelectedChips({ title, items, onClear, getLabel, onRemoveItem, hoverClose = false }) {
   if (!items?.length) return null;
   return (
