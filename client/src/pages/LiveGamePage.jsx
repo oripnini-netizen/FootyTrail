@@ -310,13 +310,15 @@ export default function LiveGamePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gameData?.id]);
 
-  // Save record helper
+  // Save record helper (FIXED)
   const saveGameRecord = async (won) => {
     try {
+      const playerIdNumeric = Number(gameData?.id ?? location.state?.id);
       const payload = {
+        // original nested shape (kept for compatibility)
         userId: user?.id || null,
         player: {
-          id: gameData.id,
+          id: playerIdNumeric,
           name: gameData.name,
           nationality: gameData.nationality,
           position: gameData.position,
@@ -332,8 +334,29 @@ export default function LiveGamePage() {
           hintsUsed: Object.values(usedHints).filter(Boolean).length,
           isDaily: !!isDaily,
         },
+
+        // flat mirror (so the server can insert regardless of handler)
+        player_id: playerIdNumeric,
+        player_name: gameData.name,
+        player_photo: gameData.photo,
+        player_age: gameData.age,
+        player_nationality: gameData.nationality,
+        player_position: gameData.position,
+        won,
+        points: won ? points : 0,
+        potential_points: gameData.potentialPoints || filters?.potentialPoints || 10000,
+        time_taken_sec: INITIAL_TIME - timeSec,
+        guesses_used: 3 - guessesLeft + (won ? 1 : 0),
+        hints_used: Object.values(usedHints).filter(Boolean).length,
+        is_daily_challenge: !!isDaily,
       };
-      await saveGameCompleted(payload);
+
+      const resp = await saveGameCompleted(payload);
+      // If your helper returns `{ error }` or `{ data, error }`, catch it here:
+      if (resp && resp.error) {
+        console.error('[saveGameCompleted] error:', resp.error);
+        return null;
+      }
       return true;
     } catch (err) {
       console.error('Error in saveGameRecord:', err);
@@ -461,9 +484,9 @@ export default function LiveGamePage() {
               )}
               <div className="text-sm">
                 <span className="text-gray-900 text-base">
-                Potential: <span className="font-bold">{gameData.potentialPoints}</span>
-              </span>
-              </div>  
+                  Potential: <span className="font-bold">{gameData.potentialPoints}</span>
+                </span>
+              </div>
             </div>
           </div>
 
