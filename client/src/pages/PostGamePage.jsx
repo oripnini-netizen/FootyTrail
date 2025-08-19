@@ -25,8 +25,17 @@ const REGULAR_START_POINTS = 6000; // kept for safety, but not used for "play ag
 export default function PostGamePage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { didWin, player, stats, filters, isDaily, potentialPoints: prevPotentialPoints } = location.state || {};
+  // NOTE: we no longer alias here; instead we read from multiple possible keys below
+  const { didWin, player, stats, filters, isDaily } = location.state || {};
   const { user } = useAuth();
+
+  // NEW: read previous potential points from several possible places
+  const prevPotentialPoints =
+    location.state?.potentialPoints ??
+    location.state?.prevPotentialPoints ??
+    location.state?.potential_points ??
+    filters?.potentialPoints ??
+    null;
 
   const [loading, setLoading] = useState(false);
   const [gamesLeft, setGamesLeft] = useState(null);
@@ -309,10 +318,10 @@ export default function PostGamePage() {
       const minMarketValue =
         Number(filters?.minMarketValue ?? filters?.min_market_value ?? 0) || 0;
 
-      // Previous potential (from LiveGamePage -> PostGamePage state)
+      // Previous potential (from LiveGamePage -> PostGamePage state, with robust fallbacks)
       const prevPot = Number(prevPotentialPoints);
       if (!Number.isFinite(prevPot) || prevPot <= 0) {
-        alert('Could not determine the previous round’s pool size. Please start from the Game page.');
+        alert("Could not determine the previous round’s pool size. Please start from the Game page.");
         setLoading(false);
         return;
       }
