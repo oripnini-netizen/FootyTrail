@@ -266,8 +266,12 @@ export default function PostGamePage() {
     }
   };
 
-  if (!player) return null;
-  if (!pageReady) return null; // hold the whole page until the fact is ready OR restored
+  // ----- Loading screen while page prepares -----
+  if (!pageReady) {
+    return <LoadingWalk />;
+  }
+
+  if (!player) return null; // redirect handler above will take care
 
   const pdata = player || {};
   const photo = pdata.player_photo || pdata.photo || null;
@@ -398,5 +402,48 @@ function getPlayerKey(p) {
       p.player_league_season_id ??
       p.name ??
       ''
+  );
+}
+
+/** Full-screen loader with a spinning football and walking footprints */
+function LoadingWalk() {
+  // generate a few trailing footprints that keep walking to the right
+  const steps = Array.from({ length: 6 });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-gradient-to-b from-green-50 to-transparent">
+      <div className="flex items-center gap-8">
+        {/* Spinning ball */}
+        <motion.div
+          aria-label="Loading"
+          role="img"
+          animate={{ rotate: 360 }}
+          transition={{ repeat: Infinity, duration: 1.1, ease: 'linear' }}
+          className="text-6xl select-none"
+        >
+          ⚽️
+        </motion.div>
+
+        {/* Footprints trail */}
+        <div className="relative w-56 h-10">
+          {steps.map((_, i) => (
+            <motion.span
+              key={i}
+              className="absolute top-1/2 -translate-y-1/2 text-2xl select-none"
+              initial={{ x: -40, opacity: 0 }}
+              animate={{ x: 200, opacity: [0, 1, 0] }}
+              transition={{
+                duration: 1.6,
+                delay: i * 0.18,
+                repeat: Infinity,
+                ease: 'easeInOut',
+              }}
+            >
+              👣
+            </motion.span>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
