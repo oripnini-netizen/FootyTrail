@@ -310,49 +310,41 @@ export default function LiveGamePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gameData?.id]);
 
-  // Save record helper (FIXED)
+  // Save record helper (FIXED to match backend: expects { userId, playerData, gameStats })
   const saveGameRecord = async (won) => {
     try {
       const playerIdNumeric = Number(gameData?.id ?? location.state?.id);
-      const payload = {
-        // original nested shape (kept for compatibility)
-        userId: user?.id || null,
-        player: {
-          id: playerIdNumeric,
-          name: gameData.name,
-          nationality: gameData.nationality,
-          position: gameData.position,
-          age: gameData.age,
-          photo: gameData.photo,
-        },
-        gameStats: {
-          won,
-          points: won ? points : 0,
-          potentialPoints: gameData.potentialPoints || filters?.potentialPoints || 10000,
-          timeTaken: INITIAL_TIME - timeSec,
-          guessesAttempted: 3 - guessesLeft + (won ? 1 : 0),
-          hintsUsed: Object.values(usedHints).filter(Boolean).length,
-          isDaily: !!isDaily,
-        },
+      if (!playerIdNumeric || Number.isNaN(playerIdNumeric)) {
+        throw new Error('Missing playerData.id in request');
+      }
 
-        // flat mirror (so the server can insert regardless of handler)
-        player_id: playerIdNumeric,
-        player_name: gameData.name,
-        player_photo: gameData.photo,
-        player_age: gameData.age,
-        player_nationality: gameData.nationality,
-        player_position: gameData.position,
-        won,
-        points: won ? points : 0,
-        potential_points: gameData.potentialPoints || filters?.potentialPoints || 10000,
-        time_taken_sec: INITIAL_TIME - timeSec,
-        guesses_used: 3 - guessesLeft + (won ? 1 : 0),
-        hints_used: Object.values(usedHints).filter(Boolean).length,
-        is_daily_challenge: !!isDaily,
+      const playerData = {
+        id: playerIdNumeric,
+        name: gameData.name,
+        nationality: gameData.nationality,
+        position: gameData.position,
+        age: gameData.age,
+        photo: gameData.photo,
       };
 
-      const resp = await saveGameCompleted(payload);
-      // If your helper returns `{ error }` or `{ data, error }`, catch it here:
+      const gameStats = {
+        won,
+        points: won ? points : 0,
+        potentialPoints:
+          gameData.potentialPoints || filters?.potentialPoints || 10000,
+        timeTaken: INITIAL_TIME - timeSec,
+        guessesAttempted: 3 - guessesLeft + (won ? 1 : 0),
+        hintsUsed: Object.values(usedHints).filter(Boolean).length,
+        isDaily: !!isDaily,
+      };
+
+      const body = {
+        userId: user?.id || null,
+        playerData,
+        gameStats,
+      };
+
+      const resp = await saveGameCompleted(body);
       if (resp && resp.error) {
         console.error('[saveGameCompleted] error:', resp.error);
         return null;
