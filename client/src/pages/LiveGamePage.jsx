@@ -536,12 +536,14 @@ export default function LiveGamePage() {
             onClick={() => reveal('partialImage')}
             valueShown={
               usedHints.partialImage ? (
-                <img
-                  src={gameData?.photo}
-                  alt="Player Hint"
-                  className="w-20 h-20 object-cover object-top"
-                  style={{ clipPath: 'inset(0 0 34% 0)' }} // top 2/3
-                />
+                <div className="flex justify-center">
+                  <img
+                    src={gameData?.photo}
+                    alt="Player Hint"
+                    className="w-32 h-32 object-cover object-top"
+                    style={{ clipPath: 'inset(0 0 34% 0)' }} // show top ~2/3, now centered & bigger
+                  />
+                </div>
               ) : null
             }
           />
