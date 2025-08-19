@@ -459,6 +459,11 @@ export default function LiveGamePage() {
               ) : (
                 <span className="text-gray-600">Regular Round</span>
               )}
+              <div className="text-sm">
+                <span className="text-gray-900 text-base">
+                Potential: <span className="font-bold">{gameData.potentialPoints}</span>
+              </span>
+              </div>  
             </div>
           </div>
 
@@ -469,14 +474,11 @@ export default function LiveGamePage() {
             </div>
           </div>
 
-          {/* Right: timer + potential + guesses */}
+          {/* Right: timer + guesses */}
           <div className="flex flex-col items-end gap-1">
             <div className={classNames('flex items-center gap-3 text-2xl font-semibold', timeColorClass)}>
               <AlarmClock className="h-6 w-6" />
               {formatTime(timeSec)}
-              <span className="text-gray-900 text-base">
-                • Potential: <span className="font-bold">{gameData.potentialPoints}</span>
-              </span>
             </div>
             <div className="text-sm text-gray-600">
               Guesses left: <span className="font-semibold">{guessesLeft}</span>
