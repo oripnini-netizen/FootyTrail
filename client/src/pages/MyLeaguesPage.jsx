@@ -6,6 +6,7 @@ import {
   Plus,
   Users,
   CalendarDays,
+  Calendar,
   Flag,
   ChevronDown,
   ChevronUp,
@@ -57,7 +58,7 @@ function computeStandings(participants, matches, dayPointsMap) {
   const stats = new Map();
   const ensure = (pid, name, isBot) => {
     if (!stats.has(pid)) {
-      stats.set(pid, { pid, name, isBot, P: 0, W: 0, D: 0, L: 0, PTS: 0 });
+      stats.set(pid, { pid, name, isBot, P: 0, W: 0, D: 0, L: 0, PTS: 0, PF: 0, PA: 0 });
     }
     return stats.get(pid);
   };
@@ -79,6 +80,13 @@ function computeStandings(participants, matches, dayPointsMap) {
 
       A.P += 1;
       B.P += 1;
+
+      // points for/against (for GD)
+      A.PF += homePts;
+      A.PA += awayPts;
+      B.PF += awayPts;
+      B.PA += homePts;
+
       if (homePts > awayPts) {
         A.W += 1;
         A.PTS += 3;
@@ -98,9 +106,10 @@ function computeStandings(participants, matches, dayPointsMap) {
   // ensure everyone is present
   participants.forEach((p) => ensure(p.id, displayName(p), p.is_bot));
 
-  return Array.from(stats.values()).sort(
-    (a, b) => b.PTS - a.PTS || b.W - a.W || a.L - b.L || a.name.localeCompare(b.name)
-  );
+  const list = Array.from(stats.values()).map((s) => ({ ...s, GD: (s.PF || 0) - (s.PA || 0) }));
+
+  // Sort by PTS desc, then GD desc, then W desc, then name
+  return list.sort((a, b) => b.PTS - a.PTS || b.GD - a.GD || b.W - a.W || a.name.localeCompare(b.name));
 }
 
 /* =========================================================
@@ -700,18 +709,18 @@ function LeagueCard({ anchorId, league, creatorUser, participants, matches, dayP
     <div id={anchorId} className="rounded-2xl border bg-white shadow-sm overflow-hidden">
       <button
         onClick={() => setCollapsed((v) => !v)}
-        className="w-full flex items-center justify-between px-4 py-3 bg-green-50 hover:bg-green-100 transition"
+        className="w-full flex items-center justify-between px-4 py-3 bg-emerald-100 hover:bg-emerald-200 transition" // emphasized header
       >
         <div className="text-left">
           <div className="text-xl font-bold text-gray-900">{league.name}</div>
           {league.description ? (
-            <div className="text-sm text-gray-600 mt-0.5">{league.description}</div>
+            <div className="text-sm text-gray-700 mt-0.5">{league.description}</div>
           ) : null}
         </div>
         {collapsed ? (
-          <ChevronDown className="h-5 w-5 text-green-800" />
+          <ChevronDown className="h-5 w-5 text-emerald-900" />
         ) : (
-          <ChevronUp className="h-5 w-5 text-green-800" />
+          <ChevronUp className="h-5 w-5 text-emerald-900" />
         )}
       </button>
 
@@ -720,12 +729,12 @@ function LeagueCard({ anchorId, league, creatorUser, participants, matches, dayP
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <StatTile icon={Users} label="Players" value={participants.length} />
             <StatTile
-              icon={CalendarDays} // changed from Trophy
+              icon={CalendarDays}
               label="Match Days"
               value={new Set(matches.map((m) => m.match_day)).size}
             />
             <StatTile
-              icon={CalendarDays}
+              icon={Calendar} // different from Match Days
               label="Start Date"
               value={fmtShort(league.start_date)}
             />
@@ -801,6 +810,7 @@ function LeagueTable({ standings, participants, onOpenUser }) {
             <th className="px-3 py-2 text-center">W</th>
             <th className="px-3 py-2 text-center">D</th>
             <th className="px-3 py-2 text-center">L</th>
+            <th className="px-3 py-2 text-center">GD</th>
             <th className="px-3 py-2 text-right">PTS</th>
           </tr>
         </thead>
@@ -822,7 +832,7 @@ function LeagueTable({ standings, participants, onOpenUser }) {
                     <button
                       type="button"
                       onClick={() => u.userRow && onOpenUser(u.userRow)}
-                      className="font-medium text-green-700 hover:text-green-800"
+                      className="font-medium text-black hover:opacity-80"
                       style={{ textDecoration: 'none' }}
                     >
                       {u.name}
@@ -833,6 +843,7 @@ function LeagueTable({ standings, participants, onOpenUser }) {
                 <td className="px-3 py-2 text-center text-green-700 font-semibold">{s.W}</td>
                 <td className="px-3 py-2 text-center">{s.D}</td>
                 <td className="px-3 py-2 text-center text-red-700 font-semibold">{s.L}</td>
+                <td className="px-3 py-2 text-center font-semibold">{s.GD}</td>
                 <td className="px-3 py-2 text-right font-bold">{s.PTS}</td>
               </tr>
             );
@@ -882,14 +893,26 @@ function FixturesList({ league, matches, participantsById, dayPoints, onOpenUser
   );
 }
 
-function NameButton({ children, onClick, disabled, alignRight }) {
-  const content = <span className="font-medium text-gray-900">{children}</span>;
-  return disabled ? (
-    <div className={`flex items-center ${alignRight ? 'justify-end' : ''}`}>{content}</div>
-  ) : (
+function NameWithBotChip({ participant, alignRight, onClick }) {
+  const name = displayName(participant);
+  const content = (
+    <span className="inline-flex items-center gap-2">
+      {participant.is_bot && (
+        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-purple-100 text-purple-700 text-xs">
+          B
+        </span>
+      )}
+      <span className="font-medium text-gray-900 truncate max-w-[160px]">{name}</span>
+    </span>
+  );
+
+  if (participant.is_bot) {
+    return <div className={`flex items-center ${alignRight ? 'justify-end' : ''}`}>{content}</div>;
+  }
+  return (
     <button
       type="button"
-      className={`flex items-center ${alignRight ? 'justify-end' : ''} text-green-700 hover:text-green-800`}
+      className={`flex items-center ${alignRight ? 'justify-end' : ''} text-black hover:opacity-80`}
       onClick={onClick}
       style={{ textDecoration: 'none' }}
     >
@@ -943,18 +966,20 @@ function FixtureDay({ league, group, participantsById, dayPoints, onOpenUser }) 
             }
           }
 
+          // Only show breakdown for HUMAN participants (skip bots)
+          const humanLeft = !H.is_bot;
+          const humanRight = !A.is_bot;
+
           return (
             <MatchCollapsible
               key={item.id}
               titleRow={
                 <div className="grid grid-cols-3 items-center gap-3">
-                  {/* Home name */}
-                  <NameButton
-                    disabled={!!H.is_bot}
+                  {/* Home name (with B chip if bot) */}
+                  <NameWithBotChip
+                    participant={H}
                     onClick={() => H.user && onOpenUser(H.user)}
-                  >
-                    {hName}
-                  </NameButton>
+                  />
 
                   {/* Center score/upcoming */}
                   <div className="flex items-center justify-center">
@@ -975,31 +1000,31 @@ function FixtureDay({ league, group, participantsById, dayPoints, onOpenUser }) 
                     )}
                   </div>
 
-                  {/* Away name */}
-                  <NameButton
-                    disabled={!!A.is_bot}
-                    onClick={() => A.user && onOpenUser(A.user)}
+                  {/* Away name (with B chip if bot) */}
+                  <NameWithBotChip
+                    participant={A}
                     alignRight
-                  >
-                    {aName}
-                  </NameButton>
+                    onClick={() => A.user && onOpenUser(A.user)}
+                  />
                 </div>
               }
               body={
-                !isFuture && (
+                !isFuture && (humanLeft || humanRight) && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-                    <PlayersBreakdown
-                      label={hName}
-                      participant={H}
-                      date={group.match_date}
-                      botTotal={H.is_bot ? homePts : null}
-                    />
-                    <PlayersBreakdown
-                      label={aName}
-                      participant={A}
-                      date={group.match_date}
-                      botTotal={A.is_bot ? awayPts : null}
-                    />
+                    {humanLeft && (
+                      <PlayersBreakdown
+                        label={hName}
+                        participant={H}
+                        date={group.match_date}
+                      />
+                    )}
+                    {humanRight && (
+                      <PlayersBreakdown
+                        label={aName}
+                        participant={A}
+                        date={group.match_date}
+                      />
+                    )}
                   </div>
                 )
               }
@@ -1035,7 +1060,7 @@ function MatchCollapsible({ titleRow, body }) {
   );
 }
 
-function PlayersBreakdown({ label, participant, date, botTotal }) {
+function PlayersBreakdown({ label, participant, date }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -1044,36 +1069,25 @@ function PlayersBreakdown({ label, participant, date, botTotal }) {
     async function load() {
       setLoading(true);
       try {
-        if (participant.is_bot) {
-          const total = Math.max(0, Number(botTotal || 0));
-          const names = ['Auto Striker', 'Mecha Playmaker', 'Cyber Winger', 'Robo Mid', 'Quantum Back'];
-          const parts = [0.28, 0.22, 0.2, 0.18, 0.12];
-          const list = parts.map((p, i) => ({
-            player_name: names[i],
-            points_earned: Math.round(total * p),
-          }));
-          if (!cancelled) setRows(list);
-        } else {
-          const { start, end } = dayRangeUtcPlus2(date);
-          const { data } = await supabase
-            .from('games_records')
-            .select('player_name, points_earned')
-            .eq('user_id', participant.user_id)
-            .gte('created_at', start)
-            .lt('created_at', end)
-            .order('points_earned', { ascending: false })
-            .limit(10);
-          if (!cancelled) setRows(data || []);
-        }
+        const { start, end } = dayRangeUtcPlus2(date);
+        const { data } = await supabase
+          .from('games_records')
+          .select('player_name, points_earned')
+          .eq('user_id', participant.user_id)
+          .gte('created_at', start)
+          .lt('created_at', end)
+          .order('points_earned', { ascending: false })
+          .limit(10);
+        if (!cancelled) setRows(data || []);
       } finally {
         if (!cancelled) setLoading(false);
       }
     }
-    load();
+    if (!participant.is_bot) load();
     return () => {
       cancelled = true;
     };
-  }, [participant.id, participant.is_bot, participant.user_id, date, botTotal]);
+  }, [participant.id, participant.is_bot, participant.user_id, date]);
 
   return (
     <div className="rounded border bg-gray-50">
