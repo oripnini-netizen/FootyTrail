@@ -1,7 +1,7 @@
 // src/pages/LiveGamePage.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { suggestNames, saveGameCompleted, fetchTransfers, API_BASE } from '../api';
+import { motion } from 'framer-motion';
 import {
   Clock,
   AlarmClock,
@@ -10,13 +10,25 @@ import {
   CalendarDays,
   ArrowRight,
   BadgeEuro,
+  AlertTriangle,
+  CheckCircle2,
+  XCircle
 } from 'lucide-react';
-import { motion } from 'framer-motion';
-import { useAuth } from '../context/AuthContext';
 
-// ----------------------------------
-// small helpers
-// ----------------------------------
+import { useAuth } from '../context/AuthContext';
+import {
+  suggestNames,
+  saveGameCompleted,
+  fetchTransfers,
+  API_BASE
+} from '../api';
+import GuessInput from '../components/GuessInput';
+
+// -------------------------------------------------------
+// Utilities
+// -------------------------------------------------------
+const TWO_MINUTES = 120;
+
 function cx(...s) {
   return s.filter(Boolean).join(' ');
 }
@@ -43,33 +55,48 @@ function longestToken(str) {
   return t[0] || '';
 }
 
-// ----------------------------------
+function formatTime(seconds) {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function euroLabel(raw, feeEur) {
+  if (raw && typeof raw === 'string') {
+    // normalize accidental $ to €
+    return raw.replace(/^\$/, '€');
+  }
+  if (Number.isFinite(feeEur)) {
+    return `€${new Intl.NumberFormat('en-US').format(Math.round(feeEur))}`;
+  }
+  return '—';
+}
+
+// -------------------------------------------------------
 
 export default function LiveGamePage() {
-  const location = useLocation();
-  const navigate = useNavigate();
   const { user } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
 
-  // URL params for daily link support
+  // URL params allow deep link: ?daily=1&pid=<playerId>
   const params = new URLSearchParams(location.search);
   const urlIsDaily = params.get('daily') === '1';
-  const fixedPid = params.get('pid');
+  const urlPid = params.get('pid');
 
-  // Game bootstrap state (can arrive via navigation.state or be fetched)
-  const [gameData, setGameData] = useState(null);
-  const [bootError, setBootError] = useState(null);
+  // Bootstraped game data (from GamePage or fetched for daily)
+  const [gameData, setGameData] = useState(null); // { player_id/id, name, photo, nationality, position, age, potentialPoints, isDaily }
   const [isDaily, setIsDaily] = useState(!!location.state?.isDaily || urlIsDaily);
+  const [bootError, setBootError] = useState(null);
 
-  // Filters/potentialPoints passed from GamePage (for normal rounds)
-  const filters = location.state?.filters || { potentialPoints: 0 };
-
-  // round controls
-  const INITIAL_TIME = 120; // 2 minutes
-  const [timeSec, setTimeSec] = useState(INITIAL_TIME);
+  // Round state
+  const [timeSec, setTimeSec] = useState(TWO_MINUTES);
   const [guessesLeft, setGuessesLeft] = useState(3);
   const [guess, setGuess] = useState('');
   const [suggestions, setSuggestions] = useState([]);
   const [isWrongGuess, setIsWrongGuess] = useState(false);
+
+  // Hints state
   const [usedHints, setUsedHints] = useState({
     age: false,
     nationality: false,
@@ -78,257 +105,274 @@ export default function LiveGamePage() {
     firstLetter: false,
   });
 
+  // Points potential declines with time & wrong guesses; hints apply multipliers
+  const hintMultipliers = {
+    age: 0.95,
+    nationality: 0.90,
+    position: 0.80,
+    partialImage: 0.50,
+    firstLetter: 0.25,
+  };
+
   const endedRef = useRef(false);
   const timerRef = useRef(null);
 
-  // transfers
+  // Transfers
   const [transferHistory, setTransferHistory] = useState([]);
-  const [loadingTransfers, setLoadingTransfers] = useState(true);
+  const [loadingTransfers, setLoadingTransfers] = useState(false);
 
-  // -------------------------
-  // BOOTSTRAP: get the card
-  // -------------------------
+  // Filters/potentialPoints passed from GamePage for normal rounds
+  const passedFilters = location.state?.filters || {};
+  const passedPotential = Number(location.state?.potentialPoints || 0);
+
+  // -------------------------------------------------------
+  // Bootstrap logic (keeps all your features, adds robust daily flow)
+  // Priority:
+  // 1) navigation.state from GamePage
+  // 2) ?daily=1&pid=<id>
+  // 3) ?daily=1 -> fetch /api/daily-challenge -> then /api/player/:id
+  // else -> back to /game
+  // -------------------------------------------------------
   useEffect(() => {
     let mounted = true;
 
-    const bootstrap = async () => {
+    async function boot() {
       try {
-        // (1) If a prepared game object was passed via navigation state (normal rounds)
-        // Accept common shapes: { id, name, ... } or { player_id, name, ... }
+        // 1) Navigation state from GamePage (preferred for both normal and daily)
         if (location.state && (location.state.id || location.state.player_id) && location.state.name) {
           if (!mounted) return;
-          setGameData(location.state);
-          setIsDaily(!!location.state.isDaily || urlIsDaily);
+          setIsDaily(Boolean(location.state.isDaily) || urlIsDaily);
+          setGameData({
+            ...location.state,
+            player_id: location.state.player_id || location.state.id,
+            potentialPoints:
+              Number(location.state.potentialPoints || passedPotential || 10000),
+          });
           return;
         }
 
-        // (2) If a fixed player id arrived via the daily link: ?daily=1&pid=xxxx
-        if (fixedPid) {
-          const res = await fetch(`${API_BASE}/player/${fixedPid}`);
-          if (!res.ok) throw new Error('Failed to fetch daily player');
-          const card = await res.json(); // { id, name, age, nationality, position, photo }
-          const normalized = {
-            ...card,
-            player_id: card.id,
-            potentialPoints: 10000, // fallback if not supplied
-            isDaily: true,
-          };
-          if (!mounted) return;
-          setGameData(normalized);
-          setIsDaily(true);
-          return;
-        }
-
-        // (3) Fallback for daily: if ?daily=1 but there is no pid or state,
-        // ask the backend who today’s player is, then fetch the card.
-        if (urlIsDaily) {
-          const dc = await fetch(`${API_BASE}/daily-challenge`);
-          if (!dc.ok) throw new Error('Failed to load daily challenge');
-          const today = await dc.json(); // expect { challenge_date, player_id, ... }
-          if (!today?.player_id) throw new Error('Daily challenge has no player');
-
-          const res = await fetch(`${API_BASE}/player/${today.player_id}`);
+        // 2) Query params (?daily=1&pid=XYZ)
+        if (urlPid) {
+          const res = await fetch(`${API_BASE}/player/${encodeURIComponent(urlPid)}`);
           if (!res.ok) throw new Error('Failed to fetch daily player');
           const card = await res.json();
-          const normalized = {
+          if (!mounted) return;
+          setIsDaily(true);
+          setGameData({
             ...card,
-            player_id: card.id,
+            player_id: card.id || card.player_id || urlPid,
             potentialPoints: 10000,
             isDaily: true,
-          };
-          if (!mounted) return;
-          setGameData(normalized);
-          setIsDaily(true);
+          });
           return;
         }
 
-        // (4) Nothing to start with
+        // 3) If URL indicates daily but no pid; fetch today’s daily from backend (Supabase daily_challenges)
+        if (urlIsDaily) {
+          const dcRes = await fetch(`${API_BASE}/daily-challenge`);
+          if (!dcRes.ok) throw new Error('Failed to load today’s daily challenge');
+          const today = await dcRes.json(); // { challenge_date, player_id, ... }
+          if (!today?.player_id) throw new Error('Daily challenge not configured for today');
+
+          const pRes = await fetch(`${API_BASE}/player/${encodeURIComponent(today.player_id)}`);
+          if (!pRes.ok) throw new Error('Failed to fetch daily player card');
+          const card = await pRes.json();
+
+          if (!mounted) return;
+          setIsDaily(true);
+          setGameData({
+            ...card,
+            player_id: card.id || card.player_id || today.player_id,
+            potentialPoints: 10000,
+            isDaily: true,
+          });
+          return;
+        }
+
+        // 4) Nothing to start a game — return to lobby
         throw new Error('No game payload found.');
       } catch (err) {
         console.error('Failed to start game', err);
         if (!mounted) return;
         setBootError(err.message || 'Failed to start game. Please try again.');
+        // after a short pause, go back to /game
+        setTimeout(() => navigate('/game', { replace: true }), 1200);
       }
-    };
+    }
 
-    bootstrap();
-    return () => {
-      mounted = false;
-    };
-  }, [location.state, fixedPid, urlIsDaily]);
+    boot();
+    return () => { mounted = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.key]);
 
-  // Load transfers once we have a player id
+  // -------------------------------------------------------
+  // Load transfer history for the player
+  // -------------------------------------------------------
   useEffect(() => {
-    const load = async () => {
+    let cancel = false;
+    async function loadTransfers() {
       const pid = parseInt(gameData?.player_id || gameData?.id || 0, 10);
       if (!pid) return;
       try {
         setLoadingTransfers(true);
-        const transfers = await fetchTransfers(pid);
-        setTransferHistory(Array.isArray(transfers) ? transfers : []);
+        const rows = await fetchTransfers(pid);
+        if (!cancel) setTransferHistory(Array.isArray(rows) ? rows : []);
       } catch (e) {
-        console.error('❌ Error fetching transfers:', e);
-        setTransferHistory([]);
+        console.error('Error fetching transfers:', e);
+        if (!cancel) setTransferHistory([]);
       } finally {
-        setLoadingTransfers(false);
+        if (!cancel) setLoadingTransfers(false);
       }
-    };
-    load();
-  }, [gameData?.id, gameData?.player_id]);
+    }
+    loadTransfers();
+    return () => { cancel = true; };
+  }, [gameData?.player_id, gameData?.id]);
 
-  // Hint multipliers
-  const multipliers = {
-    age: 0.95,
-    nationality: 0.9,
-    position: 0.8,
-    partialImage: 0.5,
-    firstLetter: 0.25,
-  };
+  // -------------------------------------------------------
+  // Timer (2 minutes). Time color changes at 60s and 30s.
+  // -------------------------------------------------------
+  const timeColorClass =
+    timeSec <= 30 ? 'text-red-600' : timeSec <= 60 ? 'text-yellow-600' : 'text-gray-900';
 
-  // Points incl. time decay, hint penalties, and wrong-guess halving
-  const points = useMemo(() => {
-    const base = Number(gameData?.potentialPoints || filters?.potentialPoints || 0);
-    let p = base;
-
-    Object.keys(usedHints).forEach((k) => {
-      if (usedHints[k]) p = Math.floor(p * multipliers[k]);
-    });
-
-    const timeElapsed = INITIAL_TIME - timeSec;
-    const timeDecay = Math.pow(0.99, timeElapsed); // gentle decay per second
-    p = Math.floor(p * timeDecay);
-
-    const wrongAttempts = Math.max(0, 3 - guessesLeft);
-    p = Math.floor(p * Math.pow(0.5, wrongAttempts));
-
-    return Math.max(0, p);
-  }, [gameData?.potentialPoints, filters?.potentialPoints, usedHints, timeSec, guessesLeft]);
-
-  const formatTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  // Anti-cheat: leaving/blur/hidden => auto-loss
   useEffect(() => {
-    if (!gameData?.id && !gameData?.player_id) return;
-
-    const forfeitAndExit = async () => {
-      if (endedRef.current) return;
-      endedRef.current = true;
-      try {
-        clearInterval(timerRef.current);
-        await saveGameRecord(false);
-      } catch {/* ignore */} finally {
-        navigate('/game', { replace: true, state: { forfeited: true } });
-      }
-    };
-
-    const onVisibility = () => {
-      if (document.visibilityState === 'hidden') forfeitAndExit();
-    };
-    const onBlur = () => forfeitAndExit();
-    const onPageHide = () => forfeitAndExit();
-
-    document.addEventListener('visibilitychange', onVisibility);
-    window.addEventListener('blur', onBlur);
-    window.addEventListener('pagehide', onPageHide);
-    return () => {
-      document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('blur', onBlur);
-      window.removeEventListener('pagehide', onPageHide);
-    };
-  }, [gameData?.id, gameData?.player_id, navigate]);
-
-  // Timer
-  useEffect(() => {
-    if (!gameData?.id && !gameData?.player_id) return;
-    const handleTimeUp = async () => {
+    if (!gameData) return;
+    const onTimeUp = async () => {
       if (endedRef.current) return;
       endedRef.current = true;
       clearInterval(timerRef.current);
-      await saveGameRecord(false);
+      await saveRecord(false);
       navigate('/postgame', {
         state: {
           didWin: false,
           player: gameData,
-          stats: { pointsEarned: 0, timeSec: INITIAL_TIME, guessesUsed: 3, usedHints },
-          filters,
-          isDaily,
+          stats: {
+            pointsEarned: 0,
+            timeSec: TWO_MINUTES,
+            guessesUsed: 3,
+            usedHints
+          },
+          filters: location.state?.filters || {},
+          isDaily
         },
-        replace: true,
+        replace: true
       });
     };
-    const interval = setInterval(() => {
-      setTimeSec((prev) => {
+    const iv = setInterval(() => {
+      setTimeSec(prev => {
         if (prev <= 1) {
-          clearInterval(interval);
-          handleTimeUp();
+          clearInterval(iv);
+          onTimeUp();
           return 0;
         }
         return prev - 1;
       });
     }, 1000);
-    timerRef.current = interval;
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [gameData?.id, gameData?.player_id]); // eslint-disable-line
+    timerRef.current = iv;
+    return () => clearInterval(iv);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameData?.player_id, gameData?.id]);
 
-  // Suggestions (client filtering on top of server list)
+  // -------------------------------------------------------
+  // Leaving the tab/page ends the round as loss (anti-cheat)
+  // -------------------------------------------------------
+  useEffect(() => {
+    if (!gameData) return;
+    const forfeit = async () => {
+      if (endedRef.current) return;
+      endedRef.current = true;
+      try {
+        clearInterval(timerRef.current);
+        await saveRecord(false);
+      } finally {
+        navigate('/game', { replace: true, state: { forfeited: true } });
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') forfeit();
+    };
+    const onPageHide = () => forfeit();
+
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', onPageHide);
+    };
+  }, [gameData, navigate]);
+
+  // -------------------------------------------------------
+  // Calculate points: base -> hints -> time decay -> wrong guess halving
+  // -------------------------------------------------------
+  const points = useMemo(() => {
+    const base =
+      Number(gameData?.potentialPoints) ||
+      Number(passedPotential) ||
+      10000;
+
+    let p = base;
+
+    // hint multipliers
+    Object.keys(usedHints).forEach((k) => {
+      if (usedHints[k]) p = Math.floor(p * hintMultipliers[k]);
+    });
+
+    // time decay (gentle)
+    const elapsed = TWO_MINUTES - timeSec;
+    p = Math.floor(p * Math.pow(0.99, elapsed));
+
+    // wrong-guess halving
+    const wrongAttempts = Math.max(0, 3 - guessesLeft);
+    p = Math.floor(p * Math.pow(0.5, wrongAttempts));
+
+    return Math.max(0, p);
+  }, [gameData?.potentialPoints, passedPotential, usedHints, timeSec, guessesLeft]);
+
+  // -------------------------------------------------------
+  // Suggestions
+  // -------------------------------------------------------
   useEffect(() => {
     let active = true;
     const id = setTimeout(async () => {
-      const raw = guess.trim();
+      const raw = (guess || '').trim();
       if (!raw) {
         if (active) setSuggestions([]);
         return;
       }
-
-      const serverQ = longestToken(raw);
-      if (serverQ.length < 2) {
+      const token = longestToken(raw);
+      if (token.length < 2) {
         if (active) setSuggestions([]);
         return;
       }
-
       try {
-        const res = await suggestNames(serverQ);
-        const list = Array.isArray(res) ? res : [];
-        const filtered = list.filter((item) =>
-          multiTokenStartsWithMatch(raw, item.name || item.displayName || '')
+        const serverList = await suggestNames(token);
+        const filtered = (Array.isArray(serverList) ? serverList : []).filter((row) =>
+          multiTokenStartsWithMatch(raw, row.name || row.displayName || '')
         );
         if (active) setSuggestions(filtered.slice(0, 20));
       } catch {
         if (active) setSuggestions([]);
       }
-    }, 200);
+    }, 160); // debounce
     return () => {
       active = false;
       clearTimeout(id);
     };
   }, [guess]);
 
-  // If bootstrap failed, show a small error then go back
-  useEffect(() => {
-    if (bootError) {
-      const t = setTimeout(() => navigate('/game'), 1200);
-      return () => clearTimeout(t);
-    }
-  }, [bootError, navigate]);
-
-  // ----------------------------------
-  // actions
-  // ----------------------------------
+  // -------------------------------------------------------
+  // Actions
+  // -------------------------------------------------------
   const submitGuess = async (value) => {
-    if (!value?.trim() || endedRef.current) return;
+    const val = (value || guess || '').trim();
+    if (!val || endedRef.current) return;
+
     const correct =
-      value.trim().toLowerCase() === (gameData?.name || '').trim().toLowerCase();
+      val.toLowerCase() === (gameData?.name || '').trim().toLowerCase();
 
     if (correct) {
       endedRef.current = true;
       clearInterval(timerRef.current);
-      await saveGameRecord(true);
+      await saveRecord(true);
       navigate('/postgame', {
         state: {
           didWin: true,
@@ -338,43 +382,44 @@ export default function LiveGamePage() {
             age: gameData.age,
             nationality: gameData.nationality,
             position: gameData.position,
-            funFact: gameData.funFact,
           },
           stats: {
             pointsEarned: points,
-            timeSec: INITIAL_TIME - timeSec,
+            timeSec: TWO_MINUTES - timeSec,
             guessesUsed: 3 - guessesLeft + 1,
-            usedHints,
+            usedHints
           },
-          filters,
-          isDaily,
+          filters: location.state?.filters || {},
+          isDaily
         },
-        replace: true,
+        replace: true
       });
       return;
     }
 
+    // wrong guess animation + reduce guesses
     setIsWrongGuess(true);
-    setTimeout(() => setIsWrongGuess(false), 500);
+    setTimeout(() => setIsWrongGuess(false), 350);
 
     if (guessesLeft - 1 <= 0) {
+      // out of guesses
       endedRef.current = true;
       clearInterval(timerRef.current);
-      await saveGameRecord(false);
+      await saveRecord(false);
       navigate('/postgame', {
         state: {
           didWin: false,
           player: gameData,
           stats: {
             pointsEarned: 0,
-            timeSec: INITIAL_TIME - timeSec,
+            timeSec: TWO_MINUTES - timeSec,
             guessesUsed: 3,
-            usedHints,
+            usedHints
           },
-          filters,
-          isDaily,
+          filters: location.state?.filters || {},
+          isDaily
         },
-        replace: true,
+        replace: true
       });
     } else {
       setGuessesLeft((prev) => prev - 1);
@@ -382,53 +427,75 @@ export default function LiveGamePage() {
     setGuess('');
   };
 
-  const saveGameRecord = async (won) => {
+  const giveUp = async () => {
+    if (endedRef.current) return;
+    endedRef.current = true;
+    clearInterval(timerRef.current);
+    await saveRecord(false);
+    navigate('/postgame', {
+      state: {
+        didWin: false,
+        player: gameData,
+        stats: {
+          pointsEarned: 0,
+          timeSec: TWO_MINUTES - timeSec,
+          guessesUsed: 3,
+          usedHints
+        },
+        filters: location.state?.filters || {},
+        isDaily
+      },
+      replace: true
+    });
+  };
+
+  const saveRecord = async (won) => {
     if (!user?.id || !gameData) return null;
     try {
-      return await saveGameCompleted({
+      const payload = {
         userId: user.id,
         playerData: {
-          id: parseInt(gameData.player_id || gameData.id, 10) || 0,
+          id: parseInt(gameData.player_id || gameData.id || 0, 10) || 0,
           name: gameData.name || gameData.player_name,
           data: {
             nationality: gameData.nationality,
             position: gameData.position,
             age: gameData.age,
-            photo: gameData.photo,
-          },
+            photo: gameData.photo
+          }
         },
         gameStats: {
           won,
           points: won ? points : 0,
-          potentialPoints: gameData.potentialPoints || filters?.potentialPoints || 10000,
-          timeTaken: INITIAL_TIME - timeSec,
+          potentialPoints:
+            Number(gameData.potentialPoints || passedPotential || 10000),
+          timeTaken: TWO_MINUTES - timeSec,
           guessesAttempted: 3 - guessesLeft + (won ? 1 : 0),
           hintsUsed: Object.values(usedHints).filter(Boolean).length,
-          isDaily: !!isDaily,
+          isDaily: !!isDaily
         },
-      });
+        filters: location.state?.filters || {}
+      };
+      return await saveGameCompleted(payload);
     } catch (err) {
-      console.error('Error in saveGameRecord:', err);
+      console.error('Error saving game record:', err);
       return null;
     }
   };
 
   const reveal = (key) => setUsedHints((u) => ({ ...u, [key]: true }));
 
-  const timeColorClass =
-    timeSec <= 30 ? 'text-red-600' : timeSec <= 60 ? 'text-yellow-600' : 'text-gray-900';
-
-  // ----------------------------------
-  // render
-  // ----------------------------------
+  // -------------------------------------------------------
+  // Render
+  // -------------------------------------------------------
   if (bootError) {
     return (
       <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
         <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
-        <div className="container mx-auto px-4 py-8">
+        <div className="container mx-auto px-4 py-16">
           <div className="text-center">
-            <h1 className="text-2xl font-bold text-red-600 mb-4">Failed to start game</h1>
-            <p className="mb-4 text-gray-700">{bootError}</p>
+            <h1 className="text-2xl font-bold text-red-600 mb-2">Failed to start game</h1>
+            <p className="text-gray-700">{bootError}</p>
           </div>
         </div>
       </div>
@@ -455,14 +522,14 @@ export default function LiveGamePage() {
 
       {/* Anti-cheat banner */}
       <div className="max-w-6xl mx-auto px-4 pt-6">
-        <div className="rounded-lg bg-red-50 border border-red-200 text-red-800 font-bold px-4 py-2 text-center">
-          Don’t leave this page while the round is active — leaving will
-          immediately count as a loss.
+        <div className="rounded-lg bg-red-50 border border-red-200 text-red-800 font-bold px-4 py-2 text-center flex items-center justify-center gap-2">
+          <AlertTriangle className="h-5 w-5" />
+          Don’t leave this page while the round is active — leaving will immediately count as a loss.
         </div>
       </div>
 
       <div className="max-w-6xl mx-auto px-4 py-6">
-        {/* Stats */}
+        {/* Stats row */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
           <div className="rounded border bg-white p-4 flex items-center gap-3">
             <Clock className="h-5 w-5 text-gray-700" />
@@ -487,12 +554,12 @@ export default function LiveGamePage() {
           </div>
         </div>
 
-        {/* Game input + Transfers */}
+        {/* Game & Transfers */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-          {/* Hints / Input (narrow column) */}
+          {/* Input & Hints */}
           <motion.div
             className="rounded-xl border bg-white shadow-sm p-5 lg:col-span-1"
-            animate={isWrongGuess ? { x: [-10, 10, -10, 10, 0], transition: { duration: 0.4 } } : {}}
+            animate={isWrongGuess ? { x: [-10, 10, -10, 10, 0], transition: { duration: 0.35 } } : {}}
           >
             <h3 className="text-lg font-semibold mb-3">Who are ya?!</h3>
             <form
@@ -502,14 +569,29 @@ export default function LiveGamePage() {
               }}
               className="space-y-4"
             >
-              <input
-                type="text"
+              <GuessInput
                 value={guess}
-                onChange={(e) => setGuess(e.target.value)}
+                onChange={(v) => setGuess(v)}
+                onGuess={submitGuess}
+                disabled={endedRef.current}
                 placeholder="Type a player's name"
-                className="w-full px-4 py-3 rounded border"
                 autoFocus
               />
+
+              {suggestions?.length ? (
+                <ul className="border rounded divide-y max-h-56 overflow-auto">
+                  {suggestions.map((sug) => (
+                    <li
+                      key={sug.id ?? sug.name}
+                      className="px-3 py-2 hover:bg-gray-50 cursor-pointer text-sm"
+                      onClick={() => submitGuess(sug.name)}
+                    >
+                      {sug.name}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+
               <div className="flex gap-3">
                 <button
                   type="submit"
@@ -519,28 +601,7 @@ export default function LiveGamePage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    if (endedRef.current) return;
-                    endedRef.current = true;
-                    clearInterval(timerRef.current);
-                    saveGameRecord(false).then(() =>
-                      navigate('/postgame', {
-                        state: {
-                          didWin: false,
-                          player: gameData,
-                          stats: {
-                            pointsEarned: 0,
-                            timeSec: INITIAL_TIME - timeSec,
-                            guessesUsed: 3,
-                            usedHints,
-                          },
-                          filters,
-                          isDaily,
-                        },
-                        replace: true,
-                      })
-                    );
-                  }}
+                  onClick={giveUp}
                   className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded font-medium"
                 >
                   Give Up
@@ -548,23 +609,7 @@ export default function LiveGamePage() {
               </div>
             </form>
 
-            {suggestions?.length ? (
-              <ul className="mt-3 border rounded divide-y max-h-56 overflow-auto">
-                {suggestions.map((sug) => (
-                  <li
-                    key={sug.id ?? sug.name}
-                    className="px-3 py-2 hover:bg-gray-50 cursor-pointer text-sm"
-                    onClick={() => {
-                      setGuess(sug.name);
-                      submitGuess(sug.name);
-                    }}
-                  >
-                    {sug.name}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-
+            {/* Hints */}
             <div className="mt-6 pt-5 border-t">
               <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
                 <Lightbulb className="h-5 w-5 text-amber-500" />
@@ -619,7 +664,7 @@ export default function LiveGamePage() {
             </div>
           </motion.div>
 
-          {/* Transfers (wide column) */}
+          {/* Transfers (wide) */}
           <div className="rounded-xl border bg-white shadow-sm p-5 lg:col-span-2">
             <h3 className="text-lg font-semibold mb-4 text-center">Transfer History</h3>
             {loadingTransfers ? (
@@ -632,11 +677,21 @@ export default function LiveGamePage() {
             )}
           </div>
         </div>
+
+        {/* Win/Lose banner (optional) */}
+        {endedRef.current && (
+          <div className="mt-6">
+            {/* Kept intentionally minimal; your PostGamePage handles the summary */}
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
+// -------------------------------------------------------
+// Small UI components
+// -------------------------------------------------------
 function HintButton({ label, multiplier, disabled, onClick, valueShown }) {
   return (
     <button
@@ -661,22 +716,6 @@ function HintButton({ label, multiplier, disabled, onClick, valueShown }) {
   );
 }
 
-// ----------------------------------
-// Transfer list UI
-// ----------------------------------
-function ClubPill({ logo, name, flag }) {
-  return (
-    <div className="flex items-center gap-2 min-w-0">
-      <div className="flex flex-col items-center justify-center gap-1 shrink-0">
-        {logo ? <img src={logo} alt="" className="h-6 w-6 rounded-md object-contain" /> : null}
-        {flag ? <img src={flag} alt="" className="h-3.5 w-5 rounded-sm object-cover" /> : null}
-      </div>
-      <span className="text-sm font-medium whitespace-nowrap truncate max-w-[220px] md:max-w-[280px]">
-        {name || 'Unknown'}
-      </span>
-    </div>
-  );
-}
 function Chip({ children, tone = 'slate' }) {
   const tones = {
     slate: 'bg-slate-50 text-slate-700 border-slate-200',
@@ -691,11 +730,29 @@ function Chip({ children, tone = 'slate' }) {
     </span>
   );
 }
-function formatFee(raw) {
-  const v = raw ?? '';
-  if (!v) return '—';
-  return String(v).replace(/^\$/, '€'); // normalize any accidental dollar to euro
+
+function ClubPill({ logo, name, flag, align = 'left' }) {
+  return (
+    <div className={cx('flex items-center gap-2 min-w-0', align === 'right' ? 'justify-end' : '')}>
+      {align === 'left' && (
+        <div className="flex flex-col items-center justify-center gap-1 shrink-0">
+          {logo ? <img src={logo} alt="" className="h-7 w-7 rounded-md object-contain" /> : null}
+          {flag ? <img src={flag} alt="" className="h-3.5 w-5 rounded-sm object-cover" /> : null}
+        </div>
+      )}
+      <span className="text-sm font-medium whitespace-nowrap truncate max-w-[220px] md:max-w-[280px]">
+        {name || 'Unknown'}
+      </span>
+      {align === 'right' && (
+        <div className="flex flex-col items-center justify-center gap-1 shrink-0">
+          {logo ? <img src={logo} alt="" className="h-7 w-7 rounded-md object-contain" /> : null}
+          {flag ? <img src={flag} alt="" className="h-3.5 w-5 rounded-sm object-cover" /> : null}
+        </div>
+      )}
+    </div>
+  );
 }
+
 function TransfersList({ transfers }) {
   if (!transfers?.length) {
     return <div className="text-sm text-gray-500 text-center">No transfers found.</div>;
@@ -703,35 +760,45 @@ function TransfersList({ transfers }) {
   return (
     <ul className="space-y-3">
       {transfers.map((t, idx) => {
-        const fee = t.valueRaw ?? '';
+        const season = t.season || '—';
+        const dateStr = t.transfer_date || t.date || '—';
+        const feeText = euroLabel(t.transfer_value || t.valueRaw, t.fee_eur);
+        const typeText = t.transfer_type || t.type;
+
         return (
           <li
-            key={`${t.date || t.season || 'row'}-${idx}`}
+            key={`${t.date || t.transfer_date || t.season || 'row'}-${idx}`}
             className="grid grid-cols-12 gap-3 items-center border rounded-lg p-3"
           >
-            {/* Season + Date */}
+            {/* Season + Date center-aligned */}
             <div className="col-span-12 md:col-span-3 flex flex-col items-center text-center gap-1">
               <Chip tone="violet">
                 <CalendarDays className="h-3.5 w-3.5" />
-                <span className="font-semibold">{t.season || '—'}</span>
+                <span className="font-semibold">{season}</span>
               </Chip>
-              <div className="text-xs text-gray-500">{t.date || '—'}</div>
+              <div className="text-xs text-gray-500">{dateStr}</div>
             </div>
 
-            {/* From -> To */}
+            {/* From -> To with logos over flags */}
             <div className="col-span-12 md:col-span-6 flex items-center justify-center gap-3 flex-wrap md:flex-nowrap min-w-0">
-              <ClubPill logo={t.out?.logo} name={t.out?.name} flag={t.out?.flag} />
+              <ClubPill logo={t.team_from_logo || t.out?.logo}
+                        name={t.team_from || t.out?.name}
+                        flag={t.team_from_flag || t.out?.flag}
+                        align="left" />
               <ArrowRight className="h-4 w-4 text-gray-400 shrink-0" />
-              <ClubPill logo={t.in?.logo} name={t.in?.name} flag={t.in?.flag} />
+              <ClubPill logo={t.team_to_logo || t.in?.logo}
+                        name={t.team_to || t.in?.name}
+                        flag={t.team_to_flag || t.in?.flag}
+                        align="right" />
             </div>
 
-            {/* Value + Type */}
+            {/* Fee + Type stacked, centered */}
             <div className="col-span-12 md:col-span-3 flex flex-col items-center justify-center gap-1">
               <Chip tone="green">
                 <BadgeEuro className="h-3.5 w-3.5" />
-                <span>{formatFee(fee)}</span>
+                <span>{feeText}</span>
               </Chip>
-              {t.type ? <Chip tone="amber">{t.type}</Chip> : null}
+              {typeText ? <Chip tone="amber">{typeText}</Chip> : null}
             </div>
           </li>
         );
