@@ -119,7 +119,7 @@ export default function LiveGamePage() {
 
   // Transfers
   const [transferHistory, setTransferHistory] = useState([]);
-  the [loadingTransfers, setLoadingTransfers] = useState(false);
+  const [loadingTransfers, setLoadingTransfers] = useState(false);
 
   // Filters/potentialPoints passed from GamePage for normal rounds
   const passedFilters = location.state?.filters || {};
