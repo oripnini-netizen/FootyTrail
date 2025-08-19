@@ -158,7 +158,7 @@ function StatusChip({ status }) {
   }
   if (status === 'Live') {
     return (
-      <span className="px-2 py-0.5 rounded text-xs font-medium bg-sky-100 text-sky-700 animate-pulse">
+      <span className="px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 animate-pulse">
         Live
       </span>
     );
@@ -946,6 +946,15 @@ function NameWithBotChip({ participant, alignRight, onClick }) {
   );
 }
 
+function formatHHMMSS(msLeft) {
+  if (msLeft < 0) msLeft = 0;
+  const totalSec = Math.floor(msLeft / 1000);
+  const hh = String(Math.floor(totalSec / 3600)).padStart(2, '0');
+  const mm = String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0');
+  const ss = String(totalSec % 60).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+}
+
 function FixtureDay({ league, group, participantsById, dayPoints, onOpenUser }) {
   const today0 = todayUtcPlus2Midnight();
   const matchDate0 = toUtcPlus2Midnight(group.match_date);
@@ -954,17 +963,43 @@ function FixtureDay({ league, group, participantsById, dayPoints, onOpenUser }) 
   const isToday = matchDate0.getTime() === today0.getTime();
   const status = isFuture ? 'Upcoming' : isToday ? 'Live' : 'Finished';
 
+  // Live countdown (HH:MM:SS) to end of today (i.e., next match-day boundary)
+  const [countdown, setCountdown] = useState('');
+  useEffect(() => {
+    if (!isToday) return;
+    const endOfDay = new Date(matchDate0.getTime() + 24 * 60 * 60 * 1000).getTime();
+
+    const update = () => {
+      const now = Date.now();
+      setCountdown(formatHHMMSS(endOfDay - now));
+    };
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isToday, group.match_date]);
+
   return (
     <div className="rounded-xl border overflow-hidden">
       <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b">
-        <div className="flex items-center gap-2">
+        {/* LEFT: day + date */}
+        <div className="flex items-center gap-2 flex-1 min-w-0">
           <span className="px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
             Match Day {group.match_day}
           </span>
           <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
             {fmtShort(group.match_date)}
           </span>
+        </div>
+
+        {/* RIGHT: status + (if live) countdown */}
+        <div className="flex items-center gap-2 flex-shrink-0">
           <StatusChip status={status} />
+          {status === 'Live' && (
+            <span className="px-2 py-0.5 rounded text-xs font-medium bg-red-50 text-red-700">
+              {countdown}
+            </span>
+          )}
         </div>
       </div>
 
@@ -1010,7 +1045,7 @@ function FixtureDay({ league, group, participantsById, dayPoints, onOpenUser }) 
                     onClick={() => H.user && onOpenUser(H.user)}
                   />
 
-                  {/* Center score (no 'Upcoming' chip anymore) */}
+                  {/* Center score */}
                   <div className="flex items-center justify-center">
                     {isFuture ? (
                       <span className="text-gray-400">—</span>
