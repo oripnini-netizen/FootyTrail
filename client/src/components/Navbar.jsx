@@ -20,10 +20,11 @@ export default function Navbar() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+
   const [scrolled, setScrolled] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // ---- NEW: unread notifications for My Leagues ----
+  // ---- unread notifications for My Leagues (uses read_at IS NULL) ----
   const [unreadLeagues, setUnreadLeagues] = useState(0);
 
   async function refreshUnread() {
@@ -32,12 +33,12 @@ export default function Navbar() {
         setUnreadLeagues(0);
         return;
       }
-      // Count unread notifications for this user
       const { count, error } = await supabase
         .from('notifications')
         .select('id', { count: 'exact', head: true })
         .eq('user_id', user.id)
-        .eq('is_read', false);
+        .eq('type', 'league_invite')
+        .is('read_at', null);
 
       if (!error) setUnreadLeagues(count || 0);
     } catch {
@@ -49,7 +50,6 @@ export default function Navbar() {
     refreshUnread();
     if (!user?.id) return;
 
-    // Realtime: any insert/update/delete on notifications for this user
     const channel = supabase
       .channel(`notif-dot:${user.id}`)
       .on(
@@ -64,18 +64,22 @@ export default function Navbar() {
       )
       .subscribe();
 
-    // Also refresh periodically in case browser lost realtime events
+    // Listen for an explicit app event fired by MyLeaguesPage after it marks items read
+    const onMarkedRead = () => refreshUnread();
+    window.addEventListener('leagues-notifications-read', onMarkedRead);
+
     const id = setInterval(refreshUnread, 30000);
 
     return () => {
       clearInterval(id);
+      window.removeEventListener('leagues-notifications-read', onMarkedRead);
       try {
         supabase.removeChannel(channel);
       } catch {}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
-  // -------------------------------------------------
+  // -------------------------------------------------------------------
 
   // Close mobile menu on route change
   useEffect(() => {
@@ -113,7 +117,7 @@ export default function Navbar() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  // Reusable nav item
+  // Reusable nav item (icon + label both clickable)
   const NavItem = ({ title, icon: Icon, onClick, showDot = false }) => (
     <button
       onClick={onClick}
