@@ -86,7 +86,7 @@ Player Data for Verification:
 - Position: ${player?.position ?? 'Unknown'}
 - Notable Clubs: ${transferHistorySummary}
 
-Now, find a NEW and INTERESTING fun fact about ${name} from your own knowledge. The fact could be about:
+Now, find a NEW and INTERESTING fun fact about ${name} from your own knowledge and searching the web. The fact could be about:
 - A famous nickname or unusual habit
 - A unique record they hold
 - A memorable goal or match moment
@@ -94,7 +94,7 @@ Now, find a NEW and INTERESTING fun fact about ${name} from your own knowledge. 
 - Something surprising about their career path or background
 
 CRITICAL INSTRUCTIONS:
-- Do NOT include any source URLs, links, or citations
+- Do NOT include any source URLs, links, or citations in the final output
 - Do NOT mention where you found the information
 - Provide ONLY the fun fact as a clean, single sentence
 - Start with "Did you know that" or similar phrasing
@@ -145,7 +145,7 @@ router.post('/generate-game-prompt', async (_req, res) => {
         {
           role: 'user',
           content:
-            `You are a hype commentator for a football guessing game. Write one short, punchy, single-sentence prompt (max ~20 words) to motivate the user to start a new round. No emojis, no hashtags.`
+            `You are a hype commentator for a football players guessing game by their transfer history. Write one short, punchy, single-sentence prompt (max ~20 words) to motivate the user to start a new round. No emojis, no hashtags.`
         }
       ],
     });
@@ -176,7 +176,7 @@ router.post('/game-outro', async (req, res) => {
     }
 
     const {
-      won,
+      didWin ,
       points = 0,
       guesses = 0,
       timeSeconds = 0,
@@ -184,7 +184,7 @@ router.post('/game-outro', async (req, res) => {
       isDaily = false,
     } = req.body || {};
 
-    const result = won ? 'win' : 'loss';
+    const result = didWin ? 'win' : 'loss';
     const timeClock = secondsToClock(timeSeconds);
 
     // Clear, strict instruction set to keep output crisp & single-sentence

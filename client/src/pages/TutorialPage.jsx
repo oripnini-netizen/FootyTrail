@@ -78,6 +78,8 @@ export default function TutorialPage() {
   // Profile (step 2)
   const [displayName, setDisplayName] = useState('');
   const [avatarUrl, setAvatarUrl] = useState('');
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const [avatarError, setAvatarError] = useState('');
 
   // Filters (step 3)
   const [groupedCompetitions, setGroupedCompetitions] = useState({});
@@ -134,7 +136,13 @@ export default function TutorialPage() {
     (async () => {
       // user profile
       if (user?.id) {
-        const { data } = await supabase.from('users').select('full_name, profile_photo_url, default_leagues, default_seasons, default_min_market_value').eq('id', user.id).maybeSingle();
+        const { data } = await supabase
+          .from('users')
+          .select(
+            'full_name, profile_photo_url, default_leagues, default_seasons, default_min_market_value'
+          )
+          .eq('id', user.id)
+          .maybeSingle();
         if (data) {
           setDisplayName(data.full_name || '');
           setAvatarUrl(data.profile_photo_url || '');
@@ -161,6 +169,54 @@ export default function TutorialPage() {
   // Step navigation
   const next = () => setStep((s) => Math.min(3, s + 1));
   const prev = () => setStep((s) => Math.max(1, s - 1));
+
+  // ---- Avatar upload (Step 2) ----
+  const onAvatarSelected = async (e) => {
+    try {
+      setAvatarError('');
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      if (!file.type.startsWith('image/')) {
+        setAvatarError('Please choose an image file.');
+        return;
+      }
+      const maxBytes = 2 * 1024 * 1024; // ~2MB
+      if (file.size > maxBytes) {
+        setAvatarError('Image is too large (max 2 MB).');
+        return;
+      }
+
+      if (!user?.id) {
+        setAvatarError('Not signed in.');
+        return;
+      }
+
+      setAvatarUploading(true);
+      const path = `public/${user.id}/${Date.now()}_${file.name}`;
+      const { error: upErr } = await supabase.storage
+        .from('avatars')
+        .upload(path, file, { upsert: true, cacheControl: '3600' });
+      if (upErr) throw upErr;
+
+      const { data: pub } = supabase.storage.from('avatars').getPublicUrl(path);
+      const url = pub?.publicUrl || '';
+
+      // Save immediately to the profile (keeps Step 2 self-contained)
+      const { error: updErr } = await supabase
+        .from('users')
+        .update({ profile_photo_url: url })
+        .eq('id', user.id);
+      if (updErr) throw updErr;
+
+      setAvatarUrl(url);
+    } catch (err) {
+      console.error('Avatar upload failed:', err);
+      setAvatarError('Upload failed. Please try again.');
+    } finally {
+      setAvatarUploading(false);
+    }
+  };
 
   // Step 2 save (profile)
   const saveProfileAndContinue = async () => {
@@ -194,7 +250,7 @@ export default function TutorialPage() {
       setStatus('Setting up your FootyTrail experience…');
 
       const updates = {
-        default_leagues: selectedCompetitionIds,       // reusing column for competitions
+        default_leagues: selectedCompetitionIds, // reuse column for competitions
         default_seasons: selectedSeasons,
         default_min_market_value: Number(minMarketValue) || 0,
         has_completed_onboarding: true,
@@ -260,19 +316,38 @@ export default function TutorialPage() {
                       placeholder="Your name"
                     />
                   </label>
-                  <label className="block">
-                    <span className="text-sm text-gray-700">Avatar URL (optional)</span>
-                    <div className="flex items-center gap-2 mt-1">
-                      <input
-                        type="url"
-                        value={avatarUrl}
-                        onChange={(e) => setAvatarUrl(e.target.value)}
-                        className="w-full border rounded px-3 py-2"
-                        placeholder="https://…"
-                      />
-                      <Upload className="h-5 w-5 text-gray-500" />
+
+                  {/* Replaced URL input with direct file upload */}
+                  <div className="block">
+                    <span className="text-sm text-gray-700">Avatar (optional)</span>
+                    <div className="mt-1 flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-full overflow-hidden bg-gray-100 border">
+                        {avatarUrl ? (
+                          <img
+                            src={avatarUrl}
+                            alt="avatar"
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-gray-400">
+                            <Upload className="h-5 w-5" />
+                          </div>
+                        )}
+                      </div>
+                      <label className="inline-flex items-center gap-2 px-3 py-2 border rounded cursor-pointer bg-white hover:bg-gray-50">
+                        <Upload className="h-4 w-4" />
+                        <span className="text-sm">{avatarUploading ? 'Uploading…' : 'Upload Image'}</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={onAvatarSelected}
+                          className="hidden"
+                          disabled={avatarUploading}
+                        />
+                      </label>
                     </div>
-                  </label>
+                    {avatarError && <div className="text-xs text-red-600 mt-1">{avatarError}</div>}
+                  </div>
                 </div>
                 {busy && <div className="text-sm text-blue-700">{status}</div>}
               </div>
@@ -302,7 +377,7 @@ export default function TutorialPage() {
                     </>
                   }
                 >
-                  {/* ✅ NEW: show chosen competitions chips above the list */}
+                  {/* Chosen competitions chips */}
                   {!!selectedCompetitionIds.length && (
                     <div className="mb-2">
                       <div className="text-xs text-gray-600 mb-1">Chosen competitions</div>
