@@ -5,11 +5,10 @@ import { useAuth } from '../context/AuthContext';
 import {
   Plus,
   Users,
-  Calendar,
+  CalendarDays,
   Flag,
   ChevronDown,
   ChevronUp,
-  Trophy,
   X,
   User as UserIcon,
   Bell,
@@ -458,7 +457,7 @@ export default function MyLeaguesPage() {
       return;
     }
 
-    // Notifications (FIXED extra parenthesis)
+    // Notifications
     const invitedHumans = invites.filter((i) => !!i.id && i.id !== user.id);
     if (invitedHumans.length) {
       const payloads = invitedHumans.map((uRow) => ({
@@ -610,7 +609,7 @@ export default function MyLeaguesPage() {
         ) : currentList.length === 0 ? (
           <div className="text-center mt-16">
             <div className="mx-auto mb-4 h-16 w-16 rounded-full bg-green-100 flex items-center justify-center">
-              <Trophy className="h-8 w-8 text-green-700" />
+              <CalendarDays className="h-8 w-8 text-green-700" />
             </div>
             <div className="text-xl font-semibold">No leagues found</div>
             <p className="text-gray-600">Create your first league or wait to be invited!</p>
@@ -681,7 +680,6 @@ function StatTile({ icon: Icon, label, value }) {
 }
 
 function LeagueCard({ anchorId, league, creatorUser, participants, matches, dayPoints, onOpenUser }) {
-  const [subtab, setSubtab] = useState('Table');
   const [collapsed, setCollapsed] = useState(false);
 
   const participantsById = useMemo(() => {
@@ -722,11 +720,15 @@ function LeagueCard({ anchorId, league, creatorUser, participants, matches, dayP
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <StatTile icon={Users} label="Players" value={participants.length} />
             <StatTile
-              icon={Trophy}
+              icon={CalendarDays} // changed from Trophy
               label="Match Days"
               value={new Set(matches.map((m) => m.match_day)).size}
             />
-            <StatTile icon={Calendar} label="Start Date" value={fmtShort(league.start_date)} />
+            <StatTile
+              icon={CalendarDays}
+              label="Start Date"
+              value={fmtShort(league.start_date)}
+            />
             <StatTile
               icon={Flag}
               label="End Date"
@@ -746,40 +748,32 @@ function LeagueCard({ anchorId, league, creatorUser, participants, matches, dayP
             </span>
           </div>
 
-          <div className="mt-4 flex items-center gap-2">
-            <button
-              onClick={() => setSubtab('Table')}
-              className={`px-3 py-1.5 rounded ${
-                subtab === 'Table' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-700'
-              }`}
-            >
-              Table
-            </button>
-            <button
-              onClick={() => setSubtab('Fixtures')}
-              className={`px-3 py-1.5 rounded ${
-                subtab === 'Fixtures' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-700'
-              }`}
-            >
-              Fixtures & Results
-            </button>
-          </div>
+          {/* Two-column layout: Table (left) and Fixtures (right) */}
+          <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <div className="rounded-xl border bg-white shadow-sm">
+              <div className="px-4 py-3 border-b font-semibold">League Table</div>
+              <div className="p-4">
+                <LeagueTable
+                  standings={standings}
+                  participants={participants}
+                  onOpenUser={onOpenUser}
+                />
+              </div>
+            </div>
 
-          {subtab === 'Table' ? (
-            <LeagueTable
-              standings={standings}
-              participants={participants}
-              onOpenUser={onOpenUser}
-            />
-          ) : (
-            <FixturesList
-              league={league}
-              matches={matches}
-              participantsById={participantsById}
-              dayPoints={dayPoints}
-              onOpenUser={onOpenUser}
-            />
-          )}
+            <div className="rounded-xl border bg-white shadow-sm">
+              <div className="px-4 py-3 border-b font-semibold">Fixtures & Results</div>
+              <div className="p-4">
+                <FixturesList
+                  league={league}
+                  matches={matches}
+                  participantsById={participantsById}
+                  dayPoints={dayPoints}
+                  onOpenUser={onOpenUser}
+                />
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -797,7 +791,7 @@ function LeagueTable({ standings, participants, onOpenUser }) {
     };
   };
   return (
-    <div className="mt-2 overflow-x-auto rounded border">
+    <div className="overflow-x-auto rounded border">
       <table className="w-full text-sm">
         <thead className="bg-gray-50 text-gray-600">
           <tr>
@@ -849,6 +843,9 @@ function LeagueTable({ standings, participants, onOpenUser }) {
   );
 }
 
+/* =========================================================
+   Fixtures: grouped by day; each MATCH is collapsible
+   =======================================================*/
 function FixturesList({ league, matches, participantsById, dayPoints, onOpenUser }) {
   const grouped = useMemo(() => {
     const m = new Map();
@@ -870,7 +867,7 @@ function FixturesList({ league, matches, participantsById, dayPoints, onOpenUser
   }, [matches]);
 
   return (
-    <div className="mt-2 space-y-3">
+    <div className="space-y-4">
       {grouped.map((group) => (
         <FixtureDay
           key={`${group.match_day}-${group.match_date}`}
@@ -902,17 +899,13 @@ function NameButton({ children, onClick, disabled, alignRight }) {
 }
 
 function FixtureDay({ league, group, participantsById, dayPoints, onOpenUser }) {
-  const [open, setOpen] = useState(false);
   const today0 = todayUtcPlus2Midnight();
   const matchDate0 = toUtcPlus2Midnight(group.match_date);
   const isFuture = matchDate0 > today0;
 
   return (
-    <div className="rounded border">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center justify-between px-3 py-2 bg-gray-50"
-      >
+    <div className="rounded-xl border overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b">
         <div className="flex items-center gap-2">
           <span className="px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
             Match Day {group.match_day}
@@ -921,8 +914,7 @@ function FixtureDay({ league, group, participantsById, dayPoints, onOpenUser }) 
             {fmtShort(group.match_date)}
           </span>
         </div>
-        {open ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-      </button>
+      </div>
 
       <div className="divide-y">
         {group.items.map((item) => {
@@ -952,63 +944,93 @@ function FixtureDay({ league, group, participantsById, dayPoints, onOpenUser }) 
           }
 
           return (
-            <div key={item.id} className="p-3">
-              {/* Single row – usernames close to the score */}
-              <div className="flex items-center justify-between gap-3">
-                <NameButton
-                  disabled={!!H.is_bot}
-                  onClick={() => H.user && onOpenUser(H.user)}
-                >
-                  {hName}
-                </NameButton>
+            <MatchCollapsible
+              key={item.id}
+              titleRow={
+                <div className="grid grid-cols-3 items-center gap-3">
+                  {/* Home name */}
+                  <NameButton
+                    disabled={!!H.is_bot}
+                    onClick={() => H.user && onOpenUser(H.user)}
+                  >
+                    {hName}
+                  </NameButton>
 
-                <div className="text-sm text-gray-700 flex items-center gap-3">
-                  {isFuture ? (
-                    <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700 text-sm">
-                      Upcoming
-                    </span>
-                  ) : (
-                    <>
-                      <span className={`min-w-[60px] text-center ${homeCls}`}>
-                        {homePts.toLocaleString()}
+                  {/* Center score/upcoming */}
+                  <div className="flex items-center justify-center">
+                    {isFuture ? (
+                      <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700 text-sm">
+                        Upcoming
                       </span>
-                      <span className="text-gray-400">-</span>
-                      <span className={`min-w-[60px] text-center ${awayCls}`}>
-                        {awayPts.toLocaleString()}
-                      </span>
-                    </>
-                  )}
-                </div>
+                    ) : (
+                      <div className="flex items-center gap-3 text-sm text-gray-700">
+                        <span className={`min-w-[60px] text-center ${homeCls}`}>
+                          {homePts.toLocaleString()}
+                        </span>
+                        <span className="text-gray-400">-</span>
+                        <span className={`min-w-[60px] text-center ${awayCls}`}>
+                          {awayPts.toLocaleString()}
+                        </span>
+                      </div>
+                    )}
+                  </div>
 
-                <NameButton
-                  disabled={!!A.is_bot}
-                  onClick={() => A.user && onOpenUser(A.user)}
-                  alignRight
-                >
-                  {aName}
-                </NameButton>
-              </div>
-
-              {open && !isFuture && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-                  <PlayersBreakdown
-                    label={hName}
-                    participant={H}
-                    date={group.match_date}
-                    botTotal={H.is_bot ? homePts : null}
-                  />
-                  <PlayersBreakdown
-                    label={aName}
-                    participant={A}
-                    date={group.match_date}
-                    botTotal={A.is_bot ? awayPts : null}
-                  />
+                  {/* Away name */}
+                  <NameButton
+                    disabled={!!A.is_bot}
+                    onClick={() => A.user && onOpenUser(A.user)}
+                    alignRight
+                  >
+                    {aName}
+                  </NameButton>
                 </div>
-              )}
-            </div>
+              }
+              body={
+                !isFuture && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+                    <PlayersBreakdown
+                      label={hName}
+                      participant={H}
+                      date={group.match_date}
+                      botTotal={H.is_bot ? homePts : null}
+                    />
+                    <PlayersBreakdown
+                      label={aName}
+                      participant={A}
+                      date={group.match_date}
+                      botTotal={A.is_bot ? awayPts : null}
+                    />
+                  </div>
+                )
+              }
+            />
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function MatchCollapsible({ titleRow, body }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="p-3">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full rounded-lg border hover:bg-gray-50 transition"
+      >
+        <div className="px-3 py-2">
+          {titleRow}
+          <div className="flex items-center justify-center">
+            {open ? (
+              <ChevronUp className="h-4 w-4 text-gray-500 mt-1" />
+            ) : (
+              <ChevronDown className="h-4 w-4 text-gray-500 mt-1" />
+            )}
+          </div>
+        </div>
+      </button>
+      {open && body}
     </div>
   );
 }
