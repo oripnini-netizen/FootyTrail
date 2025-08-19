@@ -1,6 +1,7 @@
+// src/pages/LiveGamePage.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { suggestNames, saveGameCompleted, fetchTransfers } from '../api';
+import { suggestNames, saveGameCompleted, fetchTransfers, API_BASE } from '../api';
 import {
   Clock,
   AlarmClock,
@@ -48,6 +49,19 @@ export default function LiveGamePage() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
+  // Pull URL params for daily challenge & fixed player id
+  const params = new URLSearchParams(location.search);
+  const urlIsDaily = params.get('daily') === '1';
+  const fixedPid = params.get('pid');
+
+  // Game bootstrap state (either from navigation.state or fetched via pid)
+  const [gameData, setGameData] = useState(null);
+  const [bootError, setBootError] = useState(null);
+  const [isDaily, setIsDaily] = useState(!!location.state?.isDaily || urlIsDaily);
+
+  // Filters/potentialPoints passed from GamePage (for normal rounds)
+  const filters = location.state?.filters || { potentialPoints: 0 };
+
   // 2 minutes timer
   const INITIAL_TIME = 120;
 
@@ -68,20 +82,67 @@ export default function LiveGamePage() {
   const timerRef = useRef(null);
   const endedRef = useRef(false);
 
-  const game = location.state || null;
-  const filters = location.state?.filters || { potentialPoints: 0 };
-  const isDaily = !!location.state?.isDaily;
-
   // Transfers
   const [transferHistory, setTransferHistory] = useState([]);
   const [loadingTransfers, setLoadingTransfers] = useState(true);
 
+  // -------------------------
+  // BOOTSTRAP: get the card
+  // -------------------------
+  useEffect(() => {
+    let mounted = true;
+
+    const bootstrap = async () => {
+      try {
+        // 1) If navigated with a prepared card in state (normal round)
+        if (location.state && location.state.id && location.state.name) {
+          if (!mounted) return;
+          setGameData(location.state);
+          setIsDaily(!!location.state.isDaily || urlIsDaily);
+          return;
+        }
+
+        // 2) If we have a fixed player id in the URL (daily link)
+        if (fixedPid) {
+          const res = await fetch(`${API_BASE}/player/${fixedPid}`);
+          if (!res.ok) throw new Error('Failed to fetch daily player');
+          const card = await res.json(); // { id, name, age, nationality, position, photo }
+          // Normalize to the same shape used elsewhere in this page
+          const normalized = {
+            ...card,
+            player_id: card.id,
+            potentialPoints: 10000, // fallback if not precomputed
+            isDaily: true,
+          };
+          if (!mounted) return;
+          setGameData(normalized);
+          setIsDaily(true);
+          return;
+        }
+
+        // 3) No state and no pid → nothing to start with
+        throw new Error('No game payload found.');
+      } catch (err) {
+        console.error('Failed to start game', err);
+        if (!mounted) return;
+        setBootError(err.message || 'Failed to start game. Please try again.');
+      }
+    };
+
+    bootstrap();
+    return () => {
+      mounted = false;
+    };
+  }, [location.state, fixedPid, urlIsDaily]);
+
+  // Load transfers once we have an id
   useEffect(() => {
     const load = async () => {
-      if (!game?.id) return;
+      if (!gameData?.id && !gameData?.player_id) return;
       try {
         setLoadingTransfers(true);
-        const transfers = await fetchTransfers(game.id);
+        const pid = parseInt(gameData.player_id || gameData.id, 10) || 0;
+        const transfers = await fetchTransfers(pid);
         setTransferHistory(Array.isArray(transfers) ? transfers : []);
       } catch (e) {
         console.error('❌ Error fetching transfers:', e);
@@ -91,7 +152,7 @@ export default function LiveGamePage() {
       }
     };
     load();
-  }, [game?.id]);
+  }, [gameData?.id, gameData?.player_id]);
 
   // Hint multipliers
   const multipliers = {
@@ -104,7 +165,9 @@ export default function LiveGamePage() {
 
   // Points incl. time decay, hint penalties, and wrong-guess halving
   const points = useMemo(() => {
-    const potentialPoints = Number(game?.potentialPoints || filters?.potentialPoints || 0);
+    const potentialPoints = Number(
+      gameData?.potentialPoints || filters?.potentialPoints || 0
+    );
     let p = potentialPoints;
 
     Object.keys(usedHints).forEach((k) => {
@@ -119,7 +182,7 @@ export default function LiveGamePage() {
     p = Math.floor(p * Math.pow(0.5, wrongAttempts));
 
     return Math.max(0, p);
-  }, [game?.potentialPoints, filters?.potentialPoints, usedHints, timeSec, guessesLeft]);
+  }, [gameData?.potentialPoints, filters?.potentialPoints, usedHints, timeSec, guessesLeft]);
 
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -129,7 +192,7 @@ export default function LiveGamePage() {
 
   // Anti-cheat: leaving/blur/hidden => auto-loss
   useEffect(() => {
-    if (!game?.id) return;
+    if (!gameData?.id && !gameData?.player_id) return;
 
     const forfeitAndExit = async () => {
       if (endedRef.current) return;
@@ -163,11 +226,11 @@ export default function LiveGamePage() {
       window.removeEventListener('blur', onBlur);
       window.removeEventListener('pagehide', onPageHide);
     };
-  }, [game?.id, navigate]);
+  }, [gameData?.id, gameData?.player_id, navigate]);
 
   // Timer
   useEffect(() => {
-    if (!game?.id) return;
+    if (!gameData?.id && !gameData?.player_id) return;
     const handleTimeUp = async () => {
       if (endedRef.current) return;
       endedRef.current = true;
@@ -176,7 +239,7 @@ export default function LiveGamePage() {
       navigate('/postgame', {
         state: {
           didWin: false,
-          player: game,
+          player: gameData,
           stats: { pointsEarned: 0, timeSec: INITIAL_TIME, guessesUsed: 3, usedHints },
           filters,
           isDaily,
@@ -198,7 +261,7 @@ export default function LiveGamePage() {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [game?.id]); // eslint-disable-line
+  }, [gameData?.id, gameData?.player_id]); // eslint-disable-line
 
   // Suggestions
   useEffect(() => {
@@ -233,18 +296,19 @@ export default function LiveGamePage() {
     };
   }, [guess]);
 
-  // Guard
+  // Guard when we truly can't bootstrap
   useEffect(() => {
-    if (!game || !game.id || !game.name) {
-      setTimeout(() => navigate('/game'), 0);
-      return;
+    if (bootError) {
+      // give the user a moment to see the message and then go back
+      const t = setTimeout(() => navigate('/game'), 1200);
+      return () => clearTimeout(t);
     }
-  }, []); // eslint-disable-line
+  }, [bootError, navigate]);
 
   const submitGuess = async (value) => {
     if (!value?.trim() || endedRef.current) return;
     const correct =
-      value.trim().toLowerCase() === (game.name || '').trim().toLowerCase();
+      value.trim().toLowerCase() === (gameData?.name || '').trim().toLowerCase();
 
     if (correct) {
       endedRef.current = true;
@@ -254,12 +318,12 @@ export default function LiveGamePage() {
         state: {
           didWin: true,
           player: {
-            name: game.name,
-            photo: game.photo,
-            age: game.age,
-            nationality: game.nationality,
-            position: game.position,
-            funFact: game.funFact,
+            name: gameData.name,
+            photo: gameData.photo,
+            age: gameData.age,
+            nationality: gameData.nationality,
+            position: gameData.position,
+            funFact: gameData.funFact,
           },
           stats: {
             pointsEarned: points,
@@ -285,7 +349,7 @@ export default function LiveGamePage() {
       navigate('/postgame', {
         state: {
           didWin: false,
-          player: game,
+          player: gameData,
           stats: {
             pointsEarned: 0,
             timeSec: INITIAL_TIME - timeSec,
@@ -304,28 +368,28 @@ export default function LiveGamePage() {
   };
 
   const saveGameRecord = async (won) => {
-    if (!user?.id) return null;
+    if (!user?.id || !gameData) return null;
     try {
       return await saveGameCompleted({
         userId: user.id,
         playerData: {
-          id: parseInt(game.player_id || game.id, 10) || 0,
-          name: game.name || game.player_name,
+          id: parseInt(gameData.player_id || gameData.id, 10) || 0,
+          name: gameData.name || gameData.player_name,
           data: {
-            nationality: game.nationality,
-            position: game.position,
-            age: game.age,
-            photo: game.photo,
+            nationality: gameData.nationality,
+            position: gameData.position,
+            age: gameData.age,
+            photo: gameData.photo,
           },
         },
         gameStats: {
           won,
           points: won ? points : 0,
-          potentialPoints: game.potentialPoints || filters?.potentialPoints || 10000,
+          potentialPoints: gameData.potentialPoints || filters?.potentialPoints || 10000,
           timeTaken: INITIAL_TIME - timeSec,
           guessesAttempted: 3 - guessesLeft + (won ? 1 : 0),
           hintsUsed: Object.values(usedHints).filter(Boolean).length,
-          isDaily: !!game.isDaily,
+          isDaily: !!isDaily,
         },
       });
     } catch (err) {
@@ -339,14 +403,29 @@ export default function LiveGamePage() {
   const timeColorClass =
     timeSec <= 30 ? 'text-red-600' : timeSec <= 60 ? 'text-yellow-600' : 'text-gray-900';
 
-  if (!game || !game.id) {
+  // Loading and boot-failure states
+  if (bootError) {
     return (
       <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
         <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
         <div className="container mx-auto px-4 py-8">
           <div className="text-center">
-            <h1 className="text-2xl font-bold text-red-600 mb-4">No Game Data Found</h1>
-            <p className="mb-4">Redirecting to game setup...</p>
+            <h1 className="text-2xl font-bold text-red-600 mb-4">Failed to start game</h1>
+            <p className="mb-4 text-gray-700">{bootError}</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!gameData) {
+    return (
+      <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
+        <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
+        <div className="container mx-auto px-4 py-20">
+          <div className="text-center text-gray-600">
+            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-green-600 mx-auto mb-3"></div>
+            Preparing round…
           </div>
         </div>
       </div>
@@ -437,7 +516,7 @@ export default function LiveGamePage() {
                       navigate('/postgame', {
                         state: {
                           didWin: false,
-                          player: game,
+                          player: gameData,
                           stats: {
                             pointsEarned: 0,
                             timeSec: INITIAL_TIME - timeSec,
@@ -484,33 +563,33 @@ export default function LiveGamePage() {
                 <HintButton
                   label="Player's Age"
                   multiplier="×0.95"
-                  disabled={usedHints.age || !game?.age}
+                  disabled={usedHints.age || !gameData?.age}
                   onClick={() => reveal('age')}
-                  valueShown={usedHints.age ? String(game?.age) : null}
+                  valueShown={usedHints.age ? String(gameData?.age) : null}
                 />
                 <HintButton
                   label="Player's Nationality"
                   multiplier="×0.90"
-                  disabled={usedHints.nationality || !game?.nationality}
+                  disabled={usedHints.nationality || !gameData?.nationality}
                   onClick={() => reveal('nationality')}
-                  valueShown={usedHints.nationality ? String(game?.nationality) : null}
+                  valueShown={usedHints.nationality ? String(gameData?.nationality) : null}
                 />
                 <HintButton
                   label="Player's Position"
                   multiplier="×0.80"
-                  disabled={usedHints.position || !game?.position}
+                  disabled={usedHints.position || !gameData?.position}
                   onClick={() => reveal('position')}
-                  valueShown={usedHints.position ? String(game?.position) : null}
+                  valueShown={usedHints.position ? String(gameData?.position) : null}
                 />
                 <HintButton
                   label="Player's Image"
                   multiplier="×0.50"
-                  disabled={usedHints.partialImage || !game?.photo}
+                  disabled={usedHints.partialImage || !gameData?.photo}
                   onClick={() => reveal('partialImage')}
                   valueShown={
                     usedHints.partialImage ? (
                       <img
-                        src={game?.photo}
+                        src={gameData?.photo}
                         alt="Player Hint"
                         className="w-20 h-20 object-cover object-top"
                         style={{ clipPath: 'inset(0 0 50% 0)' }}
@@ -521,9 +600,9 @@ export default function LiveGamePage() {
                 <HintButton
                   label="Player's First Letter"
                   multiplier="×0.25"
-                  disabled={usedHints.firstLetter || !game?.name}
+                  disabled={usedHints.firstLetter || !gameData?.name}
                   onClick={() => reveal('firstLetter')}
-                  valueShown={usedHints.firstLetter ? game?.name?.charAt(0) : null}
+                  valueShown={usedHints.firstLetter ? gameData?.name?.charAt(0) : null}
                 />
               </div>
             </div>
