@@ -21,16 +21,25 @@ function classNames(...s) {
   return s.filter(Boolean).join(' ');
 }
 
+// Header wrapper that places actions UNDER the title on mobile, to prevent overlap.
+// On md+ screens, actions appear on the right like before.
 function Section({ title, icon, collapsed, onToggle, actions, children }) {
   return (
     <div className="rounded-lg border bg-white/60">
-      <div className="flex items-center justify-between px-3 py-2">
-        <button type="button" onClick={onToggle} className="inline-flex items-center gap-2">
-          {icon}
-          <span className="font-medium text-green-900">{title}</span>
-          {collapsed ? <ChevronDown className="h-4 w-4 ml-1" /> : <ChevronUp className="h-4 w-4 ml-1" />}
-        </button>
-        <div className="flex items-center gap-2">{actions}</div>
+      <div className="px-3 py-2">
+        <div className="flex items-center justify-between">
+          <button type="button" onClick={onToggle} className="inline-flex items-center gap-2">
+            {icon}
+            <span className="font-medium text-green-900">{title}</span>
+            {collapsed ? <ChevronDown className="h-4 w-4 ml-1" /> : <ChevronUp className="h-4 w-4 ml-1" />}
+          </button>
+          {/* Desktop actions (right side) */}
+          <div className="hidden sm:flex items-center gap-2">{actions}</div>
+        </div>
+        {/* Mobile actions (under title row) */}
+        {actions ? (
+          <div className="mt-2 sm:hidden flex flex-wrap items-center gap-2">{actions}</div>
+        ) : null}
       </div>
       {!collapsed && <div className="p-3 pt-0">{children}</div>}
     </div>
@@ -60,7 +69,9 @@ function PresetButton({ onClick, children, title, active = false }) {
 }
 
 const fmtCurrency = (n) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(Number(n || 0));
+  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(
+    Number(n || 0)
+  );
 
 export default function TutorialPage() {
   const { user, refresh } = useAuth();
@@ -84,8 +95,8 @@ export default function TutorialPage() {
 
   const [competitionIds, setCompetitionIds] = useState(() => user?.default_competitions || user?.default_leagues || []);
   const [seasons, setSeasons] = useState(() => user?.default_seasons || []);
-  const [minMarketValue, setMinMarketValue] = useState(() =>
-    (user?.default_min_market_value ?? user?.default_min_appearances ?? 0) || 0
+  const [minMarketValue, setMinMarketValue] = useState(
+    () => (user?.default_min_market_value ?? user?.default_min_appearances ?? 0) || 0
   );
 
   useEffect(() => {
@@ -111,7 +122,7 @@ export default function TutorialPage() {
 
   const top10CompetitionIds = useMemo(() => {
     const arr = [...flatCompetitions];
-    arr.sort((a, b) => (Number(b.total_value_eur || 0) - Number(a.total_value_eur || 0)));
+    arr.sort((a, b) => Number(b.total_value_eur || 0) - Number(a.total_value_eur || 0));
     return arr.slice(0, 10).map((c) => String(c.competition_id));
   }, [flatCompetitions]);
 
@@ -129,7 +140,6 @@ export default function TutorialPage() {
   // Save step 2 (name/avatar) then move to step 3
   const saveStep2 = async () => {
     try {
-      // Update name/avatar in both auth metadata and public.users
       await supabase.auth.updateUser({
         data: {
           ...(user?.user_metadata || {}),
@@ -137,27 +147,33 @@ export default function TutorialPage() {
           avatar_url: avatarUrl || ''
         }
       });
-      await supabase.from('users').update({
-        full_name: fullName || '',
-        profile_photo_url: avatarUrl || ''
-      }).eq('id', user.id);
+      await supabase
+        .from('users')
+        .update({
+          full_name: fullName || '',
+          profile_photo_url: avatarUrl || ''
+        })
+        .eq('id', user.id);
       await refresh();
-      setTimeout(() => next(), 600); // small, visible “saving…” buffer
+      setTimeout(() => next(), 600); // tiny visible buffer
     } catch (e) {
       console.error('Step 2 save error:', e);
-      next(); // even if failed, allow progress
+      next(); // still allow progress
     }
   };
 
-  // Finish: store defaults + mark onboarding complete, then hard refresh (as you preferred)
+  // Finish: store defaults + mark onboarding complete, then hard refresh
   const finish = async () => {
     try {
-      await supabase.from('users').update({
-        default_competitions: competitionIds,
-        default_seasons: seasons,
-        default_min_market_value: Number(minMarketValue) || 0,
-        has_completed_onboarding: true
-      }).eq('id', user.id);
+      await supabase
+        .from('users')
+        .update({
+          default_competitions: competitionIds,
+          default_seasons: seasons,
+          default_min_market_value: Number(minMarketValue) || 0,
+          has_completed_onboarding: true
+        })
+        .eq('id', user.id);
       await refresh();
     } catch (e) {
       console.error('Finish error:', e);
@@ -189,12 +205,16 @@ export default function TutorialPage() {
         {step === 1 && (
           <div className="space-y-4">
             <p>
-              FootyTrail is a quick, competitive guessing game. Use the filters to tailor difficulty, then try to guess the mystery player.
-              Win points, climb the leaderboard, and challenge friends in custom leagues!
+              FootyTrail is a quick, competitive guessing game. Use the filters to tailor difficulty, then try to guess
+              the mystery player. Win points, climb the leaderboard, and challenge friends in custom leagues!
             </p>
             <div className="flex justify-end gap-2">
-              <button className="px-4 py-2 rounded bg-gray-200" onClick={() => navigate('/game')}>Skip</button>
-              <button className="px-4 py-2 rounded bg-green-600 text-white" onClick={next}>Continue</button>
+              <button className="px-4 py-2 rounded bg-gray-200" onClick={() => navigate('/game')}>
+                Skip
+              </button>
+              <button className="px-4 py-2 rounded bg-green-600 text-white" onClick={next}>
+                Continue
+              </button>
             </div>
           </div>
         )}
@@ -233,8 +253,12 @@ export default function TutorialPage() {
               </div>
             )}
             <div className="flex justify-between">
-              <button className="px-4 py-2 rounded bg-gray-200" onClick={back}>Back</button>
-              <button className="px-4 py-2 rounded bg-green-600 text-white" onClick={saveStep2}>Save & Continue</button>
+              <button className="px-4 py-2 rounded bg-gray-200" onClick={back}>
+                Back
+              </button>
+              <button className="px-4 py-2 rounded bg-green-600 text-white" onClick={saveStep2}>
+                Save & Continue
+              </button>
             </div>
           </div>
         )}
@@ -247,11 +271,7 @@ export default function TutorialPage() {
                   <Filter className="h-5 w-5 text-green-700" />
                   <h3 className="text-lg font-semibold text-green-900">Default Filters</h3>
                 </div>
-                <button
-                  className="text-gray-600 hover:text-gray-800"
-                  onClick={() => setFiltersCollapsed((c) => !c)}
-                  type="button"
-                >
+                <button className="text-gray-600 hover:text-gray-800" onClick={() => setFiltersCollapsed((c) => !c)} type="button">
                   {filtersCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
                 </button>
               </div>
@@ -265,29 +285,41 @@ export default function TutorialPage() {
                     collapsed={compCollapsed}
                     onToggle={() => setCompCollapsed((v) => !v)}
                     actions={
-                      <div className="flex items-center gap-2">
+                      <>
                         <button
                           type="button"
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); selectTop10(); }}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            selectTop10();
+                          }}
                           className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
                         >
                           <Star className="h-3 w-3" /> Top 10
                         </button>
                         <button
                           type="button"
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); selectAllCompetitions(); }}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            selectAllCompetitions();
+                          }}
                           className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
                         >
                           <CheckSquare className="h-3 w-3" /> Select All
                         </button>
                         <button
                           type="button"
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); clearCompetitions(); }}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            clearCompetitions();
+                          }}
                           className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
                         >
                           <Trash2 className="h-3 w-3" /> Clear All
                         </button>
-                      </div>
+                      </>
                     }
                   >
                     <div className="max-h-80 overflow-y-auto pr-2">
@@ -296,7 +328,11 @@ export default function TutorialPage() {
                         .map(([country, comps]) => (
                           <div key={country} className="mb-2">
                             <button
-                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleCountry(country); }}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                toggleCountry(country);
+                              }}
                               type="button"
                               className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
                             >
@@ -321,12 +357,7 @@ export default function TutorialPage() {
                                       className="flex items-center gap-2 cursor-pointer"
                                       onClick={(e) => e.stopPropagation()}
                                     >
-                                      <input
-                                        type="checkbox"
-                                        checked={checked}
-                                        onChange={() => toggleCompetition(cid)}
-                                        className="rounded"
-                                      />
+                                      <input type="checkbox" checked={checked} onChange={() => toggleCompetition(cid)} className="rounded" />
                                       {c.logo_url && (
                                         <img src={c.logo_url} alt={c.competition_name} className="w-5 h-5 object-contain" />
                                       )}
@@ -348,29 +379,41 @@ export default function TutorialPage() {
                     collapsed={seasonsCollapsed}
                     onToggle={() => setSeasonsCollapsed((v) => !v)}
                     actions={
-                      <div className="flex items-center gap-2">
+                      <>
                         <button
                           type="button"
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); last5Seasons(); }}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            last5Seasons();
+                          }}
                           className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
                         >
                           <CalendarClock className="h-3 w-3" /> Last 5
                         </button>
                         <button
                           type="button"
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); selectAllSeasons(); }}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            selectAllSeasons();
+                          }}
                           className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
                         >
                           <CheckSquare className="h-3 w-3" /> Select All
                         </button>
                         <button
                           type="button"
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); clearSeasons(); }}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            clearSeasons();
+                          }}
                           className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
                         >
                           <Trash2 className="h-3 w-3" /> Clear All
                         </button>
-                      </div>
+                      </>
                     }
                   >
                     <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-2">
@@ -446,8 +489,12 @@ export default function TutorialPage() {
             </div>
 
             <div className="flex justify-between">
-              <button className="px-4 py-2 rounded bg-gray-200" onClick={back}>Back</button>
-              <button className="px-4 py-2 rounded bg-green-600 text-white" onClick={finish}>Finish</button>
+              <button className="px-4 py-2 rounded bg-gray-200" onClick={back}>
+                Back
+              </button>
+              <button className="px-4 py-2 rounded bg-green-600 text-white" onClick={finish}>
+                Finish
+              </button>
             </div>
           </div>
         )}

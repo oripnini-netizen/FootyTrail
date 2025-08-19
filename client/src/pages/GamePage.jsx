@@ -639,7 +639,7 @@ export default function GamePage() {
                       collapsed={compCollapsed}
                       onToggle={() => setCompCollapsed(v => !v)}
                       actions={
-                        <div className="flex items-center gap-2">
+                        <>
                           <button
                             type="button"
                             onClick={(e) => { e.preventDefault(); e.stopPropagation(); selectTop10Competitions(); }}
@@ -662,7 +662,7 @@ export default function GamePage() {
                             <Trash2 className="h-3 w-3" />
                             Clear All
                           </button>
-                        </div>
+                        </>
                       }
                     >
                       <SelectedChips
@@ -713,7 +713,7 @@ export default function GamePage() {
                                           <img src={c.logo_url} alt={c.competition_name} className="w-5 h-5 object-contain" />
                                         )}
                                         <span className="text-sm">{c.competition_name}</span>
-                                        {c.tier && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700">Tier {c.tier}</span>}
+                                        {c.tier && <span className="ml-2 text=[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700">Tier {c.tier}</span>}
                                       </label>
                                     );
                                   })}
@@ -731,7 +731,7 @@ export default function GamePage() {
                       collapsed={seasonsCollapsed}
                       onToggle={() => setSeasonsCollapsed(v => !v)}
                       actions={
-                        <div className="flex items-center gap-2">
+                        <>
                           <button
                             type="button"
                             onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleLast5Seasons(); }}
@@ -754,7 +754,7 @@ export default function GamePage() {
                             <Trash2 className="h-3 w-3" />
                             Clear All
                           </button>
-                        </div>
+                        </>
                       }
                     >
                       <SelectedChips title="Chosen seasons" items={selectedSeasons} onClear={clearSeasons} />
@@ -890,6 +890,7 @@ function normalizeSeasons(payload) {
 function Section({ title, icon, collapsed, onToggle, actions, children }) {
   return (
     <div className="rounded-lg border bg-white/60">
+      {/* Header row */}
       <div className="flex items-center justify-between px-3 py-2">
         <button
           type="button"
@@ -900,8 +901,19 @@ function Section({ title, icon, collapsed, onToggle, actions, children }) {
           <span className="font-medium text-green-900">{title}</span>
           {collapsed ? <ChevronDown className="h-4 w-4 ml-1" /> : <ChevronUp className="h-4 w-4 ml-1" />}
         </button>
-        <div className="flex items-center gap-2">{actions}</div>
+        {/* Desktop actions (inline, right side) */}
+        <div className="hidden sm:flex items-center gap-2 flex-wrap">{actions}</div>
       </div>
+
+      {/* Mobile actions (second row under title) */}
+      {actions && (
+        <div className="sm:hidden px-3 pb-2">
+          <div className="flex flex-wrap gap-2">
+            {actions}
+          </div>
+        </div>
+      )}
+
       {!collapsed && <div className="p-3 pt-0">{children}</div>}
     </div>
   );

@@ -27,17 +27,33 @@ function classNames(...s) {
 const fmtCurrency = (n) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(Number(n || 0));
 
+/**
+ * Section with mobile-friendly action layout:
+ * - On small screens: actions row appears UNDER the header title row
+ * - On sm+ screens: actions appear on the right (like before)
+ * Also prevents header toggle when clicking actions.
+ */
 function Section({ title, icon, collapsed, onToggle, actions, children }) {
-  // Header actions won't toggle collapse.
   return (
     <div className="rounded-lg border bg-white/60">
-      <div className="flex items-center justify-between px-3 py-2">
-        <button type="button" onClick={onToggle} className="inline-flex items-center gap-2">
-          {icon}
-          <span className="font-medium text-green-900">{title}</span>
-          {collapsed ? <ChevronDown className="h-4 w-4 ml-1" /> : <ChevronUp className="h-4 w-4 ml-1" />}
-        </button>
-        <div className="flex items-center gap-2">{actions}</div>
+      <div className="px-3 py-2">
+        <div className="flex items-center justify-between">
+          <button type="button" onClick={onToggle} className="inline-flex items-center gap-2">
+            {icon}
+            <span className="font-medium text-green-900">{title}</span>
+            {collapsed ? <ChevronDown className="h-4 w-4 ml-1" /> : <ChevronUp className="h-4 w-4 ml-1" />}
+          </button>
+          {/* Desktop actions */}
+          <div className="hidden sm:flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+            {actions}
+          </div>
+        </div>
+        {/* Mobile actions (under title row) */}
+        {actions ? (
+          <div className="mt-2 sm:hidden flex flex-wrap items-center gap-2" onClick={(e) => e.stopPropagation()}>
+            {actions}
+          </div>
+        ) : null}
       </div>
       {!collapsed && <div className="p-3 pt-0">{children}</div>}
     </div>
@@ -512,7 +528,7 @@ export default function ProfilePage() {
                     collapsed={compCollapsed}
                     onToggle={() => setCompCollapsed(v => !v)}
                     actions={
-                      <div className="flex items-center gap-2">
+                      <>
                         <button onClick={handleTop10Competitions} type="button" className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
                           <Star className="h-3 w-3" /> Top 10
                         </button>
@@ -520,9 +536,9 @@ export default function ProfilePage() {
                           <CheckSquare className="h-3 w-3" /> Select All
                         </button>
                         <button onClick={handleClearCompetitions} type="button" className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
-                          <Trash2 className="h-3 w-3" />Clear All
+                          <Trash2 className="h-3 w-3" /> Clear All
                         </button>
-                      </div>
+                      </>
                     }
                   >
                     <SelectedChips
@@ -581,7 +597,7 @@ export default function ProfilePage() {
                     collapsed={seasonsCollapsed}
                     onToggle={() => setSeasonsCollapsed(v => !v)}
                     actions={
-                      <div className="flex items-center gap-2">
+                      <>
                         <button type="button" onClick={handleLast5Seasons} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
                           <CalendarClock className="h-3 w-3" /> Last 5
                         </button>
@@ -589,9 +605,9 @@ export default function ProfilePage() {
                           <CheckSquare className="h-3 w-3" /> Select All
                         </button>
                         <button type="button" onClick={handleClearSeasons} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50">
-                          <Trash2 className="h-3 w-3" />Clear All
+                          <Trash2 className="h-3 w-3" /> Clear All
                         </button>
-                      </div>
+                      </>
                     }
                   >
                     <SelectedChips title="Chosen seasons" items={defaultSeasons} onClear={handleClearSeasons} />

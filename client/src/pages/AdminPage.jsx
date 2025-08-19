@@ -33,14 +33,24 @@ function cx(...a) {
 function Section({ title, icon, collapsed, onToggle, actions, children }) {
   return (
     <div className="rounded-lg border bg-white/70">
+      {/* Header row */}
       <div className="flex items-center justify-between px-3 py-2">
         <button type="button" onClick={onToggle} className="inline-flex items-center gap-2">
           {icon}
           <span className="font-medium text-green-900">{title}</span>
           {collapsed ? <ChevronDown className="h-4 w-4 ml-1" /> : <ChevronUp className="h-4 w-4 ml-1" />}
         </button>
-        <div className="flex items-center gap-2">{actions}</div>
+        {/* Show header actions only on >= sm to avoid overlap on mobile */}
+        <div className="hidden sm:flex items-center gap-2">{actions}</div>
       </div>
+
+      {/* On mobile, show actions in a row directly beneath the header */}
+      {!collapsed && actions ? (
+        <div className="sm:hidden px-3 pb-2">
+          <div className="flex flex-wrap gap-2">{actions}</div>
+        </div>
+      ) : null}
+
       {!collapsed && <div className="p-3 pt-0">{children}</div>}
     </div>
   );
@@ -50,12 +60,17 @@ function PresetBtn({ onClick, children, active, title }) {
   return (
     <button
       type="button"
-      onClick={(e) => { e.preventDefault(); e.stopPropagation(); onClick(); }}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onClick();
+      }}
       title={title}
       className={cx(
         'inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md border transition-colors',
-        active ? 'bg-green-600 text-white border-green-700'
-               : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+        active
+          ? 'bg-green-600 text-white border-green-700'
+          : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
       )}
     >
       {children}
@@ -118,7 +133,7 @@ export default function AdminPage() {
 
   const top10CompetitionIds = useMemo(() => {
     const arr = [...flatCompetitions];
-    arr.sort((a, b) => (Number(b.total_value_eur || 0) - Number(a.total_value_eur || 0)));
+    arr.sort((a, b) => Number(b.total_value_eur || 0) - Number(a.total_value_eur || 0));
     return arr.slice(0, 10).map((c) => String(c.competition_id));
   }, [flatCompetitions]);
 
@@ -136,8 +151,9 @@ export default function AdminPage() {
     setExpandedCountries((p) => ({ ...p, [country]: !p[country] }));
 
   const fmtCurrency = (n) =>
-    new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })
-      .format(Number(n || 0));
+    new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(
+      Number(n || 0)
+    );
 
   // ---- access check ----
   useEffect(() => {
@@ -207,7 +223,7 @@ export default function AdminPage() {
             name: r.competition_name || compId,
             logo_url: r.logo_url || null,
             total: 0,
-            seasons: {}
+            seasons: {},
           };
 
           const compBucket = cBucket.competitions[compId];
@@ -228,17 +244,32 @@ export default function AdminPage() {
   const markChanged = () => setFiltersChanged(true);
 
   // competitions actions
-  const clearCompetitions = () => { setSelectedCompetitionIds([]); markChanged(); };
+  const clearCompetitions = () => {
+    setSelectedCompetitionIds([]);
+    markChanged();
+  };
   const selectAllCompetitions = () => {
     setSelectedCompetitionIds(flatCompetitions.map((c) => String(c.competition_id)));
     markChanged();
   };
-  const selectTop10Competitions = () => { setSelectedCompetitionIds(top10CompetitionIds); markChanged(); };
+  const selectTop10Competitions = () => {
+    setSelectedCompetitionIds(top10CompetitionIds);
+    markChanged();
+  };
 
   // seasons actions
-  const clearSeasons = () => { setSelectedSeasons([]); markChanged(); };
-  const selectAllSeasons = () => { setSelectedSeasons(allSeasons); markChanged(); };
-  const selectLast5Seasons = () => { setSelectedSeasons(allSeasons.slice(0, 5)); markChanged(); };
+  const clearSeasons = () => {
+    setSelectedSeasons([]);
+    markChanged();
+  };
+  const selectAllSeasons = () => {
+    setSelectedSeasons(allSeasons);
+    markChanged();
+  };
+  const selectLast5Seasons = () => {
+    setSelectedSeasons(allSeasons.slice(0, 5));
+    markChanged();
+  };
 
   // submit/save defaults
   const handleSaveDefaults = async (e) => {
@@ -333,13 +364,17 @@ export default function AdminPage() {
                 collapsed={compCollapsed}
                 onToggle={() => setCompCollapsed((v) => !v)}
                 actions={
-                  <div className="flex items-center gap-2">
+                  <>
                     <PresetBtn onClick={selectTop10Competitions} title="Top 10 competitions by market value">
                       <Star size={14} /> Top 10
                     </PresetBtn>
-                    <PresetBtn onClick={selectAllCompetitions}><CheckSquare size={14} /> Select All</PresetBtn>
-                    <PresetBtn onClick={clearCompetitions}><Trash2 size={14} /> Clear All</PresetBtn>
-                  </div>
+                    <PresetBtn onClick={selectAllCompetitions}>
+                      <CheckSquare size={14} /> Select All
+                    </PresetBtn>
+                    <PresetBtn onClick={clearCompetitions}>
+                      <Trash2 size={14} /> Clear All
+                    </PresetBtn>
+                  </>
                 }
               >
                 {!!selectedCompetitionIds.length && (
@@ -375,7 +410,11 @@ export default function AdminPage() {
                     .map(([country, comps]) => (
                       <div key={country} className="mb-2">
                         <button
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleCountry(country); }}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            toggleCountry(country);
+                          }}
                           type="button"
                           className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
                         >
@@ -386,7 +425,11 @@ export default function AdminPage() {
                             <span>{country}</span>
                             <span className="text-xs text-gray-500">({(comps || []).length})</span>
                           </div>
-                          {expandedCountries[country] ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                          {expandedCountries[country] ? (
+                            <ChevronUp className="h-4 w-4" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4" />
+                          )}
                         </button>
 
                         {expandedCountries[country] && (
@@ -430,11 +473,17 @@ export default function AdminPage() {
                 collapsed={seasonsCollapsed}
                 onToggle={() => setSeasonsCollapsed((v) => !v)}
                 actions={
-                  <div className="flex items-center gap-2">
-                    <PresetBtn onClick={selectLast5Seasons}><CalendarClock size={14} /> Last 5</PresetBtn>
-                    <PresetBtn onClick={selectAllSeasons}><CheckSquare size={14} /> Select All</PresetBtn>
-                    <PresetBtn onClick={clearSeasons}><Trash2 size={14} /> Clear All</PresetBtn>
-                  </div>
+                  <>
+                    <PresetBtn onClick={selectLast5Seasons}>
+                      <CalendarClock size={14} /> Last 5
+                    </PresetBtn>
+                    <PresetBtn onClick={selectAllSeasons}>
+                      <CheckSquare size={14} /> Select All
+                    </PresetBtn>
+                    <PresetBtn onClick={clearSeasons}>
+                      <Trash2 size={14} /> Clear All
+                    </PresetBtn>
+                  </>
                 }
               >
                 {!!selectedSeasons.length && (
@@ -442,11 +491,17 @@ export default function AdminPage() {
                     <div className="text-xs text-gray-600 mb-1">Chosen seasons</div>
                     <div className="flex flex-wrap gap-2">
                       {selectedSeasons.map((s) => (
-                        <span key={s} className="inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800">
+                        <span
+                          key={s}
+                          className="inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800"
+                        >
                           {s}
                           <button
                             type="button"
-                            onClick={() => { setSelectedSeasons((p) => p.filter((x) => x !== s)); setFiltersChanged(true); }}
+                            onClick={() => {
+                              setSelectedSeasons((p) => p.filter((x) => x !== s));
+                              setFiltersChanged(true);
+                            }}
                             className="text-red-600 hover:text-red-700"
                             title="Remove"
                           >
@@ -494,7 +549,10 @@ export default function AdminPage() {
                     <input
                       type="number"
                       value={minMarketValue}
-                      onChange={(e) => { setMinMarketValue(parseInt(e.target.value) || 0); setFiltersChanged(true); }}
+                      onChange={(e) => {
+                        setMinMarketValue(parseInt(e.target.value) || 0);
+                        setFiltersChanged(true);
+                      }}
                       min="0"
                       step="100000"
                       className="w-40 border rounded-md px-2 py-1 text-center"
@@ -502,14 +560,78 @@ export default function AdminPage() {
                     <div className="text-sm text-gray-600">Current: {fmtCurrency(minMarketValue)}</div>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <PresetBtn onClick={() => { setMinMarketValue(0);        setFiltersChanged(true); }} active={minMarketValue === 0}><Trash2 size={14}/> Clear</PresetBtn>
-                    <PresetBtn onClick={() => { setMinMarketValue(100000);   setFiltersChanged(true); }} active={minMarketValue === 100000}><Star size={14}/> 100K €</PresetBtn>
-                    <PresetBtn onClick={() => { setMinMarketValue(500000);   setFiltersChanged(true); }} active={minMarketValue === 500000}><Star size={14}/> 500K €</PresetBtn>
-                    <PresetBtn onClick={() => { setMinMarketValue(1000000);  setFiltersChanged(true); }} active={minMarketValue === 1000000}><Star size={14}/> 1M €</PresetBtn>
-                    <PresetBtn onClick={() => { setMinMarketValue(5000000);  setFiltersChanged(true); }} active={minMarketValue === 5000000}><Star size={14}/> 5M €</PresetBtn>
-                    <PresetBtn onClick={() => { setMinMarketValue(10000000); setFiltersChanged(true); }} active={minMarketValue === 10000000}><Star size={14}/> 10M €</PresetBtn>
-                    <PresetBtn onClick={() => { setMinMarketValue(25000000); setFiltersChanged(true); }} active={minMarketValue === 25000000}><Star size={14}/> 25M €</PresetBtn>
-                    <PresetBtn onClick={() => { setMinMarketValue(50000000); setFiltersChanged(true); }} active={minMarketValue === 50000000}><Star size={14}/> 50M €</PresetBtn>
+                    <PresetBtn
+                      onClick={() => {
+                        setMinMarketValue(0);
+                        setFiltersChanged(true);
+                      }}
+                      active={minMarketValue === 0}
+                    >
+                      <Trash2 size={14} /> Clear
+                    </PresetBtn>
+                    <PresetBtn
+                      onClick={() => {
+                        setMinMarketValue(100000);
+                        setFiltersChanged(true);
+                      }}
+                      active={minMarketValue === 100000}
+                    >
+                      <Star size={14} /> 100K €
+                    </PresetBtn>
+                    <PresetBtn
+                      onClick={() => {
+                        setMinMarketValue(500000);
+                        setFiltersChanged(true);
+                      }}
+                      active={minMarketValue === 500000}
+                    >
+                      <Star size={14} /> 500K €
+                    </PresetBtn>
+                    <PresetBtn
+                      onClick={() => {
+                        setMinMarketValue(1000000);
+                        setFiltersChanged(true);
+                      }}
+                      active={minMarketValue === 1000000}
+                    >
+                      <Star size={14} /> 1M €
+                    </PresetBtn>
+                    <PresetBtn
+                      onClick={() => {
+                        setMinMarketValue(5000000);
+                        setFiltersChanged(true);
+                      }}
+                      active={minMarketValue === 5000000}
+                    >
+                      <Star size={14} /> 5M €
+                    </PresetBtn>
+                    <PresetBtn
+                      onClick={() => {
+                        setMinMarketValue(10000000);
+                        setFiltersChanged(true);
+                      }}
+                      active={minMarketValue === 10000000}
+                    >
+                      <Star size={14} /> 10M €
+                    </PresetBtn>
+                    <PresetBtn
+                      onClick={() => {
+                        setMinMarketValue(25000000);
+                        setFiltersChanged(true);
+                      }}
+                      active={minMarketValue === 25000000}
+                    >
+                      <Star size={14} /> 25M €
+                    </PresetBtn>
+                    <PresetBtn
+                      onClick={() => {
+                        setMinMarketValue(50000000);
+                        setFiltersChanged(true);
+                      }}
+                      active={minMarketValue === 50000000}
+                    >
+                      <Star size={14} /> 50M €
+                    </PresetBtn>
                   </div>
                 </div>
               </Section>
@@ -551,7 +673,9 @@ export default function AdminPage() {
                       minMarketValue: Number(minMarketValue) || 0,
                     };
                     const res = await generateDailyChallenge({ date: dateInput, filters });
-                    setStatus(res.success ? `Daily challenge generated for ${dateInput}` : `Error: ${res.error || 'Unknown error'}`);
+                    setStatus(
+                      res.success ? `Daily challenge generated for ${dateInput}` : `Error: ${res.error || 'Unknown error'}`
+                    );
                     const { data: challenges } = await supabase
                       .from('daily_challenges')
                       .select('challenge_date, player_id, player_name, created_at')
@@ -644,7 +768,9 @@ export default function AdminPage() {
                   ))}
                   {!dailyChallenges?.length && (
                     <tr>
-                      <td colSpan={4} className="text-center py-4 text-gray-500">No daily challenges found.</td>
+                      <td colSpan={4} className="text-center py-4 text-gray-500">
+                        No daily challenges found.
+                      </td>
                     </tr>
                   )}
                 </tbody>
@@ -686,11 +812,7 @@ export default function AdminPage() {
                           >
                             <div className="flex items-center gap-2">
                               {flagUrl && (
-                                <img
-                                  src={flagUrl}
-                                  alt={country}
-                                  className="w-6 h-4 object-cover rounded"
-                                />
+                                <img src={flagUrl} alt={country} className="w-6 h-4 object-cover rounded" />
                               )}
                               <span className="font-medium">{country}</span>
                               <span className="text-xs text-gray-600">Players: {cData.total}</span>
@@ -709,12 +831,12 @@ export default function AdminPage() {
                                     <div key={key} className="border rounded bg-white/70">
                                       <div
                                         className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-green-50"
-                                        onClick={() =>
-                                          setCoverageCompOpen((p) => ({ ...p, [key]: !p[key] }))
-                                        }
+                                        onClick={() => setCoverageCompOpen((p) => ({ ...p, [key]: !p[key] }))}
                                       >
                                         <div className="flex items-center gap-2">
-                                          {comp.logo_url && <img src={comp.logo_url} alt={comp.name} className="w-5 h-5 object-contain" />}
+                                          {comp.logo_url && (
+                                            <img src={comp.logo_url} alt={comp.name} className="w-5 h-5 object-contain" />
+                                          )}
                                           <span>{comp.name}</span>
                                           <span className="text-xs text-gray-600">Players: {comp.total}</span>
                                         </div>
@@ -728,7 +850,10 @@ export default function AdminPage() {
                                             {Object.entries(comp.seasons || {})
                                               .sort(([a], [b]) => String(b).localeCompare(String(a))) // desc
                                               .map(([season, count]) => (
-                                                <div key={season} className="rounded border bg-white/90 px-2 py-1 text-sm flex items-center justify-between">
+                                                <div
+                                                  key={season}
+                                                  className="rounded border bg-white/90 px-2 py-1 text-sm flex items-center justify-between"
+                                                >
                                                   <span>{season}</span>
                                                   <span className="text-gray-600">{count}</span>
                                                 </div>
