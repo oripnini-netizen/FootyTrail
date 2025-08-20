@@ -921,26 +921,28 @@ function FixturesList({ league, matches, participantsById, dayPoints, onOpenUser
 function NameWithBotChip({ participant, alignRight, onClick }) {
   const name = displayName(participant);
   const content = (
-    <span className="inline-flex items-center gap-2">
+    <span className="min-w-0 inline-flex items-center gap-2">
       {participant.is_bot && (
         <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-purple-100 text-purple-700 text-xs">
           B
         </span>
       )}
-      {/* Tighter truncation on mobile to avoid overlapping the center score */}
-      <span className="font-medium text-gray-900 truncate max-w-[40vw] md:max-w-[160px]">
-        {name}
-      </span>
+      {/* Critical for mobile: allow truncation within a min-w-0 container */}
+      <span className="font-medium text-gray-900 truncate max-w-full">{name}</span>
     </span>
   );
 
   if (participant.is_bot) {
-    return <div className={`flex items-center ${alignRight ? 'justify-end' : ''}`}>{content}</div>;
+    return (
+      <div className={`min-w-0 flex items-center ${alignRight ? 'justify-end' : ''}`}>
+        {content}
+      </div>
+    );
   }
   return (
     <button
       type="button"
-      className={`flex items-center ${alignRight ? 'justify-end' : ''} text-black hover:opacity-80`}
+      className={`min-w-0 flex items-center ${alignRight ? 'justify-end' : ''} text-black hover:opacity-80`}
       onClick={onClick}
       style={{ textDecoration: 'none' }}
     >
@@ -1054,36 +1056,41 @@ function FixtureDay({ league, group, participantsById, dayPoints, onOpenUser }) 
             <MatchCollapsible
               key={item.id}
               titleRow={
-                <div className="grid grid-cols-3 items-center gap-3">
-                  {/* Home name (with B chip if bot) */}
-                  <NameWithBotChip
-                    participant={H}
-                    onClick={() => H.user && onOpenUser(H.user)}
-                  />
+                /* Important: Use grid with center column auto, and make name columns min-w-0 */
+                <div className="grid grid-cols-[1fr,auto,1fr] items-center gap-3">
+                  {/* Home */}
+                  <div className="min-w-0">
+                    <NameWithBotChip
+                      participant={H}
+                      onClick={() => H.user && onOpenUser(H.user)}
+                    />
+                  </div>
 
-                  {/* Center score */}
-                  <div className="flex items-center justify-center">
+                  {/* Center score stays fixed width and doesn't shrink */}
+                  <div className="flex items-center justify-center flex-shrink-0 w-[120px]">
                     {isFuture ? (
                       <span className="text-gray-400">—</span>
                     ) : (
                       <div className="flex items-center gap-3 text-sm text-gray-700">
-                        <span className={`min-w-[60px] text-center ${homeCls}`}>
+                        <span className={`min-w-[52px] text-center ${homeCls}`}>
                           {homePts.toLocaleString()}
                         </span>
                         <span className="text-gray-400">-</span>
-                        <span className={`min-w-[60px] text-center ${awayCls}`}>
+                        <span className={`min-w-[52px] text-center ${awayCls}`}>
                           {awayPts.toLocaleString()}
                         </span>
                       </div>
                     )}
                   </div>
 
-                  {/* Away name (with B chip if bot) */}
-                  <NameWithBotChip
-                    participant={A}
-                    alignRight
-                    onClick={() => A.user && onOpenUser(A.user)}
-                  />
+                  {/* Away */}
+                  <div className="min-w-0">
+                    <NameWithBotChip
+                      participant={A}
+                      alignRight
+                      onClick={() => A.user && onOpenUser(A.user)}
+                    />
+                  </div>
                 </div>
               }
               body={
