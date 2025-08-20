@@ -1,5 +1,5 @@
 // client/src/pages/ProfilePage.jsx
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { supabase, uploadAvatar } from '../supabase/client';
 import {
@@ -15,7 +15,9 @@ import {
   Clock,
   TrendingUp,
   CheckSquare,
-  CalendarClock
+  CalendarClock,
+  Search,
+  X
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import SelectedChips from '../components/SelectedChips';
@@ -122,6 +124,59 @@ export default function ProfilePage() {
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
 
+  // --- Competition search state (autocomplete) ---
+  const [compQuery, setCompQuery] = useState('');
+  const [compOpen, setCompOpen] = useState(false);
+  const [compIndex, setCompIndex] = useState(-1);
+  const compMenuRef = useRef(null);
+  const optionRefs = useRef([]);
+
+  // Flatten competitions for quick searching
+  const flatCompetitions = useMemo(() => {
+    const items = [];
+    Object.entries(groupedCompetitions).forEach(([country, comps]) => {
+      (comps || []).forEach(c => {
+        items.push({
+          id: String(c.competition_id),
+          name: c.competition_name || '',
+          country,
+          logo_url: c.logo_url,
+          flag_url: c.flag_url,
+          norm: normalize(`${country} ${c.competition_name}`),
+        });
+      });
+    });
+    return items;
+  }, [groupedCompetitions]);
+
+  // Filtered results (limit 50)
+  const compResults = useMemo(() => {
+    const q = normalize(compQuery);
+    if (!q) return [];
+    const tokens = q.split(/\s+/).filter(Boolean);
+    const match = (s) => tokens.every(t => s.includes(t));
+    const arr = flatCompetitions
+      .filter(i => match(i.norm))
+      .slice(0, 50);
+    // keep refs array sized
+    optionRefs.current = arr.map((_, i) => optionRefs.current[i] || React.createRef());
+    return arr;
+  }, [compQuery, flatCompetitions]);
+
+  // Keep highlighted item in view
+  useEffect(() => {
+    if (!compOpen) return;
+    const el = optionRefs.current[compIndex]?.current;
+    if (el && compMenuRef.current) {
+      const menu = compMenuRef.current;
+      const rect = el.getBoundingClientRect();
+      const mrect = menu.getBoundingClientRect();
+      if (rect.top < mrect.top) menu.scrollTop -= (mrect.top - rect.top);
+      else if (rect.bottom > mrect.bottom) menu.scrollTop += (rect.bottom - mrect.bottom);
+    }
+  }, [compIndex, compOpen]);
+
+  // Helpers
   const competitionIdToLabel = useMemo(() => {
     const mapping = {};
     Object.entries(groupedCompetitions).forEach(([country, comps]) => {
@@ -273,7 +328,7 @@ export default function ProfilePage() {
       });
       if (authError) throw authError;
 
-      const { error: updateError } = await supabase
+    const { error: updateError } = await supabase
         .from('users')
         .update({ profile_photo_url: publicUrl })
         .eq('id', user.id);
@@ -353,6 +408,37 @@ export default function ProfilePage() {
   const handleSelectAllSeasons = () => setDefaultSeasons(allSeasons);
   const toggleSeason = (season) =>
     setDefaultSeasons(prev => (prev.includes(season) ? prev.filter(s => s !== season) : [...prev, season]));
+
+  // --- Autocomplete handlers ---
+  const pickCompetition = (item) => {
+    toggleCompetition(item.id);
+    setCompOpen(false);
+    setCompQuery('');
+    setCompIndex(-1);
+  };
+
+  const onCompKeyDown = (e) => {
+    if (!compOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      setCompOpen(true);
+      return;
+    }
+    if (!compOpen) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setCompIndex((i) => Math.min((compResults.length || 0) - 1, i + 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setCompIndex((i) => Math.max(0, i - 1));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (compIndex >= 0 && compResults[compIndex]) pickCompetition(compResults[compIndex]);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setCompOpen(false);
+      setCompIndex(-1);
+    }
+  };
 
   return (
     <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
@@ -541,6 +627,73 @@ export default function ProfilePage() {
                       </>
                     }
                   >
+                    {/* Search with autocomplete */}
+                    <div className="relative mb-3">
+                      <div className="flex items-center gap-2">
+                        <div className="relative flex-1">
+                          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                          <input
+                            type="text"
+                            value={compQuery}
+                            onChange={(e) => {
+                              setCompQuery(e.target.value);
+                              setCompOpen(true);
+                              setCompIndex(-1);
+                            }}
+                            onFocus={() => setCompOpen(true)}
+                            onKeyDown={onCompKeyDown}
+                            placeholder="Search countries or leagues…"
+                            className="w-full pl-8 pr-8 py-2 border rounded-md"
+                          />
+                          {compQuery && (
+                            <button
+                              type="button"
+                              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                              onClick={() => {
+                                setCompQuery('');
+                                setCompOpen(false);
+                                setCompIndex(-1);
+                              }}
+                              aria-label="Clear search"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {compOpen && compResults.length > 0 && (
+                        <div
+                          ref={compMenuRef}
+                          className="absolute z-10 mt-1 w-full bg-white border rounded-md shadow max-h-60 overflow-auto"
+                          role="listbox"
+                          aria-label="Competition results"
+                        >
+                          {compResults.map((item, i) => (
+                            <div
+                              key={`${item.country}-${item.id}`}
+                              ref={optionRefs.current[i]}
+                              role="option"
+                              aria-selected={i === compIndex}
+                              className={classNames(
+                                'px-2 py-1.5 flex items-center gap-2 cursor-pointer',
+                                i === compIndex ? 'bg-green-50' : 'hover:bg-gray-50'
+                              )}
+                              onMouseEnter={() => setCompIndex(i)}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => pickCompetition(item)}
+                            >
+                              {item.flag_url && <img src={item.flag_url} alt="" className="w-5 h-3 object-cover rounded" />}
+                              {item.logo_url && <img src={item.logo_url} alt="" className="w-5 h-5 object-contain" />}
+                              <span className="text-sm">
+                                <span className="text-gray-500">{item.country}</span> — {item.name}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
                     <SelectedChips
                       title="Chosen competitions"
                       items={defaultCompetitionIds}
@@ -549,6 +702,7 @@ export default function ProfilePage() {
                       onRemoveItem={(id) => setDefaultCompetitionIds(prev => prev.filter(x => x !== id))}
                       hoverClose
                     />
+
                     <div className="max-h-96 overflow-y-auto pr-2">
                       {Object.entries(competitionsWithCountry)
                         .sort(([a], [b]) => a.localeCompare(b))
@@ -695,4 +849,14 @@ export default function ProfilePage() {
       </div>
     </div>
   );
+}
+
+/* --- utils --- */
+function normalize(s = '') {
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
