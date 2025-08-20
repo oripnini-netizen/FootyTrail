@@ -102,7 +102,12 @@ export async function getPlayersCoverage() {
 }
 
 /* === Stubs kept for compatibility === */
-export const suggestNames  = (q) => jfetch(`/names?q=${encodeURIComponent(q)}`);
+// Name suggestions (uses backend /names which calls RPC suggest_names)
+export async function suggestNames(query, limit = 50) {
+  const q = typeof query === 'string' ? query : (query?.query || '');
+  const lim = typeof query === 'object' && Number.isFinite(query?.limit) ? query.limit : limit;
+  return jfetch(`/names?q=${encodeURIComponent(q)}&limit=${encodeURIComponent(lim)}`);
+}
 export const getProfile    = async () => ({});
 export const updateProfile = async () => ({});
 export const uploadAvatar  = async () => ({});
