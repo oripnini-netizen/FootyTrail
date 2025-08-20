@@ -16,6 +16,10 @@ import {
   Trophy,
   Layers,
   Search,
+  Users as UsersIcon,
+  Activity,
+  TrendingUp,
+  BarChart3,
 } from 'lucide-react';
 
 import { useAuth } from '../context/AuthContext';
@@ -123,6 +127,12 @@ export default function AdminPage() {
   const listRef = useRef(null);
   const itemRefs = useRef([]);
 
+  // ---- NEW: Usage stats card state ----
+  const [usageCollapsed, setUsageCollapsed] = useState(false);
+  const [usageLoading, setUsageLoading] = useState(true);
+  const [usageError, setUsageError] = useState('');
+  const [usersData, setUsersData] = useState([]); // raw rows from public.users
+
   // Close suggestions on outside click
   useEffect(() => {
     const onClick = (e) => {
@@ -175,6 +185,8 @@ export default function AdminPage() {
     new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(
       Number(n || 0)
     );
+
+  const fmtNumber = (n) => new Intl.NumberFormat('en-US').format(Number(n || 0));
 
   // Filtered competitions by search text (keeps country grouping)
   const filteredGroupedCompetitions = useMemo(() => {
@@ -397,12 +409,243 @@ export default function AdminPage() {
     setDailyChallenges(challenges || []);
   };
 
+  // ---- Load usage stats from public.users ----
+  useEffect(() => {
+    (async () => {
+      if (!isAdmin) return;
+      setUsageLoading(true);
+      setUsageError('');
+      try {
+        // Only from public.users as requested. Selecting common fields; some may not exist in every setup.
+        const { data, error } = await supabase
+          .from('users')
+          .select('id, email, full_name, created_at, games_played, total_points, has_completed_onboarding, last_checked_notifications_date');
+
+        if (error) throw error;
+        setUsersData(Array.isArray(data) ? data : []);
+      } catch (e) {
+        console.error('usage stats error:', e.message);
+        setUsageError(e.message || 'Failed to load usage stats');
+        setUsersData([]);
+      } finally {
+        setUsageLoading(false);
+      }
+    })();
+  }, [isAdmin]);
+
+  // ---- Derive usage metrics ----
+  const usage = useMemo(() => {
+    const rows = usersData || [];
+    const totalUsers = rows.length;
+
+    const onboarded = rows.filter((r) => r?.has_completed_onboarding === true).length;
+
+    const now = new Date();
+    const sevenDaysAgo = new Date(now);
+    sevenDaysAgo.setDate(now.getDate() - 7);
+
+    const active7d = rows.filter((r) => {
+      const d = r?.last_checked_notifications_date ? new Date(r.last_checked_notifications_date) : null;
+      return d && d >= sevenDaysAgo;
+    }).length;
+
+    const totalGames = rows.reduce((acc, r) => acc + (Number(r?.games_played || 0)), 0);
+    const avgGames = totalUsers ? totalGames / totalUsers : 0;
+
+    // New users per day (last 14 days) – requires created_at
+    const hasCreatedAt = rows.some((r) => r?.created_at);
+    let newUsersSeries = [];
+    if (hasCreatedAt) {
+      const byDay = {};
+      for (let i = 13; i >= 0; i--) {
+        const d = new Date(now);
+        d.setDate(now.getDate() - i);
+        const key = d.toISOString().slice(0, 10);
+        byDay[key] = 0;
+      }
+      rows.forEach((r) => {
+        if (!r?.created_at) return;
+        const key = new Date(r.created_at).toISOString().slice(0, 10);
+        if (byDay[key] != null) byDay[key] += 1;
+      });
+      newUsersSeries = Object.entries(byDay).map(([date, value]) => ({ date, value }));
+    }
+
+    // Top users by games_played
+    const topUsers = [...rows]
+      .sort((a, b) => Number(b?.games_played || 0) - Number(a?.games_played || 0))
+      .slice(0, 10)
+      .map((r) => ({
+        name: r?.full_name || r?.email || r?.id,
+        games: Number(r?.games_played || 0),
+        points: Number(r?.total_points || 0),
+      }));
+
+    // Buckets distribution for games_played
+    const buckets = { '0': 0, '1-5': 0, '6-20': 0, '21+': 0 };
+    rows.forEach((r) => {
+      const g = Number(r?.games_played || 0);
+      if (g === 0) buckets['0'] += 1;
+      else if (g <= 5) buckets['1-5'] += 1;
+      else if (g <= 20) buckets['6-20'] += 1;
+      else buckets['21+'] += 1;
+    });
+
+    return {
+      totalUsers,
+      onboarded,
+      onboardedPct: totalUsers ? Math.round((onboarded / totalUsers) * 100) : 0,
+      active7d,
+      active7dPct: totalUsers ? Math.round((active7d / totalUsers) * 100) : 0,
+      totalGames,
+      avgGames,
+      newUsersSeries,
+      hasCreatedAt,
+      topUsers,
+      buckets,
+    };
+  }, [usersData]);
+
   if (loading) return <div className="p-8 text-center">Loading…</div>;
   if (!isAdmin) return <div className="p-8 text-center text-red-600">Access denied. Admins only.</div>;
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.35 }}>
+
+        {/* ---------- NEW: App Usage Statistics Card ---------- */}
+        <div className="rounded-xl shadow-lg border bg-white/70 mb-8">
+          <div className="flex items-center justify-between px-4 py-3">
+            <button
+              type="button"
+              onClick={() => setUsageCollapsed((v) => !v)}
+              className="inline-flex items-center gap-2"
+            >
+              <BarChart3 className="h-5 w-5 text-green-700" />
+              <span className="font-semibold text-green-900">App Usage Statistics</span>
+              {usageCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+            </button>
+          </div>
+
+          {!usageCollapsed && (
+            <div className="px-4 pb-4">
+              {usageLoading ? (
+                <div className="text-sm text-gray-600">Loading usage…</div>
+              ) : usageError ? (
+                <div className="text-sm text-red-600">Error: {usageError}</div>
+              ) : (
+                <>
+                  {/* KPI Row */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+                    <div className="rounded border bg-white p-3 flex items-center gap-3">
+                      <UsersIcon className="h-5 w-5 text-gray-700" />
+                      <div>
+                        <div className="text-xs text-gray-500">Total users</div>
+                        <div className="text-lg font-semibold">{fmtNumber(usage.totalUsers)}</div>
+                      </div>
+                    </div>
+                    <div className="rounded border bg-white p-3 flex items-center gap-3">
+                      <Activity className="h-5 w-5 text-emerald-600" />
+                      <div>
+                        <div className="text-xs text-gray-500">Active users (7d)</div>
+                        <div className="text-lg font-semibold">
+                          {fmtNumber(usage.active7d)} <span className="text-xs text-gray-500">({usage.active7dPct}%)</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="rounded border bg-white p-3 flex items-center gap-3">
+                      <TrendingUp className="h-5 w-5 text-yellow-600" />
+                      <div>
+                        <div className="text-xs text-gray-500">Onboarded</div>
+                        <div className="text-lg font-semibold">
+                          {fmtNumber(usage.onboarded)} <span className="text-xs text-gray-500">({usage.onboardedPct}%)</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="rounded border bg-white p-3 flex items-center gap-3">
+                      <Trophy className="h-5 w-5 text-yellow-700" />
+                      <div>
+                        <div className="text-xs text-gray-500">Total games played</div>
+                        <div className="text-lg font-semibold">{fmtNumber(usage.totalGames)}</div>
+                      </div>
+                    </div>
+                    <div className="rounded border bg-white p-3 flex items-center gap-3">
+                      <Trophy className="h-5 w-5 text-gray-700" />
+                      <div>
+                        <div className="text-xs text-gray-500">Avg games / user</div>
+                        <div className="text-lg font-semibold">{usage.avgGames.toFixed(2)}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* New users per day (last 14 days) */}
+                  <div className="rounded-lg border bg-white p-3 mb-4">
+                    <div className="text-sm font-medium mb-2">New users per day (last 14 days)</div>
+                    {!usage.hasCreatedAt ? (
+                      <div className="text-sm text-gray-500">
+                        <em>Could not find <code>created_at</code> in <code>public.users</code>. Skipping daily trend.</em>
+                      </div>
+                    ) : usage.newUsersSeries.length === 0 ? (
+                      <div className="text-sm text-gray-500">No new users recorded in the last 14 days.</div>
+                    ) : (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
+                        {usage.newUsersSeries.map(({ date, value }) => (
+                          <div key={date} className="rounded border bg-white/90 px-2 py-1 text-sm flex items-center justify-between">
+                            <span className="text-gray-600">{date.slice(5)}</span>
+                            <span className="font-medium">{value}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Buckets distribution */}
+                  <div className="rounded-lg border bg-white p-3 mb-4">
+                    <div className="text-sm font-medium mb-2">Users by total games played</div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {Object.entries(usage.buckets).map(([label, count]) => (
+                        <div key={label} className="rounded border bg-white/90 px-2 py-2 text-center">
+                          <div className="text-xs text-gray-500">{label}</div>
+                          <div className="text-lg font-semibold">{fmtNumber(count)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Top users by games */}
+                  <div className="rounded-lg border bg-white overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-green-100">
+                        <tr>
+                          <th className="px-2 py-1 border text-left">#</th>
+                          <th className="px-2 py-1 border text-left">User</th>
+                          <th className="px-2 py-1 border text-right">Games</th>
+                          <th className="px-2 py-1 border text-right">Total Points</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {usage.topUsers.map((u, i) => (
+                          <tr key={i}>
+                            <td className="px-2 py-1 border">{i + 1}</td>
+                            <td className="px-2 py-1 border">{u.name}</td>
+                            <td className="px-2 py-1 border text-right">{fmtNumber(u.games)}</td>
+                            <td className="px-2 py-1 border text-right">{fmtNumber(u.points)}</td>
+                          </tr>
+                        ))}
+                        {!usage.topUsers.length && (
+                          <tr>
+                            <td colSpan={4} className="text-center py-3 text-gray-500">No users to show.</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Main Admin Card (title inside header) */}
         <div className="rounded-xl shadow-lg border bg-green-50/80">
           {/* Header */}
