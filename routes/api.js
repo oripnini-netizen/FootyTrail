@@ -402,42 +402,32 @@ router.post('/random-player', async (req, res) => {
   }
 });
 
-// ---------- Autocomplete (new table, norm_name) ----------
+// ---------- Name suggestions (players_in_seasons via RPC) ----------
 router.get('/names', async (req, res) => {
   try {
     const q = (req.query.q || '').toString().trim();
+    const limit = Math.min(parseInt(req.query.limit || '50', 10) || 50, 100);
     if (!q) return res.json([]);
 
-    const tokens  = q.toLowerCase().split(/\s+/).filter(Boolean);
-    const pattern = `%${tokens.join('%')}%`;
+    // Use the robust RPC you created:
+    // create or replace function public.suggest_names(q text, lim int default 25)
+    const { data, error } = await supabase.rpc('suggest_names', { q, lim: limit });
+    if (error) throw error;
 
-    const { data, error } = await supabase
-      .from(TABLE_PIS)
-      .select('player_id, player_norm_name, player_name, player_photo')
-      .ilike('player_norm_name', pattern)
-      .limit(50);
+    // Normalize the shape for the client
+    const suggestions = (data || []).map(r => ({
+      id: r.player_id,
+      name: r.player_name || r.player_norm_name || '',
+      norm: r.player_norm_name || '',
+    }));
 
-    if (error) return res.status(500).json({ error: error.message });
-
-    const seen = new Set();
-    const out  = [];
-    for (const r of data || []) {
-      const id = String(r.player_id);
-      if (seen.has(id)) continue;
-      seen.add(id);
-      out.push({
-        id,
-        norm_name: r.player_norm_name,
-        name: r.player_name,
-        photo: r.player_photo || null,
-      });
-    }
-    res.json(out.slice(0, 25));
-  } catch (e) {
-    console.error('GET /names error:', e);
-    res.status(500).json({ error: 'Failed to get name suggestions.' });
+    return res.json(suggestions);
+  } catch (err) {
+    console.error('GET /names error:', err);
+    return res.status(500).json({ error: 'Failed to fetch suggestions' });
   }
 });
+
 
 // ---------- Save game ----------
 router.post('/games', authRequired, async (req, res) => {
