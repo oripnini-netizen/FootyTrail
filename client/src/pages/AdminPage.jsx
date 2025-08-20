@@ -1,5 +1,5 @@
 // client/src/pages/AdminPage.jsx
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { motion } from 'framer-motion';
 import {
   ShieldCheck,
@@ -15,6 +15,7 @@ import {
   Globe2,
   Trophy,
   Layers,
+  Search,
 } from 'lucide-react';
 
 import { useAuth } from '../context/AuthContext';
@@ -110,14 +111,31 @@ export default function AdminPage() {
 
   // Players coverage card
   const [coverageCollapsed, setCoverageCollapsed] = useState(true);
-  const [coverage, setCoverage] = useState(null); // { countries: { [country]: { total, competitions: { [compId]: { name, logo_url, total, seasons: { [season]: count } } } } } }
+  const [coverage, setCoverage] = useState(null);
   const [coverageCountryOpen, setCoverageCountryOpen] = useState({});
   const [coverageCompOpen, setCoverageCompOpen] = useState({}); // key: `${country}|${compId}`
+
+  // ---- NEW: competitions search / autocomplete ----
+  const [compSearch, setCompSearch] = useState('');
+  const [showSuggest, setShowSuggest] = useState(false);
+  const searchBoxRef = useRef(null);
+
+  // Close suggestions on outside click
+  useEffect(() => {
+    const onClick = (e) => {
+      if (!searchBoxRef.current) return;
+      if (!searchBoxRef.current.contains(e.target)) setShowSuggest(false);
+    };
+    document.addEventListener('click', onClick);
+    return () => document.removeEventListener('click', onClick);
+  }, []);
 
   // ---- helpers ----
   const flatCompetitions = useMemo(() => {
     const arr = [];
-    Object.values(groupedCompetitions).forEach((list) => (list || []).forEach((c) => arr.push(c)));
+    Object.entries(groupedCompetitions).forEach(([country, list]) =>
+      (list || []).forEach((c) => arr.push({ ...c, _country: country }))
+    );
     return arr;
   }, [groupedCompetitions]);
 
@@ -154,6 +172,41 @@ export default function AdminPage() {
     new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(
       Number(n || 0)
     );
+
+  // Filtered competitions by search text (keeps country grouping)
+  const filteredGroupedCompetitions = useMemo(() => {
+    const q = compSearch.trim().toLowerCase();
+    if (!q) return groupedCompetitions;
+    const out = {};
+    Object.entries(groupedCompetitions).forEach(([country, comps]) => {
+      const mCountry = country.toLowerCase().includes(q);
+      const filtered = (comps || []).filter(
+        (c) => mCountry || (c.competition_name || '').toLowerCase().includes(q)
+      );
+      if (filtered.length) out[country] = filtered;
+    });
+    return out;
+  }, [compSearch, groupedCompetitions]);
+
+  // Suggestions list (top 15)
+  const compSuggestions = useMemo(() => {
+    const q = compSearch.trim().toLowerCase();
+    if (!q) return [];
+    const list = flatCompetitions
+      .filter(
+        (c) =>
+          c._country.toLowerCase().includes(q) ||
+          (c.competition_name || '').toLowerCase().includes(q)
+      )
+      .slice(0, 15);
+    // sort: startsWith first, then includes, then by value descending
+    const starts = (txt) => (txt || '').toLowerCase().startsWith(q) ? 0 : 1;
+    return list.sort(
+      (a, b) =>
+        starts(a.competition_name) - starts(b.competition_name) ||
+        Number(b.total_value_eur || 0) - Number(a.total_value_eur || 0)
+    );
+  }, [compSearch, flatCompetitions]);
 
   // ---- access check ----
   useEffect(() => {
@@ -207,7 +260,7 @@ export default function AdminPage() {
         .order('challenge_date', { ascending: false });
       setDailyChallenges(challenges || []);
 
-      // -------- Coverage via RPC ----------
+      // Coverage via RPC
       try {
         const rows = await getPlayersCoverage(); // [{country, competition_id, competition_name, logo_url, season_id, players_count}]
         const countries = {};
@@ -236,7 +289,6 @@ export default function AdminPage() {
         console.error('coverage rpc error:', err.message);
         setCoverage({ countries: {} });
       }
-      // ------------------------------------
     })();
   }, []);
 
@@ -377,6 +429,73 @@ export default function AdminPage() {
                   </>
                 }
               >
+                {/* NEW: search bar + suggestions */}
+                <div ref={searchBoxRef} className="mb-3 relative">
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-2 top-2.5 h-4 w-4 text-gray-400" />
+                      <input
+                        value={compSearch}
+                        onChange={(e) => {
+                          setCompSearch(e.target.value);
+                          setShowSuggest(true);
+                        }}
+                        onFocus={() => setShowSuggest(true)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && compSuggestions.length) {
+                            const c = compSuggestions[0];
+                            const id = String(c.competition_id);
+                            if (!selectedCompetitionIds.includes(id)) {
+                              setSelectedCompetitionIds((prev) => [...prev, id]);
+                              setFiltersChanged(true);
+                            }
+                            setCompSearch('');
+                            setShowSuggest(false);
+                          }
+                        }}
+                        placeholder="Search country or league…"
+                        className="w-full pl-8 pr-3 py-2 rounded-md border focus:outline-none focus:ring-2 focus:ring-emerald-300"
+                      />
+                    </div>
+                  </div>
+
+                  {showSuggest && compSearch.trim() && compSuggestions.length > 0 && (
+                    <div className="absolute z-10 mt-1 w-full rounded-md border bg-white shadow-lg max-h-64 overflow-auto">
+                      {compSuggestions.map((c) => {
+                        const id = String(c.competition_id);
+                        const selected = selectedCompetitionIds.includes(id);
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            className={cx(
+                              'w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-emerald-50',
+                              selected && 'opacity-60'
+                            )}
+                            onClick={() => {
+                              if (!selected) {
+                                setSelectedCompetitionIds((prev) => [...prev, id]);
+                                setFiltersChanged(true);
+                              }
+                              setCompSearch('');
+                              setShowSuggest(false);
+                            }}
+                          >
+                            {c.logo_url && (
+                              <img src={c.logo_url} alt="" className="w-5 h-5 object-contain" />
+                            )}
+                            <span className="flex-1">
+                              {c.competition_name}
+                              <span className="ml-1 text-xs text-gray-500">({c._country})</span>
+                            </span>
+                            {selected && <span className="text-emerald-600 text-xs">Selected</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
                 {!!selectedCompetitionIds.length && (
                   <div className="mb-2">
                     <div className="text-xs text-gray-600 mb-1">Chosen competitions</div>
@@ -405,7 +524,7 @@ export default function AdminPage() {
                 )}
 
                 <div className="max-h-96 overflow-y-auto pr-2">
-                  {Object.entries(groupedCompetitions)
+                  {Object.entries(filteredGroupedCompetitions)
                     .sort(([a], [b]) => a.localeCompare(b))
                     .map(([country, comps]) => (
                       <div key={country} className="mb-2">
@@ -419,8 +538,8 @@ export default function AdminPage() {
                           className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
                         >
                           <div className="flex items-center gap-2">
-                            {comps?.[0]?.flag_url && (
-                              <img src={comps[0].flag_url} alt={country} className="w-6 h-4 object-cover rounded" />
+                            {countryFlagMap[country] && (
+                              <img src={countryFlagMap[country]} alt={country} className="w-6 h-4 object-cover rounded" />
                             )}
                             <span>{country}</span>
                             <span className="text-xs text-gray-500">({(comps || []).length})</span>
