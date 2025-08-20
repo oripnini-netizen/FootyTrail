@@ -64,7 +64,6 @@ export default function Navbar() {
       )
       .subscribe();
 
-    // Listen for an explicit app event fired by MyLeaguesPage after it marks items read
     const onMarkedRead = () => refreshUnread();
     window.addEventListener('leagues-notifications-read', onMarkedRead);
 
@@ -81,12 +80,10 @@ export default function Navbar() {
   }, [user?.id]);
   // -------------------------------------------------------------------
 
-  // Close mobile menu on route change
   useEffect(() => {
     setMobileOpen(false);
   }, [location.pathname]);
 
-  // Onboarding gate with session "skip" + short grace window
   useEffect(() => {
     if (!user) return;
     if (location.pathname === '/tutorial') return;
@@ -101,7 +98,6 @@ export default function Navbar() {
     }
   }, [user?.has_completed_onboarding, location.pathname, navigate]);
 
-  // When flag becomes true, clean up skip/grace
   useEffect(() => {
     if (user?.has_completed_onboarding) {
       try {
@@ -117,7 +113,6 @@ export default function Navbar() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  // Reusable nav item (icon + label both clickable)
   const NavItem = ({ title, icon: Icon, onClick, showDot = false }) => (
     <button
       onClick={onClick}
@@ -147,18 +142,15 @@ export default function Navbar() {
       >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16 relative">
-            {/* Left: Logo and name */}
+            {/* Left: Logo only */}
             <div className="flex items-center">
               <Link to="/game" className="flex items-center">
                 <img
                   src={`${process.env.PUBLIC_URL}/footytrail_logo.png`}
                   alt="FootyTrail"
-                  className="h-8 w-8 mr-2"
+                  className="h-12 w-12"   // increased size
                   style={{ objectFit: 'contain' }}
                 />
-                <span className="text-xl font-bold text-green-800">
-                  FootyTrail
-                </span>
               </Link>
 
               {user?.role === 'admin' && (
@@ -255,10 +247,8 @@ export default function Navbar() {
                 {mobileOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
               </button>
 
-              {/* Dropdown panel */}
               {mobileOpen && (
                 <>
-                  {/* Click-away overlay */}
                   <div
                     className="fixed inset-0 z-40"
                     onClick={() => setMobileOpen(false)}
