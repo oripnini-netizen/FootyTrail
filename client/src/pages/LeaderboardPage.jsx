@@ -1,6 +1,5 @@
 // client/src/pages/LeaderboardPage.jsx
 import React, { useEffect, useMemo, useState } from 'react';
-// Use the wrapper that re-exports your Supabase client
 import { supabase } from '../supabase';
 import { Trophy, Clock, Award, X } from 'lucide-react';
 
@@ -22,7 +21,7 @@ export default function LeaderboardPage() {
   const [leaderboard, setLeaderboard] = useState([]);
 
   // Modal state
-  const [openUser, setOpenUser] = useState(null); // { userId, name, profilePhoto, memberSince, ... }
+  const [openUser, setOpenUser] = useState(null); // { userId, name, profilePhoto, memberSince }
   const [userGames, setUserGames] = useState([]);
   const [userStats, setUserStats] = useState({ totalPoints: 0, games: 0, avgTime: 0, successRate: 0 });
   const [loadingUser, setLoadingUser] = useState(false);
@@ -47,12 +46,17 @@ export default function LeaderboardPage() {
           const ids = Array.from(new Set(daily.map(d => d.user_id)));
           const { data: users } = await supabase
             .from('users')
-            .select('id, full_name, profile_photo_url')
+            .select('id, full_name, profile_photo_url, created_at')
             .in('id', ids);
+
           const map = {};
           (users || []).forEach(u => { map[u.id] = u; });
+
           setDailyChampions(
-            daily.map(d => ({ ...d, user: map[d.user_id] || { full_name: 'Unknown Player' } }))
+            daily.map(d => ({
+              ...d,
+              user: map[d.user_id] || { full_name: 'Unknown Player' },
+            }))
           );
         } else {
           setDailyChampions([]);
@@ -63,7 +67,6 @@ export default function LeaderboardPage() {
         const start = PERIOD_TO_START(now, tab);
         const startIso = start ? start.toISOString() : null;
 
-        // Pull all users (public profile)
         const { data: users } = await supabase
           .from('users')
           .select('id, full_name, profile_photo_url, created_at');
@@ -86,7 +89,7 @@ export default function LeaderboardPage() {
             userId: u.id,
             name: u.full_name || 'Unknown Player',
             profilePhoto: u.profile_photo_url || '',
-            memberSince: u.created_at ? new Date(u.created_at).toLocaleDateString() : 'Unknown',
+            memberSince: u.created_at ? new Date(u.created_at).toLocaleDateString() : '—',
             points,
             gamesCount,
             avgTime: gamesCount ? Math.round(totalTime / gamesCount) : 0,
@@ -110,6 +113,7 @@ export default function LeaderboardPage() {
   }, [tab, metric]);
 
   const onRowClick = async (player) => {
+    // player = { userId, name, profilePhoto, memberSince }
     setOpenUser(player);
     setUserGames([]);
     setUserStats({ totalPoints: 0, games: 0, avgTime: 0, successRate: 0 });
@@ -183,26 +187,41 @@ export default function LeaderboardPage() {
           ) : (
             <div className="p-4">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-                {dailyChampions.map((c, index) => (
-                  <div key={c.id} className="flex items-center gap-3 rounded-lg border border-yellow-200 bg-white p-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-yellow-100 text-lg font-bold text-yellow-800">
-                      {index + 1}
-                    </div>
-                    <div className="flex items-center gap-3">
-                      {c.user?.profile_photo_url ? (
-                        <img src={c.user.profile_photo_url} alt="" className="h-8 w-8 rounded-full object-cover" />
-                      ) : (
-                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-green-100 text-green-800">
-                          {(c.user?.full_name || '?')[0]}
+                {dailyChampions.map((c, index) => {
+                  const userObj = {
+                    userId: c.user_id,
+                    name: c.user?.full_name || 'Unknown Player',
+                    profilePhoto: c.user?.profile_photo_url || '',
+                    memberSince: c.user?.created_at ? new Date(c.user.created_at).toLocaleDateString() : '—',
+                  };
+                  return (
+                    <div key={c.id} className="flex items-center gap-3 rounded-lg border border-yellow-200 bg-white p-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-yellow-100 text-lg font-bold text-yellow-800">
+                        {index + 1}
+                      </div>
+                      <div className="flex items-center gap-3">
+                        {c.user?.profile_photo_url ? (
+                          <img src={c.user.profile_photo_url} alt="" className="h-8 w-8 rounded-full object-cover" />
+                        ) : (
+                          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-green-100 text-green-800">
+                            {(c.user?.full_name || '?')[0]}
+                          </div>
+                        )}
+                        <div>
+                          <button
+                            type="button"
+                            className="font-medium text-left text-gray-900 hover:underline"
+                            title="View recent games"
+                            onClick={() => onRowClick(userObj)}
+                          >
+                            {c.user?.full_name || 'Unknown Player'}
+                          </button>
+                          <div className="text-sm text-yellow-700">{c.points_earned} points</div>
                         </div>
-                      )}
-                      <div>
-                        <div className="font-medium">{c.user?.full_name || 'Unknown Player'}</div>
-                        <div className="text-sm text-yellow-700">{c.points_earned} points</div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -236,7 +255,7 @@ export default function LeaderboardPage() {
           <h2 className="heading-3 mb-4 text-green-800">Overall Rankings</h2>
           {loading ? (
             <div className="flex h-36 items-center justify-center">
-              <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-t-2 border-green-600"></div>
+              <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-green-600"></div>
             </div>
           ) : leaderboard.length === 0 ? (
             <div className="rounded-xl border border-gray-200 bg-white p-6 text-center shadow-sm">
@@ -259,7 +278,7 @@ export default function LeaderboardPage() {
                   {leaderboard.map((p, index) => (
                     <tr
                       key={p.userId}
-                      className="border-b border-gray-200 hover:bg-gray-50 cursor-pointer"
+                      className="cursor-pointer border-b border-gray-200 hover:bg-gray-50"
                       onClick={() => onRowClick(p)}
                     >
                       <td className="px-4 py-3">
@@ -275,12 +294,12 @@ export default function LeaderboardPage() {
                             </div>
                           )}
                           <div>
-                            {/* Make the name explicitly clickable */}
+                            {/* Name is explicitly clickable; now black */}
                             <button
                               type="button"
                               title="View recent games"
                               onClick={(e) => { e.stopPropagation(); onRowClick(p); }}
-                              className="font-medium text-left text-green-700 hover:underline focus:outline-none"
+                              className="font-medium text-left text-gray-900 hover:underline focus:outline-none"
                             >
                               {p.name}
                             </button>
@@ -333,7 +352,7 @@ export default function LeaderboardPage() {
                 )}
                 <div>
                   <div className="font-semibold">{openUser.name}</div>
-                  <div className="text-xs text-gray-500">Member since {openUser.memberSince}</div>
+                  <div className="text-xs text-gray-500">Member since {openUser.memberSince || '—'}</div>
                 </div>
               </div>
               <button className="rounded-full p-1 hover:bg-gray-100" onClick={() => setOpenUser(null)}>
@@ -342,7 +361,7 @@ export default function LeaderboardPage() {
             </div>
 
             {/* Stats are ALL-TIME */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-4">
+            <div className="grid grid-cols-2 gap-3 p-4 md:grid-cols-4">
               <div className="rounded border p-3 text-center">
                 <div className="text-xs text-gray-500">Total Points</div>
                 <div className="text-lg font-semibold text-green-700">{userStats.totalPoints?.toLocaleString?.() || 0}</div>
@@ -375,7 +394,7 @@ export default function LeaderboardPage() {
                     <div key={g.id} className="rounded border p-3">
                       <div className="flex items-center justify-between">
                         <div>
-                          <div className={`font-medium ${g.is_daily_challenge ? 'text-yellow-600 font-semibold' : ''}`}>
+                          <div className={`font-medium ${g.is_daily_challenge ? 'font-semibold text-yellow-600' : ''}`}>
                             {g.player_name || 'Unknown Player'}
                           </div>
                           <div className="text-xs text-gray-500">{new Date(g.created_at).toLocaleString()}</div>
