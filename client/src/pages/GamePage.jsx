@@ -7,6 +7,8 @@
 // - Min MV quick presets (clear, 100K, 500K, 1M, 5M, 10M, 25M, 50M)
 // - Daily Challenge: LLM prompt + fetch today's player and navigate with correct shape
 // - "Who are ya?!" button moved to the top of the main card with UserSearch icon
+// - NEW: Competitions search bar with autocomplete (country/league), keyboard nav
+// - NEW: Start button text now shows "Generating Random Player…" with pulse
 
 import React, { useEffect, useMemo, useState, useLayoutEffect, useRef } from 'react';
 import {
@@ -16,7 +18,6 @@ import {
   getRandomPlayer,
   getDailyChallenge,
   getLimits,
-  getGamePrompt,
   API_BASE
 } from '../api';
 import { useAuth } from '../context/AuthContext';
@@ -35,7 +36,8 @@ import {
   UserSearch,
   Timer,
   CheckSquare,
-  CalendarClock
+  CalendarClock,
+  Search
 } from 'lucide-react';
 
 function classNames(...s) {
@@ -386,6 +388,87 @@ export default function GamePage() {
 
   const toggleCountry = (country) => setExpandedCountries(prev => ({ ...prev, [country]: !prev[country] }));
 
+  // --- NEW: Competitions search state/logic ---
+  const [compSearch, setCompSearch] = useState('');
+  const [compSug, setCompSug] = useState([]); // {id, label, country, name, logo_url}
+  const [compSugOpen, setCompSugOpen] = useState(false);
+  const [compSugIndex, setCompSugIndex] = useState(-1);
+  const compSearchRef = useRef(null);
+  const compSugBoxRef = useRef(null);
+
+  useEffect(() => {
+    const q = (compSearch || '').trim().toLowerCase();
+    if (!q) {
+      setCompSug([]);
+      setCompSugOpen(false);
+      setCompSugIndex(-1);
+      return;
+    }
+    // Build suggestions from all competitions across all countries
+    const suggestions = [];
+    Object.entries(groupedCompetitions || {}).forEach(([country, comps]) => {
+      (comps || []).forEach((c) => {
+        const name = c.competition_name || '';
+        const hit =
+          name.toLowerCase().includes(q) ||
+          (country || '').toLowerCase().includes(q);
+        if (hit) {
+          suggestions.push({
+            id: String(c.competition_id),
+            label: `${country} — ${name}`,
+            country,
+            name,
+            logo_url: c.logo_url || null
+          });
+        }
+      });
+    });
+    setCompSug(suggestions.slice(0, 50));
+    setCompSugOpen(suggestions.length > 0);
+    setCompSugIndex(suggestions.length ? 0 : -1);
+  }, [compSearch, groupedCompetitions]);
+
+  // click-outside to close suggestions
+  useEffect(() => {
+    const onDocClick = (e) => {
+      if (!compSearchRef.current && !compSugBoxRef.current) return;
+      const inInput = compSearchRef.current?.contains(e.target);
+      const inBox = compSugBoxRef.current?.contains(e.target);
+      if (!inInput && !inBox) setCompSugOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
+
+  const handleCompSearchKeyDown = (e) => {
+    if (!compSugOpen || compSug.length === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setCompSugIndex((i) => (i + 1) % compSug.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setCompSugIndex((i) => (i - 1 + compSug.length) % compSug.length);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const sel = compSug[compSugIndex] || compSug[0];
+      if (sel) {
+        toggleCompetition(sel.id);
+        setCompSearch('');
+        setCompSug([]);
+        setCompSugOpen(false);
+      }
+    } else if (e.key === 'Escape') {
+      setCompSugOpen(false);
+    }
+  };
+
+  const handleCompSuggestionClick = (s) => {
+    toggleCompetition(s.id);
+    setCompSearch('');
+    setCompSug([]);
+    setCompSugOpen(false);
+  };
+
   // Regular game start
   const onStartGame = async () => {
     try {
@@ -573,13 +656,11 @@ export default function GamePage() {
                   )}
                 >
                   <div className="absolute inset-0 bg-white opacity-10 transition-opacity hover:opacity-20"></div>
-                  <div className="flex items-center justify-center gap-2">
-                    {gameLoading ? (
-                      <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
-                    ) : (
-                      <UserSearch className="h-5 w-5 text-green-100" />
-                    )}
-                    <span className="text-lg">{gameLoading ? 'Loading...' : 'Who are ya?!'}</span>
+                  <div className={classNames('flex items-center justify-center gap-2', gameLoading && 'animate-pulse')}>
+                    <UserSearch className="h-5 w-5 text-green-100" />
+                    <span className="text-lg">
+                      {gameLoading ? 'Generating Random Player…' : 'Who are ya?!'}
+                    </span>
                   </div>
                 </button>
               </div>
@@ -691,6 +772,54 @@ export default function GamePage() {
                         </>
                       }
                     >
+                      {/* NEW: competitions search */}
+                      <div
+                        className="mb-3 relative"
+                        onClick={(e) => { e.stopPropagation(); }}
+                      >
+                        <div className="flex items-center gap-2 border rounded-md bg-white px-2 py-1">
+                          <Search className="h-4 w-4 text-gray-500" />
+                          <input
+                            ref={compSearchRef}
+                            type="text"
+                            value={compSearch}
+                            onChange={(e) => setCompSearch(e.target.value)}
+                            onFocus={() => setCompSugOpen(compSug.length > 0)}
+                            onKeyDown={handleCompSearchKeyDown}
+                            placeholder="Search country or competition…"
+                            className="w-full outline-none text-sm"
+                          />
+                        </div>
+                        {compSugOpen && compSug.length > 0 && (
+                          <div
+                            ref={compSugBoxRef}
+                            className="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-md border bg-white shadow"
+                          >
+                            {compSug.map((s, idx) => {
+                              const active = idx === compSugIndex;
+                              const checked = selectedCompetitionIds.includes(s.id);
+                              return (
+                                <button
+                                  key={`${s.id}-${idx}`}
+                                  type="button"
+                                  onClick={() => handleCompSuggestionClick(s)}
+                                  className={classNames(
+                                    'w-full text-left px-2 py-1 flex items-center gap-2 text-sm',
+                                    active ? 'bg-green-100' : 'hover:bg-gray-50'
+                                  )}
+                                >
+                                  {s.logo_url && (
+                                    <img src={s.logo_url} alt={s.name} className="w-4 h-4 object-contain" />
+                                  )}
+                                  <span className="flex-1">{s.label}</span>
+                                  {checked && <span className="text-green-700 text-xs font-semibold">selected</span>}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
                       <SelectedChips
                         title="Chosen competitions"
                         items={selectedCompetitionIds}
