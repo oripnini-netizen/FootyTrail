@@ -518,7 +518,7 @@ router.post('/generate-daily-prompt', async (_req, res) => {
           role: 'user',
           content:
 `Write ONE short, punchy sentence to hype today's Daily Challenge in a football transfer-history guessing game.
-The daily round features a *top-tier* player: think Top 10 European leagues, recent seasons only, and a high market value.
+The daily round features a *top-tier* player: think Top 10 leagues worldwide, recent seasons only, and a high market value.
 Keep it energetic, 20 words or fewer, no emojis, no hashtags.`
         }
       ],

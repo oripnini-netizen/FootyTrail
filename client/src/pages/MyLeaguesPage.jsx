@@ -880,7 +880,7 @@ function LeagueTable({ standings, participants, onOpenUser }) {
 }
 
 /* =========================================================
-   Fixtures: grouped by day; each MATCH is collapsible
+   Fixtures: grouped by day; each MATCH uses new mobile grid
    =======================================================*/
 function FixturesList({ league, matches, participantsById, dayPoints, onOpenUser }) {
   const grouped = useMemo(() => {
@@ -918,8 +918,9 @@ function FixturesList({ league, matches, participantsById, dayPoints, onOpenUser
   );
 }
 
-function NameWithBotChip({ participant, alignRight, onClick }) {
+function NameWithBotChip({ participant, alignRight, onClick, forceTruncate = false }) {
   const name = displayName(participant);
+  const shown = forceTruncate ? truncateWithTwoDots(name, 10) : name;
   const content = (
     <span className="min-w-0 inline-flex items-center gap-2">
       {participant.is_bot && (
@@ -927,14 +928,14 @@ function NameWithBotChip({ participant, alignRight, onClick }) {
           B
         </span>
       )}
-      {/* truncation support */}
-      <span className="font-medium text-gray-900 truncate max-w-full">{name}</span>
+      {/* explicit two-dot truncate already applied in JS; keep CSS safe too */}
+      <span className="font-medium text-gray-900 whitespace-nowrap overflow-hidden">{shown}</span>
     </span>
   );
 
   if (participant.is_bot) {
     return (
-      <div className={`min-w-0 flex items-center ${alignRight ? 'justify-end' : ''}`}>
+      <div className={`min-w-0 flex items-center ${alignRight ? 'justify-end' : 'justify-start'}`}>
         {content}
       </div>
     );
@@ -942,7 +943,7 @@ function NameWithBotChip({ participant, alignRight, onClick }) {
   return (
     <button
       type="button"
-      className={`min-w-0 flex items-center ${alignRight ? 'justify-end' : ''} text-black hover:opacity-80`}
+      className={`min-w-0 flex items-center ${alignRight ? 'justify-end' : 'justify-start'} text-black hover:opacity-80`}
       onClick={onClick}
       style={{ textDecoration: 'none' }}
     >
@@ -963,7 +964,7 @@ function formatHHMMSS(msLeft) {
 /** Robust “time until next UTC+2 midnight” (independent of local timezone/DST) */
 function msUntilNextUtcPlus2Midnight() {
   const nowLocalMs = Date.now();
-  const tzOffsetMin = new Date().getTimezoneOffset(); // minutes; negative if ahead of UTC
+  const tzOffsetMin = new Date().getTimezoneOffset(); // minutes
   const nowUtcMs = nowLocalMs + tzOffsetMin * 60 * 1000;
   const nowUtcPlus2Ms = nowUtcMs + TZ_OFFSET_MIN * 60 * 1000;
 
@@ -972,8 +973,7 @@ function msUntilNextUtcPlus2Midnight() {
   const m = nowUtcPlus2.getUTCMonth();
   const d = nowUtcPlus2.getUTCDate();
 
-  const startOfTomorrowUtcPlus2_utcMs = Date.UTC(y, m, d + 1); // 00:00 (as if in +2 clock)
-  // Convert that +2 clock midnight back to absolute epoch by subtracting the +2 offset:
+  const startOfTomorrowUtcPlus2_utcMs = Date.UTC(y, m, d + 1); // 00:00 +2 clock
   const boundaryEpochMs = startOfTomorrowUtcPlus2_utcMs - TZ_OFFSET_MIN * 60 * 1000;
 
   return boundaryEpochMs - nowLocalMs;
@@ -1053,100 +1053,15 @@ function FixtureDay({ league, group, participantsById, dayPoints, onOpenUser }) 
           const humanRight = !A.is_bot;
 
           return (
-            <MatchCollapsible
+            <MatchRow
               key={item.id}
-              titleRow={
-                <>
-                  {/* Desktop/tablet: original three-column layout */}
-                  <div className="hidden md:grid grid-cols-[1fr,auto,1fr] items-center gap-3">
-                    {/* Home */}
-                    <div className="min-w-0">
-                      <NameWithBotChip
-                        participant={H}
-                        onClick={() => H.user && onOpenUser(H.user)}
-                      />
-                    </div>
-
-                    {/* Center score */}
-                    <div className="flex items-center justify-center flex-shrink-0 w-[120px]">
-                      {isFuture ? (
-                        <span className="text-gray-400">—</span>
-                      ) : (
-                        <div className="flex items-center gap-3 text-sm text-gray-700">
-                          <span className={`min-w-[52px] text-center ${homeCls}`}>
-                            {homePts.toLocaleString()}
-                          </span>
-                          <span className="text-gray-400">-</span>
-                          <span className={`min-w-[52px] text-center ${awayCls}`}>
-                            {awayPts.toLocaleString()}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Away */}
-                    <div className="min-w-0">
-                      <NameWithBotChip
-                        participant={A}
-                        alignRight
-                        onClick={() => A.user && onOpenUser(A.user)}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Mobile: names row (with "vs") + score row beneath */}
-                  <div className="md:hidden">
-                    {/* Row 1: names */}
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <NameWithBotChip
-                          participant={H}
-                          onClick={() => H.user && onOpenUser(H.user)}
-                        />
-                      </div>
-                      <span className="px-1 text-xs text-gray-400">vs</span>
-                      <div className="min-w-0 flex-1">
-                        <NameWithBotChip
-                          participant={A}
-                          alignRight
-                          onClick={() => A.user && onOpenUser(A.user)}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Row 2: scores (aligned under names) */}
-                    <div className="mt-1 flex items-center justify-between text-sm text-gray-700">
-                      <span className={`min-w-[64px] text-left ${homeCls}`}>
-                        {isFuture ? '—' : homePts.toLocaleString()}
-                      </span>
-                      <span className="text-gray-400">-</span>
-                      <span className={`min-w-[64px] text-right ${awayCls}`}>
-                        {isFuture ? '—' : awayPts.toLocaleString()}
-                      </span>
-                    </div>
-                  </div>
-                </>
-              }
-              body={
-                !isFuture && (humanLeft || humanRight) && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-                    {humanLeft && (
-                      <PlayersBreakdown
-                        label={hName}
-                        participant={H}
-                        date={group.match_date}
-                      />
-                    )}
-                    {humanRight && (
-                      <PlayersBreakdown
-                        label={aName}
-                        participant={A}
-                        date={group.match_date}
-                      />
-                    )}
-                  </div>
-                )
-              }
+              isFuture={isFuture}
+              leagueId={league.id}
+              date={group.match_date}
+              home={{ participant: H, name: hName, points: homePts, cls: homeCls }}
+              away={{ participant: A, name: aName, points: awayPts, cls: awayCls }}
+              onOpenUser={onOpenUser}
+              showBreakdown={!isFuture && (humanLeft || humanRight)}
             />
           );
         })}
@@ -1155,19 +1070,121 @@ function FixtureDay({ league, group, participantsById, dayPoints, onOpenUser }) 
   );
 }
 
-function MatchCollapsible({ titleRow, body }) {
+/** Utility: truncate to max characters and add `..` if needed */
+function truncateWithTwoDots(str, max) {
+  if (!str) return '';
+  if (str.length <= max) return str;
+  return str.slice(0, Math.max(0, max - 2)) + '..';
+}
+
+function MatchRow({ isFuture, leagueId, date, home, away, onOpenUser, showBreakdown }) {
   const [open, setOpen] = useState(false);
+
   return (
     <div className="p-3">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="w-full rounded-lg border hover:bg-gray-50 transition text-left"
-      >
-        <div className="px-3 py-2">
-          {titleRow}
+      {/* Desktop / Tablet (unchanged layout) */}
+      <div className="hidden md:grid grid-cols-[1fr,auto,1fr] gap-3 items-center rounded-lg border px-3 py-2">
+        <div className="min-w-0">
+          <NameWithBotChip
+            participant={home.participant}
+            onClick={() => home.participant.user && onOpenUser(home.participant.user)}
+          />
         </div>
-      </button>
-      {open && body}
+
+        <div className="flex items-center justify-center w-[120px]">
+          {isFuture ? (
+            <span className="text-gray-400">—</span>
+          ) : (
+            <div className="flex items-center gap-3 text-sm text-gray-700">
+              <span className={`min-w-[52px] text-center ${home.cls}`}>{home.points.toLocaleString()}</span>
+              <span className="text-gray-400">-</span>
+              <span className={`min-w-[52px] text-center ${away.cls}`}>{away.points.toLocaleString()}</span>
+            </div>
+          )}
+        </div>
+
+        <div className="min-w-0">
+          <NameWithBotChip
+            participant={away.participant}
+            alignRight
+            onClick={() => away.participant.user && onOpenUser(away.participant.user)}
+          />
+        </div>
+      </div>
+
+      {/* Mobile: strict 3 columns × 2 rows grid as requested */}
+      <div className="md:hidden rounded-lg border overflow-hidden">
+        {/* Row 1: names */}
+        <div className="grid grid-cols-[1fr,3.5rem,1fr]">
+          {/* home name */}
+          <div className="flex items-center justify-center px-2 py-2">
+            <NameWithBotChip
+              participant={home.participant}
+              onClick={() => home.participant.user && onOpenUser(home.participant.user)}
+              forceTruncate
+            />
+          </div>
+          {/* center " vs " */}
+          <div className="flex items-center justify-center px-2 py-2">
+            <span className="text-xs text-gray-500">vs</span>
+          </div>
+          {/* away name */}
+          <div className="flex items-center justify-center px-2 py-2">
+            <NameWithBotChip
+              participant={away.participant}
+              alignRight
+              onClick={() => away.participant.user && onOpenUser(away.participant.user)}
+              forceTruncate
+            />
+          </div>
+        </div>
+
+        {/* Row 2: scores — CLICKABLE to toggle breakdown */}
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="w-full grid grid-cols-[1fr,3.5rem,1fr] hover:bg-gray-50"
+        >
+          {/* home score */}
+          <div className="flex items-center justify-center px-2 py-2">
+            <span className={`text-sm ${home.cls}`}>
+              {isFuture ? '—' : home.points.toLocaleString()}
+            </span>
+          </div>
+          {/* center "-" */}
+          <div className="flex items-center justify-center px-2 py-2">
+            <span className="text-gray-400">-</span>
+          </div>
+          {/* away score */}
+          <div className="flex items-center justify-center px-2 py-2">
+            <span className={`text-sm ${away.cls}`}>
+              {isFuture ? '—' : away.points.toLocaleString()}
+            </span>
+          </div>
+        </button>
+
+        {/* Collapsible body (players breakdown) */}
+        {open && showBreakdown && (
+          <div className="border-t p-3">
+            <div className="grid grid-cols-1 gap-3">
+              {!home.participant.is_bot && (
+                <PlayersBreakdown
+                  label={home.name}
+                  participant={home.participant}
+                  date={date}
+                />
+              )}
+              {!away.participant.is_bot && (
+                <PlayersBreakdown
+                  label={away.name}
+                  participant={away.participant}
+                  date={date}
+                />
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
