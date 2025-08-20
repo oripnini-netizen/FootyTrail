@@ -25,11 +25,10 @@ const REGULAR_START_POINTS = 6000; // kept for safety, but not used for "play ag
 export default function PostGamePage() {
   const navigate = useNavigate();
   const location = useLocation();
-  // NOTE: we no longer alias here; instead we read from multiple possible keys below
   const { didWin, player, stats, filters, isDaily } = location.state || {};
   const { user } = useAuth();
 
-  // NEW: read previous potential points from several possible places
+  // Previous potential points (carried from LiveGamePage)
   const prevPotentialPoints =
     location.state?.potentialPoints ??
     location.state?.prevPotentialPoints ??
@@ -51,7 +50,7 @@ export default function PostGamePage() {
 
   const [scope, animate] = useAnimate();
 
-  // For “share” (copy) we capture only the card (minus buttons)
+  // For “share image” we capture only the card (minus buttons)
   const cardRef = useRef(null);
   const actionsRef = useRef(null);
 
@@ -318,7 +317,7 @@ export default function PostGamePage() {
       const minMarketValue =
         Number(filters?.minMarketValue ?? filters?.min_market_value ?? 0) || 0;
 
-      // Previous potential (from LiveGamePage -> PostGamePage state, with robust fallbacks)
+      // Previous potential
       const prevPot = Number(prevPotentialPoints);
       if (!Number.isFinite(prevPot) || prevPot <= 0) {
         alert("Could not determine the previous round’s pool size. Please start from the Game page.");
@@ -346,9 +345,7 @@ export default function PostGamePage() {
         state: {
           ...nextCard,
           isDaily: false,
-          // persist exactly the same filters
           filters: { competitions, seasons, minMarketValue },
-          // next round starts with previous potential - 5
           potentialPoints: nextPotential,
           fromPostGame: true,
         },
@@ -361,9 +358,87 @@ export default function PostGamePage() {
     }
   };
 
-  // ---- Share card (copy to clipboard as rich HTML; fallback to plain text) ----
+  // ---- Share card AS IMAGE (PNG). Falls back to HTML/text if image libs unavailable) ----
   const onShare = async () => {
     try {
+      // Try dynamic import so you don't need to add a build dependency manually.
+      const mod = await import(/* webpackChunkName: "html-to-image" */ 'html-to-image')
+        .catch(() => null);
+
+      if (mod && cardRef.current) {
+        // Temporarily hide actions + append a tiny footer link for the image
+        const actionsEl = actionsRef.current;
+        const cardEl = cardRef.current;
+
+        const prevDisplay = actionsEl ? actionsEl.style.display : '';
+        if (actionsEl) actionsEl.style.display = 'none';
+
+        const footer = document.createElement('div');
+        footer.style.marginTop = '12px';
+        footer.style.fontSize = '12px';
+        footer.style.color = '#6b7280';
+        footer.style.textAlign = 'center';
+        footer.style.borderTop = '1px solid #e5e7eb';
+        footer.style.paddingTop = '10px';
+        footer.textContent = 'Play FootyTrail → footy-trail.vercel.app';
+        cardEl.appendChild(footer);
+
+        // Render to PNG blob (hi-res)
+        const blob = await mod.toBlob(cardEl, {
+          pixelRatio: 2,
+          backgroundColor: '#ffffff',
+          filter: (node) => {
+            // extra guard: exclude actions row if the library traverses it
+            if (!actionsEl) return true;
+            return !actionsEl.contains(node);
+          }
+        });
+
+        // Restore DOM
+        cardEl.removeChild(footer);
+        if (actionsEl) actionsEl.style.display = prevDisplay;
+
+        if (blob) {
+          const fileName = `footytrail_${(player?.name || 'player')
+            .toLowerCase()
+            .replace(/\s+/g, '_')}.png`;
+          const file = new File([blob], fileName, { type: 'image/png' });
+
+          // 1) Best: native share with image file (mobile)
+          if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            await navigator.share({
+              files: [file],
+              title: didWin ? 'I just nailed the FootyTrail round!' : 'Tough round on FootyTrail!',
+              text: 'Think you can beat me? → footy-trail.vercel.app',
+            });
+            return;
+          }
+
+          // 2) Copy PNG to clipboard (where supported)
+          if (navigator.clipboard && window.ClipboardItem) {
+            try {
+              await navigator.clipboard.write([
+                new window.ClipboardItem({ 'image/png': blob })
+              ]);
+              alert('Image copied to clipboard!');
+              return;
+            } catch {/* continue to download fallback */}
+          }
+
+          // 3) Download fallback
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = fileName;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+          return;
+        }
+      }
+
+      // If we got here, fall back to the original HTML/text sharing
       const html = buildShareHTML({ didWin, outroLine, player, stats, aiGeneratedFact });
       const text = buildShareText({ didWin, outroLine, player, stats, aiGeneratedFact });
 
@@ -378,7 +453,6 @@ export default function PostGamePage() {
         return;
       }
 
-      // Fallback: copy text
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(text);
         alert('Post-game summary copied to clipboard!');
@@ -388,7 +462,7 @@ export default function PostGamePage() {
       alert('Sorry, your browser blocked clipboard access.');
     } catch (e) {
       console.error('Share failed:', e);
-      alert('Could not copy the card. Please try again.');
+      alert('Could not create an image. Please try again.');
     }
   };
 
@@ -454,7 +528,7 @@ export default function PostGamePage() {
             <StatCard label="Hints Used" value={Object.values(stats?.usedHints || {}).filter(Boolean).length} icon={<Target className="h-5 w-5 text-amber-600" />} />
           </div>
 
-          {/* Actions (not included in “Share” HTML) */}
+          {/* Actions (not included in “Share” image) */}
           <div ref={actionsRef} className="flex gap-3">
             {!isDaily && (
               <>
@@ -468,7 +542,7 @@ export default function PostGamePage() {
                 <button
                   onClick={onShare}
                   className="flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-3 rounded-lg flex items-center gap-2"
-                  title="Copy post-game card"
+                  title="Share as image"
                 >
                   <Share2 className="h-4 w-4" />
                   Share
@@ -496,7 +570,7 @@ export default function PostGamePage() {
                   <button
                     onClick={onShare}
                     className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg flex items-center gap-2"
-                    title="Copy post-game card"
+                    title="Share as image"
                   >
                     <Share2 className="h-4 w-4" />
                     Share
@@ -560,7 +634,7 @@ function localOutroLine({ didWin, stats, player }) {
   }
 }
 
-/** Build a rich HTML snippet for clipboard share (no buttons included) */
+/** Build a rich HTML snippet for clipboard share (fallback path) */
 function buildShareHTML({ didWin, outroLine, player, stats, aiGeneratedFact }) {
   const color = didWin ? '#166534' : '#991b1b'; // green-700 / red-700
   const badgeBG = didWin ? '#dcfce7' : '#fee2e2'; // green-100 / red-100
