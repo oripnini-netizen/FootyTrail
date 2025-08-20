@@ -7,8 +7,8 @@
 // - Min MV quick presets (clear, 100K, 500K, 1M, 5M, 10M, 25M, 50M)
 // - Daily Challenge: LLM prompt + fetch today's player and navigate with correct shape
 // - "Who are ya?!" button moved to the top of the main card with UserSearch icon
-// - NEW: Competitions search bar with autocomplete (country/league), keyboard nav
-// - NEW: Start button text now shows "Generating Random Player…" with pulse
+// - Competitions search bar with autocomplete (country/league), keyboard nav
+// - Start button text shows "Generating Random Player…" with pulse
 
 import React, { useEffect, useMemo, useState, useLayoutEffect, useRef } from 'react';
 import {
@@ -388,7 +388,7 @@ export default function GamePage() {
 
   const toggleCountry = (country) => setExpandedCountries(prev => ({ ...prev, [country]: !prev[country] }));
 
-  // --- NEW: Competitions search state/logic ---
+  // --- Competitions search state/logic ---
   const [compSearch, setCompSearch] = useState('');
   const [compSug, setCompSug] = useState([]); // {id, label, country, name, logo_url}
   const [compSugOpen, setCompSugOpen] = useState(false);
@@ -404,7 +404,6 @@ export default function GamePage() {
       setCompSugIndex(-1);
       return;
     }
-    // Build suggestions from all competitions across all countries
     const suggestions = [];
     Object.entries(groupedCompetitions || {}).forEach(([country, comps]) => {
       (comps || []).forEach((c) => {
@@ -554,8 +553,9 @@ export default function GamePage() {
   const isAdmin = (user?.role === 'admin');
   const reachedLimit = !isAdmin && (Number(limits?.gamesToday || 0) >= maxGames);
 
-  const LoadingSpinner = () => (
-    <div className="min-h-screen flex flex-col items-center justify-center">
+  // CENTERED OVERLAY: replaces previous min-h-screen container
+  const LoadingOverlay = () => (
+    <div className="fixed inset-0 z-10 flex flex-col items-center justify-center bg-gradient-to-b from-green-50 to-transparent">
       <div className="mb-4">
         <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-green-700"></div>
       </div>
@@ -569,7 +569,7 @@ export default function GamePage() {
       <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
 
       {!pageReady ? (
-        <LoadingSpinner />
+        <LoadingOverlay />
       ) : (
         <motion.div
           initial={{ opacity: 0 }}
@@ -645,7 +645,7 @@ export default function GamePage() {
           {/* Main card or lockout */}
           {!reachedLimit ? (
             <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-6">
-              {/* Moved Play button to the top (replacing the old big icon) */}
+              {/* Play button */}
               <div className="flex justify-center mb-4">
                 <button
                   onClick={onStartGame}
@@ -772,7 +772,7 @@ export default function GamePage() {
                         </>
                       }
                     >
-                      {/* NEW: competitions search */}
+                      {/* competitions search */}
                       <div
                         className="mb-3 relative"
                         onClick={(e) => { e.stopPropagation(); }}

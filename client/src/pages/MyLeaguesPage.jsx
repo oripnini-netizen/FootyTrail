@@ -927,7 +927,7 @@ function NameWithBotChip({ participant, alignRight, onClick }) {
           B
         </span>
       )}
-      {/* Critical for mobile: allow truncation within a min-w-0 container */}
+      {/* truncation support */}
       <span className="font-medium text-gray-900 truncate max-w-full">{name}</span>
     </span>
   );
@@ -1056,42 +1056,76 @@ function FixtureDay({ league, group, participantsById, dayPoints, onOpenUser }) 
             <MatchCollapsible
               key={item.id}
               titleRow={
-                /* Important: Use grid with center column auto, and make name columns min-w-0 */
-                <div className="grid grid-cols-[1fr,auto,1fr] items-center gap-3">
-                  {/* Home */}
-                  <div className="min-w-0">
-                    <NameWithBotChip
-                      participant={H}
-                      onClick={() => H.user && onOpenUser(H.user)}
-                    />
+                <>
+                  {/* Desktop/tablet: original three-column layout */}
+                  <div className="hidden md:grid grid-cols-[1fr,auto,1fr] items-center gap-3">
+                    {/* Home */}
+                    <div className="min-w-0">
+                      <NameWithBotChip
+                        participant={H}
+                        onClick={() => H.user && onOpenUser(H.user)}
+                      />
+                    </div>
+
+                    {/* Center score */}
+                    <div className="flex items-center justify-center flex-shrink-0 w-[120px]">
+                      {isFuture ? (
+                        <span className="text-gray-400">—</span>
+                      ) : (
+                        <div className="flex items-center gap-3 text-sm text-gray-700">
+                          <span className={`min-w-[52px] text-center ${homeCls}`}>
+                            {homePts.toLocaleString()}
+                          </span>
+                          <span className="text-gray-400">-</span>
+                          <span className={`min-w-[52px] text-center ${awayCls}`}>
+                            {awayPts.toLocaleString()}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Away */}
+                    <div className="min-w-0">
+                      <NameWithBotChip
+                        participant={A}
+                        alignRight
+                        onClick={() => A.user && onOpenUser(A.user)}
+                      />
+                    </div>
                   </div>
 
-                  {/* Center score stays fixed width and doesn't shrink */}
-                  <div className="flex items-center justify-center flex-shrink-0 w-[120px]">
-                    {isFuture ? (
-                      <span className="text-gray-400">—</span>
-                    ) : (
-                      <div className="flex items-center gap-3 text-sm text-gray-700">
-                        <span className={`min-w-[52px] text-center ${homeCls}`}>
-                          {homePts.toLocaleString()}
-                        </span>
-                        <span className="text-gray-400">-</span>
-                        <span className={`min-w-[52px] text-center ${awayCls}`}>
-                          {awayPts.toLocaleString()}
-                        </span>
+                  {/* Mobile: names row (with "vs") + score row beneath */}
+                  <div className="md:hidden">
+                    {/* Row 1: names */}
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <NameWithBotChip
+                          participant={H}
+                          onClick={() => H.user && onOpenUser(H.user)}
+                        />
                       </div>
-                    )}
-                  </div>
+                      <span className="px-1 text-xs text-gray-400">vs</span>
+                      <div className="min-w-0 flex-1">
+                        <NameWithBotChip
+                          participant={A}
+                          alignRight
+                          onClick={() => A.user && onOpenUser(A.user)}
+                        />
+                      </div>
+                    </div>
 
-                  {/* Away */}
-                  <div className="min-w-0">
-                    <NameWithBotChip
-                      participant={A}
-                      alignRight
-                      onClick={() => A.user && onOpenUser(A.user)}
-                    />
+                    {/* Row 2: scores (aligned under names) */}
+                    <div className="mt-1 flex items-center justify-between text-sm text-gray-700">
+                      <span className={`min-w-[64px] text-left ${homeCls}`}>
+                        {isFuture ? '—' : homePts.toLocaleString()}
+                      </span>
+                      <span className="text-gray-400">-</span>
+                      <span className={`min-w-[64px] text-right ${awayCls}`}>
+                        {isFuture ? '—' : awayPts.toLocaleString()}
+                      </span>
+                    </div>
                   </div>
-                </div>
+                </>
               }
               body={
                 !isFuture && (humanLeft || humanRight) && (
@@ -1127,17 +1161,10 @@ function MatchCollapsible({ titleRow, body }) {
     <div className="p-3">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="w-full rounded-lg border hover:bg-gray-50 transition"
+        className="w-full rounded-lg border hover:bg-gray-50 transition text-left"
       >
         <div className="px-3 py-2">
           {titleRow}
-          <div className="flex items-center justify-center">
-            {open ? (
-              <ChevronUp className="h-4 w-4 text-gray-500 mt-1" />
-            ) : (
-              <ChevronDown className="h-4 w-4 text-gray-500 mt-1" />
-            )}
-          </div>
         </div>
       </button>
       {open && body}
