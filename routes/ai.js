@@ -465,4 +465,41 @@ Write the one-sentence outro now.`
   }
 });
 
+// NEW: POST /api/ai/generate-daily-prompt
+// A single-sentence hook tailored for the Daily Challenge: top 10 leagues, recent seasons, high market value.
+router.post('/generate-daily-prompt', async (_req, res) => {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(500).json({ error: 'OPENAI_API_KEY not configured' });
+    }
+    const completion = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o',
+      temperature: 0.9,
+      max_tokens: 60,
+      messages: [
+        {
+          role: 'user',
+          content:
+`Write ONE short, punchy sentence to hype today's Daily Challenge in a football transfer-history guessing game.
+The daily round features a *top-tier* player: think Top 10 European leagues, recent seasons only, and a high market value.
+Keep it energetic, 20 words or fewer, no emojis, no hashtags.`
+        }
+      ],
+    });
+    const raw = completion?.choices?.[0]?.message?.content?.trim() || '';
+    return res.json({ prompt: firstSentenceOnly(raw) || 'Guess today’s elite star from the top leagues and grab 10,000 points plus an extra game!' });
+  } catch (err) {
+    const safe = {
+      name: err?.name,
+      status: err?.status,
+      statusText: err?.statusText,
+      code: err?.code,
+      message: err?.message,
+      details: err?.response?.data || err?.data || null,
+    };
+    console.error('[AI daily prompt error]', safe);
+    return res.status(200).json({ prompt: 'Guess today’s elite star from the top leagues and grab 10,000 points plus an extra game!' });
+  }
+});
+
 export default router;
