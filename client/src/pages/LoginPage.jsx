@@ -31,7 +31,6 @@ export default function LoginPage() {
       await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          // Always return to wherever the app is running (localhost in dev, Vercel in prod)
           redirectTo: `${window.location.origin}/login`,
           queryParams: { prompt: 'select_account' },
         },
@@ -50,7 +49,6 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     setBusy(false);
     if (error) alert(error.message);
-    // AuthContext will redirect after session hydrates
   };
 
   const handleEmailSignup = async (e) => {
@@ -64,7 +62,6 @@ export default function LoginPage() {
       password,
       options: {
         data: { full_name },
-        // Ensure confirmation/magic link sends you back to the current origin
         emailRedirectTo: `${window.location.origin}/login`,
       },
     });
@@ -73,7 +70,6 @@ export default function LoginPage() {
       alert(error.message);
     } else {
       alert('Check your email to confirm your account.');
-      // After email confirmation, we’ll land back here; AuthContext will route.
     }
   };
 
