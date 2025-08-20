@@ -579,7 +579,7 @@ export default function LiveGamePage() {
           className="rounded-xl bg-white shadow p-6 lg:col-span-2"
           animate={
             isWrongGuess
-              ? { x: [-10, 10, -10, 10, 0], transition: { duration: 0.4) } // eslint-disable-line
+              ? { x: [-10, 10, -10, 10, 0], transition: { duration: 0.4 } } // FIXED: removed stray ')'
               : {}
           }
         >
