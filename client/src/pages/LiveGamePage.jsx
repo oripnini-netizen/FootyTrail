@@ -82,6 +82,10 @@ export default function LiveGamePage() {
   const [suggestions, setSuggestions] = useState([]);
   const [highlightIndex, setHighlightIndex] = useState(-1);
 
+  // NEW: refs for auto-scrolling the highlighted suggestion into view
+  const listRef = useRef(null);
+  const itemRefs = useRef([]);
+
   const [usedHints, setUsedHints] = useState({
     age: false,
     nationality: false,
@@ -214,6 +218,8 @@ export default function LiveGamePage() {
         }
 
         setSuggestions(deduped);
+        // reset item refs length to match
+        itemRefs.current = new Array(deduped.length);
       } catch (e) {
         console.error('[suggestNames] failed:', e);
         if (active) setSuggestions([]);
@@ -224,6 +230,15 @@ export default function LiveGamePage() {
       clearTimeout(id);
     };
   }, [guess]);
+
+  // NEW: keep highlighted item scrolled into view as you arrow through the list
+  useEffect(() => {
+    if (highlightIndex < 0 || !listRef.current) return;
+    const el = itemRefs.current[highlightIndex];
+    if (el && el.scrollIntoView) {
+      el.scrollIntoView({ block: 'nearest' });
+    }
+  }, [highlightIndex]);
 
   // -------------------------
   // Hints / Points
@@ -564,7 +579,7 @@ export default function LiveGamePage() {
           className="rounded-xl bg-white shadow p-6 lg:col-span-2"
           animate={
             isWrongGuess
-              ? { x: [-10, 10, -10, 10, 0], transition: { duration: 0.4 } }
+              ? { x: [-10, 10, -10, 10, 0], transition: { duration: 0.4) } // eslint-disable-line
               : {}
           }
         >
@@ -648,10 +663,14 @@ export default function LiveGamePage() {
           </form>
 
           {suggestions?.length ? (
-            <ul className="mt-3 border rounded divide-y max-h-56 overflow-auto">
+            <ul
+              ref={listRef}
+              className="mt-3 border rounded divide-y max-h-56 overflow-auto"
+            >
               {suggestions.map((sug, idx) => (
                 <li
                   key={sug.id ?? sug.display ?? idx}
+                  ref={(el) => (itemRefs.current[idx] = el)}
                   className={classNames(
                     'px-3 py-2 cursor-pointer text-sm',
                     idx === highlightIndex ? 'bg-sky-50' : 'hover:bg-gray-50'
