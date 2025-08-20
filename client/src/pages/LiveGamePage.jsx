@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
+import { supabase } from '../supabase';
 
 function classNames(...s) {
   return s.filter(Boolean).join(' ');
@@ -103,14 +104,47 @@ export default function LiveGamePage() {
   const [transferHistory, setTransferHistory] = useState([]);
   const [loadingTransfers, setLoadingTransfers] = useState(true);
 
-  // -------------------------
-  // Helper: generate outro line from backend, addressing username
-  // -------------------------
-  const usernameForOutro =
-    user?.full_name?.trim() ||
-    (user?.email ? user.email.split('@')[0] : '') ||
-    'Player';
+  // -------- username from public.users.full_name (fallbacks to email local-part -> "Player") --------
+  const [displayName, setDisplayName] = useState('Player');
 
+  useEffect(() => {
+    let cancelled = false;
+    async function loadFullName() {
+      try {
+        // prefer full_name from public.users
+        if (user?.id) {
+          const { data, error } = await supabase
+            .from('users')
+            .select('full_name')
+            .eq('id', user.id)
+            .maybeSingle();
+          if (!cancelled) {
+            const dbName = (data?.full_name || '').trim();
+            if (dbName) {
+              setDisplayName(dbName);
+              return;
+            }
+          }
+        }
+        // fallback: auth email local part
+        const emailName = (user?.email || '').split('@')[0]?.trim();
+        if (!cancelled) {
+          setDisplayName(emailName || 'Player');
+        }
+      } catch {
+        if (!cancelled) {
+          const emailName = (user?.email || '').split('@')[0]?.trim();
+          setDisplayName(emailName || 'Player');
+        }
+      }
+    }
+    loadFullName();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, user?.email]);
+
+  // helper to call backend outro with username
   const generateOutro = async (won, pointsValue, guessesUsed, elapsedSec) => {
     try {
       const resp = await fetch('/api/ai/game-outro', {
@@ -123,7 +157,7 @@ export default function LiveGamePage() {
           timeSeconds: elapsedSec,
           playerName: gameData?.name || null,
           isDaily: !!isDaily,
-          username: usernameForOutro,
+          username: displayName, // <-- pass the name from public.users
         }),
       });
       const data = await resp.json();

@@ -395,7 +395,7 @@ router.post('/game-outro', async (req, res) => {
       timeSeconds = 0,
       playerName,
       isDaily = false,
-      username, // <-- NEW: username so we can address the user directly
+      username, // <-- we will address the user by this value
     } = req.body || {};
 
     const result = didWin ? 'win' : 'loss';
