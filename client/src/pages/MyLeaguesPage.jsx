@@ -18,7 +18,7 @@ import {
 /* =========================================================
    Time helpers — use a single universal UTC+2 day boundary
    =======================================================*/
-const TZ_OFFSET_MIN = 120; // UTC+2
+const TZ_OFFSET_MIN = 120; // UTC+2 fixed boundary
 
 function toUtcPlus2Midnight(dateLike) {
   const d =
@@ -927,7 +927,10 @@ function NameWithBotChip({ participant, alignRight, onClick }) {
           B
         </span>
       )}
-      <span className="font-medium text-gray-900 truncate max-w-[160px]">{name}</span>
+      {/* Tighter truncation on mobile to avoid overlapping the center score */}
+      <span className="font-medium text-gray-900 truncate max-w-[40vw] md:max-w-[160px]">
+        {name}
+      </span>
     </span>
   );
 
@@ -955,6 +958,25 @@ function formatHHMMSS(msLeft) {
   return `${hh}:${mm}:${ss}`;
 }
 
+/** Robust “time until next UTC+2 midnight” (independent of local timezone/DST) */
+function msUntilNextUtcPlus2Midnight() {
+  const nowLocalMs = Date.now();
+  const tzOffsetMin = new Date().getTimezoneOffset(); // minutes; negative if ahead of UTC
+  const nowUtcMs = nowLocalMs + tzOffsetMin * 60 * 1000;
+  const nowUtcPlus2Ms = nowUtcMs + TZ_OFFSET_MIN * 60 * 1000;
+
+  const nowUtcPlus2 = new Date(nowUtcPlus2Ms);
+  const y = nowUtcPlus2.getUTCFullYear();
+  const m = nowUtcPlus2.getUTCMonth();
+  const d = nowUtcPlus2.getUTCDate();
+
+  const startOfTomorrowUtcPlus2_utcMs = Date.UTC(y, m, d + 1); // 00:00 (as if in +2 clock)
+  // Convert that +2 clock midnight back to absolute epoch by subtracting the +2 offset:
+  const boundaryEpochMs = startOfTomorrowUtcPlus2_utcMs - TZ_OFFSET_MIN * 60 * 1000;
+
+  return boundaryEpochMs - nowLocalMs;
+}
+
 function FixtureDay({ league, group, participantsById, dayPoints, onOpenUser }) {
   const today0 = todayUtcPlus2Midnight();
   const matchDate0 = toUtcPlus2Midnight(group.match_date);
@@ -963,21 +985,15 @@ function FixtureDay({ league, group, participantsById, dayPoints, onOpenUser }) 
   const isToday = matchDate0.getTime() === today0.getTime();
   const status = isFuture ? 'Upcoming' : isToday ? 'Live' : 'Finished';
 
-  // Live countdown (HH:MM:SS) to end of today (i.e., next match-day boundary)
+  // Live countdown (HH:MM:SS) to the NEXT UTC+2 midnight (global day boundary)
   const [countdown, setCountdown] = useState('');
   useEffect(() => {
     if (!isToday) return;
-    const endOfDay = new Date(matchDate0.getTime() + 24 * 60 * 60 * 1000).getTime();
-
-    const update = () => {
-      const now = Date.now();
-      setCountdown(formatHHMMSS(endOfDay - now));
-    };
-    update();
-    const id = setInterval(update, 1000);
+    const tick = () => setCountdown(formatHHMMSS(msUntilNextUtcPlus2Midnight()));
+    tick();
+    const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isToday, group.match_date]);
+  }, [isToday]);
 
   return (
     <div className="rounded-xl border overflow-hidden">
