@@ -118,7 +118,10 @@ export default function AdminPage() {
   // ---- NEW: competitions search / autocomplete ----
   const [compSearch, setCompSearch] = useState('');
   const [showSuggest, setShowSuggest] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(0); // keyboard highlight
   const searchBoxRef = useRef(null);
+  const listRef = useRef(null);
+  const itemRefs = useRef([]);
 
   // Close suggestions on outside click
   useEffect(() => {
@@ -199,14 +202,27 @@ export default function AdminPage() {
           (c.competition_name || '').toLowerCase().includes(q)
       )
       .slice(0, 15);
-    // sort: startsWith first, then includes, then by value descending
-    const starts = (txt) => (txt || '').toLowerCase().startsWith(q) ? 0 : 1;
+    const starts = (txt) => ((txt || '').toLowerCase().startsWith(q) ? 0 : 1);
     return list.sort(
       (a, b) =>
         starts(a.competition_name) - starts(b.competition_name) ||
         Number(b.total_value_eur || 0) - Number(a.total_value_eur || 0)
     );
   }, [compSearch, flatCompetitions]);
+
+  // reset active index whenever list or query changes
+  useEffect(() => {
+    setActiveIdx(0);
+    itemRefs.current = [];
+  }, [compSuggestions.length, compSearch]);
+
+  // keep highlighted item visible when using arrows
+  useEffect(() => {
+    const el = itemRefs.current[activeIdx];
+    if (el && listRef.current) {
+      el.scrollIntoView({ block: 'nearest' });
+    }
+  }, [activeIdx]);
 
   // ---- access check ----
   useEffect(() => {
@@ -442,14 +458,27 @@ export default function AdminPage() {
                         }}
                         onFocus={() => setShowSuggest(true)}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter' && compSuggestions.length) {
-                            const c = compSuggestions[0];
-                            const id = String(c.competition_id);
-                            if (!selectedCompetitionIds.includes(id)) {
-                              setSelectedCompetitionIds((prev) => [...prev, id]);
-                              setFiltersChanged(true);
+                          const len = compSuggestions.length;
+                          if (!len) return;
+                          if (e.key === 'ArrowDown') {
+                            e.preventDefault();
+                            setActiveIdx((i) => (i + 1) % len);
+                          } else if (e.key === 'ArrowUp') {
+                            e.preventDefault();
+                            setActiveIdx((i) => (i - 1 + len) % len);
+                          } else if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const c = compSuggestions[activeIdx] || compSuggestions[0];
+                            if (c) {
+                              const id = String(c.competition_id);
+                              if (!selectedCompetitionIds.includes(id)) {
+                                setSelectedCompetitionIds((prev) => [...prev, id]);
+                                setFiltersChanged(true);
+                              }
+                              setCompSearch('');
+                              setShowSuggest(false);
                             }
-                            setCompSearch('');
+                          } else if (e.key === 'Escape') {
                             setShowSuggest(false);
                           }
                         }}
@@ -460,18 +489,25 @@ export default function AdminPage() {
                   </div>
 
                   {showSuggest && compSearch.trim() && compSuggestions.length > 0 && (
-                    <div className="absolute z-10 mt-1 w-full rounded-md border bg-white shadow-lg max-h-64 overflow-auto">
-                      {compSuggestions.map((c) => {
+                    <div
+                      ref={listRef}
+                      className="absolute z-10 mt-1 w-full rounded-md border bg-white shadow-lg max-h-64 overflow-auto"
+                    >
+                      {compSuggestions.map((c, i) => {
                         const id = String(c.competition_id);
                         const selected = selectedCompetitionIds.includes(id);
+                        const highlighted = i === activeIdx;
                         return (
                           <button
                             key={id}
                             type="button"
+                            ref={(el) => (itemRefs.current[i] = el)}
                             className={cx(
-                              'w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-emerald-50',
+                              'w-full flex items-center gap-2 px-3 py-2 text-left',
+                              highlighted ? 'bg-emerald-100' : 'hover:bg-emerald-50',
                               selected && 'opacity-60'
                             )}
+                            onMouseEnter={() => setActiveIdx(i)}
                             onClick={() => {
                               if (!selected) {
                                 setSelectedCompetitionIds((prev) => [...prev, id]);
@@ -481,9 +517,7 @@ export default function AdminPage() {
                               setShowSuggest(false);
                             }}
                           >
-                            {c.logo_url && (
-                              <img src={c.logo_url} alt="" className="w-5 h-5 object-contain" />
-                            )}
+                            {c.logo_url && <img src={c.logo_url} alt="" className="w-5 h-5 object-contain" />}
                             <span className="flex-1">
                               {c.competition_name}
                               <span className="ml-1 text-xs text-gray-500">({c._country})</span>
