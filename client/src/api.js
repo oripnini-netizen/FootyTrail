@@ -101,13 +101,21 @@ export async function getPlayersCoverage() {
   return data || [];
 }
 
-/* === Stubs kept for compatibility === */
-// Name suggestions (uses backend /names which calls RPC suggest_names)
+/* === Suggestions (robust) ===
+   We normalize to { id, name, norm, label, value } so any UI can use label/value. */
 export async function suggestNames(query, limit = 50) {
   const q = typeof query === 'string' ? query : (query?.query || '');
   const lim = typeof query === 'object' && Number.isFinite(query?.limit) ? query.limit : limit;
-  return jfetch(`/names?q=${encodeURIComponent(q)}&limit=${encodeURIComponent(lim)}`);
+  const raw = await jfetch(`/names?q=${encodeURIComponent(q)}&limit=${encodeURIComponent(lim)}`);
+  // Defensive normalization in case the server changes again
+  return (Array.isArray(raw) ? raw : []).map((r) => {
+    const id   = r.id ?? r.player_id ?? r.playerId ?? null;
+    const name = r.label ?? r.name ?? r.player_name ?? r.playerName ?? r.norm ?? r.player_norm_name ?? '';
+    const norm = r.norm ?? r.player_norm_name ?? '';
+    return { id, name, norm, label: name, value: name };
+  });
 }
+
 export const getProfile    = async () => ({});
 export const updateProfile = async () => ({});
 export const uploadAvatar  = async () => ({});
