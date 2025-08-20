@@ -104,6 +104,36 @@ export default function LiveGamePage() {
   const [loadingTransfers, setLoadingTransfers] = useState(true);
 
   // -------------------------
+  // Helper: generate outro line from backend, addressing username
+  // -------------------------
+  const usernameForOutro =
+    user?.full_name?.trim() ||
+    (user?.email ? user.email.split('@')[0] : '') ||
+    'Player';
+
+  const generateOutro = async (won, pointsValue, guessesUsed, elapsedSec) => {
+    try {
+      const resp = await fetch('/api/ai/game-outro', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          didWin: !!won,
+          points: pointsValue,
+          guesses: guessesUsed,
+          timeSeconds: elapsedSec,
+          playerName: gameData?.name || null,
+          isDaily: !!isDaily,
+          username: usernameForOutro,
+        }),
+      });
+      const data = await resp.json();
+      return data?.line || null;
+    } catch {
+      return null;
+    }
+  };
+
+  // -------------------------
   // BOOTSTRAP: get the card
   // -------------------------
   useEffect(() => {
@@ -120,7 +150,14 @@ export default function LiveGamePage() {
                 clearInterval(timerRef.current);
                 if (!endedRef.current) {
                   endedRef.current = true;
-                  saveGameRecord(false).then(() =>
+                  (async () => {
+                    await saveGameRecord(false);
+                    const outroLine = await generateOutro(
+                      false,
+                      0,
+                      3,
+                      INITIAL_TIME /* user ran out of time */
+                    );
                     navigate('/postgame', {
                       state: {
                         didWin: false,
@@ -129,10 +166,11 @@ export default function LiveGamePage() {
                         filters,
                         isDaily,
                         potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
+                        outroLine: outroLine || null,
                       },
                       replace: true,
-                    })
-                  );
+                    });
+                  })();
                 }
               }
               return t - 1;
@@ -292,19 +330,27 @@ export default function LiveGamePage() {
       if (endedRef.current) return;
       endedRef.current = true;
       clearInterval(timerRef.current);
-      saveGameRecord(false).then(() =>
+      (async () => {
+        await saveGameRecord(false);
+        const outroLine = await generateOutro(
+          false,
+          0,
+          3,
+          INITIAL_TIME - timeSec
+        );
         navigate('/postgame', {
           state: {
             didWin: false,
             player: gameData,
-            stats: { pointsEarned: 0, timeSec: INITIAL_TIME, guessesUsed: 3, usedHints },
+            stats: { pointsEarned: 0, timeSec: INITIAL_TIME - timeSec, guessesUsed: 3, usedHints },
             filters,
             isDaily,
             potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
+            outroLine: outroLine || null,
           },
           replace: true,
-        })
-      );
+        });
+      })();
     };
 
     const onHide = () => {
@@ -323,7 +369,7 @@ export default function LiveGamePage() {
       window.removeEventListener('blur', onBlur);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameData?.id]);
+  }, [gameData?.id, timeSec]);
 
   // Save record helper (expects { userId, playerData, gameStats })
   const saveGameRecord = async (won) => {
@@ -407,6 +453,10 @@ export default function LiveGamePage() {
       clearInterval(timerRef.current);
       await saveGameRecord(true);
 
+      const elapsed = INITIAL_TIME - timeSec;
+      const guessesUsed = 3 - guessesLeft + 1;
+      const outroLine = await generateOutro(true, points, guessesUsed, elapsed);
+
       navigate('/postgame', {
         state: {
           didWin: true,
@@ -421,13 +471,14 @@ export default function LiveGamePage() {
           },
           stats: {
             pointsEarned: points,
-            timeSec: INITIAL_TIME - timeSec,
-            guessesUsed: 3 - guessesLeft + 1,
+            timeSec: elapsed,
+            guessesUsed,
             usedHints,
           },
           filters,
           isDaily,
           potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
+          outroLine: outroLine || null,
         },
         replace: true,
       });
@@ -442,6 +493,10 @@ export default function LiveGamePage() {
       endedRef.current = true;
       clearInterval(timerRef.current);
       await saveGameRecord(false);
+
+      const elapsed = INITIAL_TIME - timeSec;
+      const outroLine = await generateOutro(false, 0, 3, elapsed);
+
       navigate('/postgame', {
         state: {
           didWin: false,
@@ -455,13 +510,14 @@ export default function LiveGamePage() {
           },
           stats: {
             pointsEarned: 0,
-            timeSec: INITIAL_TIME - timeSec,
+            timeSec: elapsed,
             guessesUsed: 3,
             usedHints,
           },
           filters,
           isDaily,
           potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
+          outroLine: outroLine || null,
         },
         replace: true,
       });
@@ -579,7 +635,7 @@ export default function LiveGamePage() {
           className="rounded-xl bg-white shadow p-6 lg:col-span-2"
           animate={
             isWrongGuess
-              ? { x: [-10, 10, -10, 10, 0], transition: { duration: 0.4 } } // FIXED: removed stray ')'
+              ? { x: [-10, 10, -10, 10, 0], transition: { duration: 0.4 } }
               : {}
           }
         >
@@ -636,7 +692,14 @@ export default function LiveGamePage() {
                   if (endedRef.current) return;
                   endedRef.current = true;
                   clearInterval(timerRef.current);
-                  saveGameRecord(false).then(() =>
+                  (async () => {
+                    await saveGameRecord(false);
+                    const outroLine = await generateOutro(
+                      false,
+                      0,
+                      3,
+                      INITIAL_TIME - timeSec
+                    );
                     navigate('/postgame', {
                       state: {
                         didWin: false,
@@ -650,10 +713,11 @@ export default function LiveGamePage() {
                         filters,
                         isDaily,
                         potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
+                        outroLine: outroLine || null,
                       },
                       replace: true,
-                    })
-                  );
+                    });
+                  })();
                 }}
                 className="px-4 py-2 rounded bg-red-600 hover:bg-red-700 text-white"
               >

@@ -85,7 +85,7 @@ export default function PostGamePage() {
         await animate(scope.current, { x: -2 }, { duration: 0.05 });
         await animate(scope.current, { x: 2 }, { duration: 0.05 });
         await animate(scope.current, { x: 0 }, { duration: 0.05 });
-      } catch {/* dev StrictMode double-invoke safe to ignore */}
+      } catch {/* dev StrictMode double-invoke safe to ignore */ }
     };
     sequence();
   }, [didWin, pageReady, animate]);
@@ -394,7 +394,7 @@ export default function PostGamePage() {
 
   // ----- Loading screen while page prepares -----
   if (!pageReady) {
-    return <LoadingWalk />;
+    return <LoadingBounceLogo />;
   }
 
   if (!player) return null; // redirect handler above will take care
@@ -637,39 +637,43 @@ function escapeHTML(s) {
     .replaceAll("'", '&#39;');
 }
 
-/** Full-screen loader with a spinning football and walking footprints */
-function LoadingWalk() {
-  const steps = Array.from({ length: 6 });
+/** Full-screen loader with the app logo slowly spinning + bouncing left↔right */
+function LoadingBounceLogo() {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-gradient-to-b from-green-50 to-transparent">
-      <div className="flex items-center gap-8">
+    <div className="fixed inset-0 z-50 bg-gradient-to-b from-green-50 to-transparent">
+      {/* The track area */}
+      <div className="absolute inset-0">
+        {/* Horizontally moving + lightly bouncing Y */}
         <motion.div
-          aria-label="Loading"
-          role="img"
-          animate={{ rotate: 360 }}
-          transition={{ repeat: Infinity, duration: 1.1, ease: 'linear' }}
-          className="text-6xl select-none"
+          className="absolute left-1/2 -translate-x-1/2"
+          style={{ top: '40vh' }}
+          animate={{
+            x: ['-40vw', '40vw', '-40vw'],
+            y: [0, -10, 0, -10, 0], // subtle vertical bounce
+          }}
+          transition={{
+            times: [0, 0.5, 1],
+            duration: 6,
+            ease: 'easeInOut',
+            repeat: Infinity,
+          }}
         >
-          ⚽️
+          {/* Spinning logo */}
+          <motion.img
+            src="/footytrail_logo.png"
+            alt="FootyTrail"
+            className="w-20 h-20 select-none"
+            draggable="false"
+            aria-label="Loading"
+            role="img"
+            animate={{ rotate: 360 }}
+            transition={{
+              repeat: Infinity,
+              duration: 8,
+              ease: 'linear',
+            }}
+          />
         </motion.div>
-        <div className="relative w-56 h-10">
-          {steps.map((_, i) => (
-            <motion.span
-              key={i}
-              className="absolute top-1/2 -translate-y-1/2 text-2xl select-none"
-              initial={{ x: -40, opacity: 0 }}
-              animate={{ x: 200, opacity: [0, 1, 0] }}
-              transition={{
-                duration: 1.6,
-                delay: i * 0.18,
-                repeat: Infinity,
-                ease: 'easeInOut',
-              }}
-            >
-              👣
-            </motion.span>
-          ))}
-        </div>
       </div>
     </div>
   );

@@ -395,10 +395,14 @@ router.post('/game-outro', async (req, res) => {
       timeSeconds = 0,
       playerName,
       isDaily = false,
+      username, // <-- NEW: username so we can address the user directly
     } = req.body || {};
 
     const result = didWin ? 'win' : 'loss';
     const timeClock = secondsToClock(timeSeconds);
+
+    const safeUserName =
+      (typeof username === 'string' && username.trim()) ? username.trim() : 'Player';
 
     const messages = [
       {
@@ -406,13 +410,14 @@ router.post('/game-outro', async (req, res) => {
         content:
 `You are a witty football quiz commentator.
 Write EXACTLY ONE sentence reacting to the user's round outcome.
+Address the user by their username (e.g., "Ori") somewhere in the sentence.
 Tone:
 - If win: celebratory and concise.
 - If loss: cheeky but encouraging.
 Content constraints:
 - 1 single sentence only (max ~22 words).
 - No emojis, no hashtags, no URLs or sources.
-- No mentioning the player's name.
+- Do NOT mention the FOOTBALL PLAYER’s name.
 - Avoid filler like "overall", "in conclusion", etc.`
       },
       {
@@ -424,7 +429,8 @@ Content constraints:
 - Points: ${points}
 - Guesses used: ${guesses}
 - Time: ${timeClock}
-- Player: ${playerName || 'N/A'}
+- Player (do NOT mention this in the line): ${playerName || 'N/A'}
+- Username to address: ${safeUserName}
 
 Write the one-sentence outro now.`
       }
@@ -434,7 +440,7 @@ Write the one-sentence outro now.`
       openai.chat.completions.create({
         model: pickModel('fast'),
         temperature: 0.7,
-        max_tokens: 50,
+        max_tokens: 60,
         messages,
       })
     );
