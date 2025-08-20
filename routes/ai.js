@@ -8,7 +8,38 @@ dotenv.config();
 const router = express.Router();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// ---------- helpers ----------
+/* ----------------------------- helpers (new) ----------------------------- */
+// Choose a fast, low-latency model by default, with env overrides.
+const pickModel = (kind = 'fast') => {
+  // Allow explicit overrides first
+  if (kind === 'fast') {
+    return (
+      process.env.OPENAI_MODEL_FAST || // optional override
+      process.env.OPENAI_RESPONSES_MODEL_FAST || // optional override
+      'gpt-4o-mini' // good quality, much faster than gpt-4o/gpt-5
+    );
+  }
+  // quality/default fallback (kept for completeness; not used in changes below)
+  return (
+    process.env.OPENAI_MODEL_QUALITY ||
+    process.env.OPENAI_RESPONSES_MODEL ||
+    process.env.OPENAI_MODEL ||
+    'gpt-4o'
+  );
+};
+
+// Simple timeout wrapper. If the model is slow, we bail and use a fallback.
+const DEFAULT_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 8000);
+function withTimeout(promise, ms = DEFAULT_TIMEOUT_MS) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('openai-timeout')), ms)
+    ),
+  ]);
+}
+
+/* ---------------------------- existing helpers --------------------------- */
 function firstSentenceOnly(text = '') {
   const m = text.match(/^[\s\S]*?[.!?](?=\s|$)/);
   return (m ? m[0] : text).trim();
@@ -260,10 +291,9 @@ async function getIso2FromNationality(nationality, modelForLookup = 'gpt-5') {
   return null;
 }
 
-// ---------- routes ----------
+/* ----------------------------- routes (changed) ----------------------------- */
 
-// POST /api/ai/generate-player-fact
-// Uses Responses API + web_search_preview and now auto-resolves ISO-2 from nationality if country code absent.
+// POST /api/ai/generate-player-fact  (now uses fast model + timeout)
 router.post('/generate-player-fact', async (req, res) => {
   try {
     if (!process.env.OPENAI_API_KEY) {
@@ -274,12 +304,14 @@ router.post('/generate-player-fact', async (req, res) => {
     const name = player?.name?.trim();
     if (!name) return res.status(400).json({ error: 'Player data required: name' });
 
-    const model = process.env.OPENAI_RESPONSES_MODEL || process.env.OPENAI_MODEL || 'gpt-4o';
+    // use fast model
+    const model = pickModel('fast');
     const transferHistorySummary = summarizeClubs(transferHistory);
 
     // Resolve location country code:
     let countryCode = (player?.country || '').toUpperCase().slice(0, 2) || null;
     if (!countryCode && player?.nationality) {
+      // we keep the same helper, passing the chosen model
       countryCode = await getIso2FromNationality(player.nationality, model);
     }
 
@@ -299,35 +331,29 @@ Player Data for Verification:
 - Nationality: ${player?.nationality ?? 'Unknown'}
 - Notable Clubs: ${transferHistorySummary}
 
- find a NEW and INTERESTING fun fact about ${name} from your own knowledge and searching the web. The fact could be about:
-- A famous nickname or unusual habit
-- A unique record they hold
-- A memorable goal or match moment
-- An interesting piece of personal trivia (e.g., family, hobbies, education)
-- Something surprising about their career path or background
-
-Now, generate the one-sentence "Did you know..." fun fact as instructed above.`.trim();
+Find a NEW and INTERESTING fact about ${name}.
+Return ONE sentence only, as instructed.`.trim();
 
     // Configure web_search with approximate location based on resolved ISO-2 (if present)
     const tools = [
       countryCode
         ? {
             type: 'web_search_preview',
-            user_location: {
-              type: 'approximate',
-              country: countryCode,
-            },
+            user_location: { type: 'approximate', country: countryCode },
           }
         : { type: 'web_search_preview' },
     ];
 
-    const response = await openai.responses.create({
-      model,
-      temperature: 0.7,
-      tools,
-      instructions,
-      input: userPrompt,
-    });
+    const response = await withTimeout(
+      openai.responses.create({
+        model,
+        temperature: 0.6,
+        max_output_tokens: 120,
+        tools,
+        instructions,
+        input: userPrompt,
+      })
+    );
 
     let factRaw = pickOutputText(response);
     let fact = normalizeDidYouKnowSentence(factRaw, name);
@@ -335,11 +361,13 @@ Now, generate the one-sentence "Did you know..." fun fact as instructed above.`.
     if (!fact || looksLikeApology(fact)) {
       fact = banterFallback(name);
     }
-
     return res.json({ fact });
   } catch (err) {
-    // On hard failure, still return banter so UI never shows a dead end.
     const name = req?.body?.player?.name || 'this player';
+    // On timeout/any failure: return banter so UI stays snappy
+    if (err && err.message === 'openai-timeout') {
+      return res.status(200).json({ fact: banterFallback(name) });
+    }
     const safe = {
       name: err?.name,
       status: err?.status,
@@ -353,44 +381,7 @@ Now, generate the one-sentence "Did you know..." fun fact as instructed above.`.
   }
 });
 
-// POST /api/ai/generate-game-prompt
-router.post('/generate-game-prompt', async (_req, res) => {
-  try {
-    if (!process.env.OPENAI_API_KEY) {
-      return res.status(500).json({ error: 'OPENAI_API_KEY not configured' });
-    }
-
-    const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4o',
-      temperature: 0.9,
-      max_tokens: 60,
-      messages: [
-        {
-          role: 'user',
-          content:
-            `You are a hype commentator for a football players guessing game by their transfer history. Write one short, punchy, single-sentence prompt (max ~20 words) to motivate the user to start a new round. No emojis, no hashtags.`
-        }
-      ],
-    });
-
-    let prompt = completion?.choices?.[0]?.message?.content?.trim() || '';
-    prompt = firstSentenceOnly(prompt);
-    return res.json({ prompt });
-  } catch (err) {
-    const safe = {
-      name: err?.name,
-      status: err?.status,
-      statusText: err?.statusText,
-      code: err?.code,
-      message: err?.message,
-      details: err?.response?.data || err?.data || null,
-    };
-    console.error('[AI prompt error]', safe);
-    return res.status(500).json({ error: 'Failed to generate prompt' });
-  }
-});
-
-// POST /api/ai/game-outro
+// POST /api/ai/game-outro  (now uses fast model + timeout)
 router.post('/game-outro', async (req, res) => {
   try {
     if (!process.env.OPENAI_API_KEY) {
@@ -398,7 +389,7 @@ router.post('/game-outro', async (req, res) => {
     }
 
     const {
-      didWin ,
+      didWin,
       points = 0,
       guesses = 0,
       timeSeconds = 0,
@@ -439,12 +430,14 @@ Write the one-sentence outro now.`
       }
     ];
 
-    const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4o',
-      temperature: 0.8,
-      max_tokens: 50,
-      messages,
-    });
+    const completion = await withTimeout(
+      openai.chat.completions.create({
+        model: pickModel('fast'),
+        temperature: 0.7,
+        max_tokens: 50,
+        messages,
+      })
+    );
 
     const line = firstSentenceOnly(completion?.choices?.[0]?.message?.content?.trim() || '');
     if (!line) {
@@ -452,6 +445,12 @@ Write the one-sentence outro now.`
     }
     res.json({ line });
   } catch (err) {
+    if (err && err.message === 'openai-timeout') {
+      // Short, deterministic fallback to keep UX instant
+      return res.json({
+        line: 'Solid round—quick thinking and sharp instincts. Ready for another shot at glory?',
+      });
+    }
     const safe = {
       name: err?.name,
       status: err?.status,
@@ -465,8 +464,46 @@ Write the one-sentence outro now.`
   }
 });
 
-// NEW: POST /api/ai/generate-daily-prompt
-// A single-sentence hook tailored for the Daily Challenge: top 10 leagues, recent seasons, high market value.
+/* ----------------------------- routes (unchanged) ----------------------------- */
+
+// POST /api/ai/generate-game-prompt
+router.post('/generate-game-prompt', async (_req, res) => {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(500).json({ error: 'OPENAI_API_KEY not configured' });
+    }
+
+    const completion = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o',
+      temperature: 0.9,
+      max_tokens: 60,
+      messages: [
+        {
+          role: 'user',
+          content:
+            `You are a hype commentator for a football players guessing game by their transfer history. Write one short, punchy, single-sentence prompt (max ~20 words) to motivate the user to start a new round. No emojis, no hashtags.`
+        }
+      ],
+    });
+
+    let prompt = completion?.choices?.[0]?.message?.content?.trim() || '';
+    prompt = firstSentenceOnly(prompt);
+    return res.json({ prompt });
+  } catch (err) {
+    const safe = {
+      name: err?.name,
+      status: err?.status,
+      statusText: err?.statusText,
+      code: err?.code,
+      message: err?.message,
+      details: err?.response?.data || err?.data || null,
+    };
+    console.error('[AI prompt error]', safe);
+    return res.status(500).json({ error: 'Failed to generate prompt' });
+  }
+});
+
+// POST /api/ai/generate-daily-prompt
 router.post('/generate-daily-prompt', async (_req, res) => {
   try {
     if (!process.env.OPENAI_API_KEY) {
