@@ -24,6 +24,20 @@ export default function GuessInput({
     return () => clearTimeout(t);
   }, [value]);
 
+const fetchSuggestions = async (text) => {
+  const q = text.trim();
+  if (!q) {
+    setSuggestions([]);
+    return;
+  }
+  try {
+    const res = await suggestNames(q, 50); // returns array [{id, name, norm}]
+    setSuggestions(Array.isArray(res) ? res : []);
+  } catch {
+    setSuggestions([]);
+  }
+};
+  
   // Fetch suggestions (GLOBAL, not filtered)
   useEffect(() => {
     let cancel = false;
