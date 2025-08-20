@@ -164,82 +164,30 @@ export default function LiveGamePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state?.id, location.state?.name]);
 
-  // -------------------------
-  // Suggestions (wired to player_norm_name)
-  // -------------------------
-  useEffect(() => {
-    let active = true;
-    const id = setTimeout(async () => {
-      const raw = guess.trim();
-      if (!raw) {
-        if (active) setSuggestions([]);
-        setHighlightIndex(-1);
-        return;
+  // suggestions (debounced)
+useEffect(() => {
+  let active = true;
+  const id = setTimeout(async () => {
+    const q = guess.trim();
+    if (!q) {
+      if (active) setSuggestions([]);
+      return;
+    }
+    try {
+      const res = await suggestNames(q, 50); // ask for more than 5
+      if (active) {
+        // backend returns [{ id, name, norm }]
+        setSuggestions(Array.isArray(res) ? res : []);
       }
-
-      const serverQ = longestToken(raw);
-      if (serverQ.length < 2) {
-        if (active) setSuggestions([]);
-        setHighlightIndex(-1);
-        return;
-      }
-
-      try {
-        const res = await suggestNames(serverQ);
-        const list = Array.isArray(res) ? res : [];
-
-        // Prefer searching on player_norm_name
-        const filtered = list.filter((item) => {
-          const norm =
-            item.player_norm_name ||
-            item.norm_name ||
-            item.normalized ||
-            item.name ||
-            item.displayName ||
-            '';
-          return multiTokenStartsWithMatch(raw, norm);
-        });
-
-        // shape each suggestion with a consistent display and value
-        const shaped = filtered.map((it) => ({
-          id: it.id ?? it.player_id ?? it.pid ?? it.name,
-          // prefer the real display name if present; fallback to normalized or name
-          display:
-            it.player_name ||
-            it.name ||
-            it.displayName ||
-            (it.player_norm_name
-              ? it.player_norm_name
-                  .split(' ')
-                  .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-                  .join(' ')
-              : ''),
-          norm:
-            it.player_norm_name ||
-            it.norm_name ||
-            it.normalized ||
-            normalize(
-              it.player_name || it.name || it.displayName || ''
-            ),
-        }));
-
-        if (active) {
-          setSuggestions(shaped.slice(0, 50)); // allow way more than 5
-          setHighlightIndex(shaped.length ? 0 : -1);
-        }
-      } catch {
-        if (active) {
-          setSuggestions([]);
-          setHighlightIndex(-1);
-        }
-      }
-    }, 200);
-
-    return () => {
-      active = false;
-      clearTimeout(id);
-    };
-  }, [guess]);
+    } catch {
+      if (active) setSuggestions([]);
+    }
+  }, 200);
+  return () => {
+    active = false;
+    clearTimeout(id);
+  };
+}, [guess]);
 
   // -------------------------
   // Hints / Points
