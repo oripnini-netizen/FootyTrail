@@ -333,6 +333,12 @@ export default function TutorialPage() {
     setCompActiveIndex(out.length ? 0 : -1);
   }, [compQuery, groupedCompetitions]);
 
+  // ✅ NEW: auto-toggle suggestions open/closed based on query
+  useEffect(() => {
+    const q = compQuery.trim();
+    setShowCompSuggestions(q.length > 0);
+  }, [compQuery]);
+
   useEffect(() => {
     if (compActiveIndex < 0 || !compItemRefs.current[compActiveIndex]) return;
     compItemRefs.current[compActiveIndex].scrollIntoView({
@@ -360,7 +366,7 @@ export default function TutorialPage() {
       if (s) {
         addCompetitionById(s.id);
         setCompQuery('');
-        setShowCompSuggestions(false);
+        // keep focus and let the new effect reopen suggestions when user types again
       }
     } else if (e.key === 'Escape') {
       setShowCompSuggestions(false);
@@ -403,7 +409,7 @@ export default function TutorialPage() {
                     />
                   </label>
 
-                  {/* Replaced URL input with direct file upload */}
+                  {/* Direct file upload for avatar */}
                   <div className="block">
                     <span className="text-sm text-gray-700">Avatar (optional)</span>
                     <div className="mt-1 flex items-center gap-3">
@@ -496,7 +502,7 @@ export default function TutorialPage() {
                             onClick={() => {
                               addCompetitionById(s.id);
                               setCompQuery('');
-                              setShowCompSuggestions(false);
+                              // dropdown auto re-opens when user types again (effect above)
                             }}
                           >
                             {s.logo ? (
