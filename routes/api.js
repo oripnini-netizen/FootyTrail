@@ -21,6 +21,25 @@ if (!supabaseUrl || !serviceKey) {
 }
 const supabase = createClient(supabaseUrl, serviceKey);
 
+// ---------- UTC+2 helpers ----------
+const TZ_PLUS2_MIN = 120;
+const TZ_PLUS2_MS  = TZ_PLUS2_MIN * 60 * 1000;
+
+/** Returns YYYY-MM-DD string for "today" in UTC+2. */
+function dateStringUTCPlus2(d = new Date()) {
+  const plus2 = new Date(d.getTime() + TZ_PLUS2_MS);
+  return plus2.toISOString().slice(0, 10);
+}
+
+/** Returns a Date (UTC) representing the start of today in UTC+2. */
+function startOfTodayUTCForUTCPlus2(d = new Date()) {
+  const plus2 = new Date(d.getTime() + TZ_PLUS2_MS);
+  const startPlus2 = new Date(plus2);
+  startPlus2.setUTCHours(0, 0, 0, 0);
+  // Convert that UTC+2 midnight back to actual UTC time:
+  return new Date(startPlus2.getTime() - TZ_PLUS2_MS);
+}
+
 // ---------- Tables (new model) ----------
 const TABLE_COMP   = 'competitions';
 const TABLE_PIS    = 'players_in_seasons';
@@ -33,7 +52,6 @@ const TABLE_LS     = 'leagues_seasons';
 function toIdString(v) {
   if (v == null) return null;
   if (typeof v === 'object') {
-    // Common keys we might see coming from the client or RPCs
     const guess =
       v.player_id ?? v.id ?? v.value ?? v.competition_id ?? v.season_id ?? null;
     return guess != null ? String(guess) : String(v);
@@ -59,7 +77,6 @@ function normalizeNewFilters(raw = {}) {
 }
 
 function parseAgeFromDobAge(dobAge) {
-  // examples: "1992-05-01 (33)"
   if (!dobAge) return null;
   const m = String(dobAge).match(/\((\d{1,2})\)/);
   return m ? Number(m[1]) : null;
@@ -75,8 +92,8 @@ async function getPlayerCardFromPIS(playerId) {
     .select(
       'player_id, player_name, player_position, player_nationality, player_dob_age, player_photo, season_id'
     )
-    .eq('player_id', pid)          // player_id is BIGINT; string works fine
-    .order('season_id', { ascending: false }) // season_id is text "2025"
+    .eq('player_id', pid)
+    .order('season_id', { ascending: false })
     .limit(1);
 
   if (error) throw error;
@@ -97,15 +114,14 @@ async function getPlayerCardFromPIS(playerId) {
 // ---------- RPC wrappers (new model) ----------
 async function rpcCountPlayersPool({ competitions, seasons, minMarketValue }) {
   const { data, error } = await supabase.rpc('rpc_count_players_pool', {
-    competitions,                 // text[] or null
-    seasons,                      // text[] or null
+    competitions,
+    seasons,
     min_market_value: minMarketValue || 0,
   });
   if (error) throw error;
   return typeof data === 'number' ? data : Number(data);
 }
 
-/** Accepts either [123, 456] OR [{player_id:123}, {player_id:456}] from the RPC. */
 async function rpcGetPlayerIdsMarket({ competitions, seasons, minMarketValue }) {
   const { data, error } = await supabase.rpc('rpc_get_player_ids_market', {
     competitions,
@@ -116,7 +132,6 @@ async function rpcGetPlayerIdsMarket({ competitions, seasons, minMarketValue }) 
 
   return (data || [])
     .map((row) => {
-      // row can be a scalar or an object with player_id
       if (typeof row === 'object' && row !== null) {
         return toIdString(row.player_id ?? row);
       }
@@ -145,7 +160,6 @@ function standardizeFee(feeRaw = '') {
 
 function cleanFeeText(str) {
   if (!str) return null;
-  // strip any HTML (e.g. "Loan fee:<br /><i class='...'>€2.00m</i>")
   const txt = String(str).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
   return txt || null;
 }
@@ -192,7 +206,7 @@ async function getTransfermarktTransfers(playerId) {
       season: t?.season || null,
       date: dateStr,
       type: standardizeFee(feeClean),
-      valueRaw: feeClean, // cleaned text, no HTML
+      valueRaw: feeClean,
       in:  { name: inTeam.clubName || null,  logo: inTeam['clubEmblem-2x'] || inTeam.clubEmblem || null,  flag: inTeam.countryFlag || null },
       out: { name: outTeam.clubName || null, logo: outTeam['clubEmblem-2x'] || outTeam.clubEmblem || null, flag: outTeam.countryFlag || null },
     };
@@ -311,7 +325,7 @@ router.post('/counts', async (req, res) => {
         .gte('created_at', dateString);
 
       if (!recentError && Array.isArray(recentGames) && recentGames.length) {
-        const filteredIds = await rpcGetPlayerIdsMarket(filters); // text[]
+        const filteredIds = await rpcGetPlayerIdsMarket(filters);
         const filteredSet = new Set(filteredIds.map(String));
         let overlap = 0;
         for (const g of recentGames) {
@@ -335,7 +349,7 @@ router.post('/random-player', async (req, res) => {
     const userId  = req.body?.userId;
 
     // 1) Eligible pool
-    let poolIds = await rpcGetPlayerIdsMarket(filters); // array of strings
+    let poolIds = await rpcGetPlayerIdsMarket(filters);
 
     // 2) Optionally exclude last 30 days for this user
     if (userId && poolIds.length) {
@@ -377,11 +391,10 @@ router.post('/random-player', async (req, res) => {
         nationality: card.nationality,
         position: card.position,
         photo: card.photo,
-        transferHistoryCount: transfers.length, // info only; client still fetches list
+        transferHistoryCount: transfers.length,
       });
     }
 
-    // none found with transfers
     return res.status(404).json({ error: 'No eligible player with transfer history found.' });
   } catch (e) {
     console.error('POST /random-player error:', e);
@@ -395,7 +408,6 @@ router.get('/names', async (req, res) => {
     const q = (req.query.q || '').toString().trim();
     if (!q) return res.json([]);
 
-    // token-aware LIKE: "%word1%word2%...%"
     const tokens  = q.toLowerCase().split(/\s+/).filter(Boolean);
     const pattern = `%${tokens.join('%')}%`;
 
@@ -407,7 +419,6 @@ router.get('/names', async (req, res) => {
 
     if (error) return res.status(500).json({ error: error.message });
 
-    // unique by player_id (since table has multiple seasons per player)
     const seen = new Set();
     const out  = [];
     for (const r of data || []) {
@@ -469,7 +480,8 @@ router.get('/transfers/:playerId', async (req, res) => {
 // ---------- Daily challenge ----------
 router.get('/daily', async (_req, res) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
+    // Use UTC+2 date for "today"
+    const today = dateStringUTCPlus2();
     const { data, error } = await supabase
       .from('daily_challenges')
       .select('*')
@@ -489,9 +501,9 @@ router.get('/daily', async (_req, res) => {
 
 router.post('/generate-daily-challenge', async (req, res) => {
   try {
-    const date = (req.body?.date || '').toString() || new Date().toISOString().slice(0, 10);
+    // Default to UTC+2 "today" if date not provided
+    const date = (req.body?.date || '').toString() || dateStringUTCPlus2();
 
-    // Prefer request body; else read saved settings (new columns first, legacy fallback)
     let filters = null;
     if (req.body?.filters) {
       filters = normalizeNewFilters(req.body.filters);
@@ -526,7 +538,6 @@ router.post('/generate-daily-challenge', async (req, res) => {
       return res.status(404).json({ success: false, error: 'No player found for these filters.' });
     }
 
-    // deterministic pick by date
     const idx =
       Math.abs(Array.from(date).reduce((h, ch) => ((h << 5) - h + ch.charCodeAt(0)) | 0, 0)) % poolIds.length;
 
@@ -567,8 +578,8 @@ router.get('/limits/:userId', async (req, res) => {
     const { userId } = req.params;
     if (!userId) return res.status(400).json({ error: 'Missing userId' });
 
-    const startOfTodayUtc = new Date();
-    startOfTodayUtc.setUTCHours(0, 0, 0, 0);
+    // Use start-of-today at UTC+2
+    const startOfTodayUtc2 = startOfTodayUTCForUTCPlus2();
 
     const [{ data: todayGames, error: todayErr }, { data: allGames, error: allErr }] =
       await Promise.all([
@@ -576,7 +587,7 @@ router.get('/limits/:userId', async (req, res) => {
           .from('games_records')
           .select('points_earned, is_daily_challenge, won, player_id, created_at')
           .eq('user_id', userId)
-          .gte('created_at', startOfTodayUtc.toISOString()),
+          .gte('created_at', startOfTodayUtc2.toISOString()),
         supabase.from('games_records').select('points_earned').eq('user_id', userId),
       ]);
 

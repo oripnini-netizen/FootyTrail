@@ -24,7 +24,7 @@ import { motion } from 'framer-motion';
 import { saveGamePageCache, loadGamePageCache, clearGamePageCache } from '../state/gamePageCache.js';
 
 import {
-  Users,         // use stable icon
+  Users,
   Star,
   Trash2,
   Filter,
@@ -45,6 +45,8 @@ const fmt = (n) => new Intl.NumberFormat('en-US').format(n || 0);
 const fmtCurrency = (n) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(Number(n || 0));
 
+// --- UTC+2 countdown helper ---
+const TZ_PLUS2_MS = 2 * 60 * 60 * 1000;
 function CountdownToTomorrow() {
   const [timeLeft, setTimeLeft] = useState(getTimeLeft());
   useEffect(() => {
@@ -53,9 +55,13 @@ function CountdownToTomorrow() {
   }, []);
   function getTimeLeft() {
     const now = new Date();
-    const tomorrow = new Date(now);
-    tomorrow.setHours(24, 0, 0, 0);
-    const diff = Math.max(0, tomorrow - now);
+    // Work in a "UTC+2 frame": shift now by +2h
+    const plus2Now = new Date(now.getTime() + TZ_PLUS2_MS);
+    // Next midnight in that frame
+    const nextMidPlus2 = new Date(plus2Now);
+    nextMidPlus2.setUTCHours(24, 0, 0, 0); // midnight of the next day in the +2h frame
+    // Diff in that same frame equals real-time diff
+    const diff = Math.max(0, nextMidPlus2.getTime() - plus2Now.getTime());
     const hours = Math.floor(diff / 1000 / 60 / 60);
     const minutes = Math.floor((diff / 1000 / 60) % 60);
     const seconds = Math.floor((diff / 1000) % 60);
@@ -387,7 +393,7 @@ export default function GamePage() {
     }
   };
 
-  // DAILY GAME START — FIXED MAPPING (new backend shape with fallbacks)
+  // DAILY GAME START — FIXED MAPPING
   const onStartDaily = async () => {
     try {
       setDailyLoading(true);
@@ -399,7 +405,6 @@ export default function GamePage() {
         return;
       }
 
-      // fetch detailed player info
       const res = await fetch(`${API_BASE}/player/${dailyChallenge.player_id}`);
       if (!res.ok) throw new Error('Failed to fetch player data');
       const playerData = await res.json();
@@ -857,15 +862,8 @@ export default function GamePage() {
 
 // ---------- helpers ----------
 
-// normalize seasons payload into a sorted (desc) string array
 function normalizeSeasons(payload) {
   let raw = [];
-
-  // Supported shapes:
-  // - ['2020','2021',...]
-  // - { seasons: [...] }
-  // - { data: [...] }
-  // - any object that contains season-like values
   if (Array.isArray(payload)) {
     raw = payload;
   } else if (payload && Array.isArray(payload.seasons)) {
@@ -882,7 +880,6 @@ function normalizeSeasons(payload) {
   }
 
   const uniq = Array.from(new Set(raw.map(String)));
-  // Sort descending so "Last 5" is newest 5 (e.g., 2025..2021)
   uniq.sort((a, b) => String(b).localeCompare(String(a)));
   return uniq;
 }
