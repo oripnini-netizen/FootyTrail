@@ -410,16 +410,22 @@ router.get('/names', async (req, res) => {
     if (!q) return res.json([]);
 
     // Use the robust RPC you created:
-    // create or replace function public.suggest_names(q text, lim int default 25)
     const { data, error } = await supabase.rpc('suggest_names', { q, lim: limit });
     if (error) throw error;
 
-    // Normalize the shape for the client
-    const suggestions = (data || []).map(r => ({
-      id: r.player_id,
-      name: r.player_name || r.player_norm_name || '',
-      norm: r.player_norm_name || '',
-    }));
+    // Normalize the shape the UI expects
+    const suggestions = (data || []).map((r) => {
+      const id   = r.player_id;
+      const name = r.player_name || r.player_norm_name || '';
+      const norm = r.player_norm_name || '';
+      return {
+        id,
+        name,
+        norm,
+        label: name,   // <-- add label for UI components
+        value: name,   // <-- add value as well (compat with some dropdowns)
+      };
+    });
 
     return res.json(suggestions);
   } catch (err) {
