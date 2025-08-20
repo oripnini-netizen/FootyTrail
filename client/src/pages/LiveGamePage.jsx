@@ -18,7 +18,7 @@ function classNames(...s) {
 }
 
 // -------------------------
-// Name matching helpers
+// Name matching helpers (kept in case you want local filtering later)
 // -------------------------
 function normalize(str) {
   return (str || '')
@@ -33,7 +33,6 @@ function multiTokenStartsWithMatch(query, candidate) {
   const qTokens = tokenize(query);
   const cTokens = tokenize(candidate);
   if (!qTokens.length || !cTokens.length) return false;
-  // every query token must match the start of at least one candidate token
   return qTokens.every((qt) => cTokens.some((ct) => ct.startsWith(qt)));
 }
 function longestToken(s) {
@@ -79,7 +78,7 @@ export default function LiveGamePage() {
   const INITIAL_TIME = 120;
 
   const [guessesLeft, setGuessesLeft] = useState(3);
-  const [guess, setGuess] = useState('');
+  const [guess, setGuess] = useState(''); // keep string
   const [suggestions, setSuggestions] = useState([]);
   const [highlightIndex, setHighlightIndex] = useState(-1);
 
@@ -125,7 +124,6 @@ export default function LiveGamePage() {
                         stats: { pointsEarned: 0, timeSec: INITIAL_TIME, guessesUsed: 3, usedHints },
                         filters,
                         isDaily,
-                        // PASS previous round potential points:
                         potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
                       },
                       replace: true,
@@ -164,30 +162,68 @@ export default function LiveGamePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state?.id, location.state?.name]);
 
-  // suggestions (debounced)
-useEffect(() => {
-  let active = true;
-  const id = setTimeout(async () => {
-    const q = guess.trim();
-    if (!q) {
-      if (active) setSuggestions([]);
-      return;
-    }
-    try {
-      const res = await suggestNames(q, 50); // ask for more than 5
-      if (active) {
-        // backend returns [{ id, name, norm }]
-        setSuggestions(Array.isArray(res) ? res : []);
+  // -------------------------
+  // Suggestions (debounced, defensive)
+  // -------------------------
+  useEffect(() => {
+    let active = true;
+    const id = setTimeout(async () => {
+      // Always coerce to string before trimming
+      const raw = typeof guess === 'string' ? guess : String(guess ?? '');
+      const q = raw.trim();
+      if (!q) {
+        if (active) setSuggestions([]);
+        return;
       }
-    } catch {
-      if (active) setSuggestions([]);
-    }
-  }, 200);
-  return () => {
-    active = false;
-    clearTimeout(id);
-  };
-}, [guess]);
+      try {
+        const res = await suggestNames(q, 50); // ask for more than 5
+        if (!active) return;
+
+        // Normalize to { id, display }
+        const normalized = (Array.isArray(res) ? res : [])
+          .map((r) => {
+            if (typeof r === 'string') return { id: r, display: r };
+            const idVal =
+              r.id ??
+              r.player_id ??
+              r.pid ??
+              r.value ??
+              `${r.player_name || r.name || r.display || r.player_norm_name || r.norm || ''}`.toLowerCase();
+
+            const displayVal =
+              r.display ??
+              r.name ??
+              r.player_name ??
+              r.norm ??
+              r.player_norm_name ??
+              '';
+
+            return { id: idVal, display: String(displayVal || '').trim() };
+          })
+          .filter((x) => x.display); // drop empties
+
+        // De-duplicate by display text
+        const seen = new Set();
+        const deduped = [];
+        for (const s of normalized) {
+          const key = s.display.toLowerCase();
+          if (!seen.has(key)) {
+            seen.add(key);
+            deduped.push(s);
+          }
+        }
+
+        setSuggestions(deduped);
+      } catch (e) {
+        console.error('[suggestNames] failed:', e);
+        if (active) setSuggestions([]);
+      }
+    }, 200);
+    return () => {
+      active = false;
+      clearTimeout(id);
+    };
+  }, [guess]);
 
   // -------------------------
   // Hints / Points
@@ -249,7 +285,6 @@ useEffect(() => {
             stats: { pointsEarned: 0, timeSec: INITIAL_TIME, guessesUsed: 3, usedHints },
             filters,
             isDaily,
-            // PASS previous round potential points:
             potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
           },
           replace: true,
@@ -347,9 +382,10 @@ useEffect(() => {
   // Submit guess
   // -------------------------
   const submitGuess = async (value) => {
-    if (!value?.trim() || endedRef.current) return;
-    const correct =
-      value.trim().toLowerCase() === (gameData?.name || '').trim().toLowerCase();
+    const v = typeof value === 'string' ? value.trim() : String(value ?? '').trim();
+    if (!v || endedRef.current) return;
+
+    const correct = v.toLowerCase() === (gameData?.name || '').trim().toLowerCase();
 
     if (correct) {
       endedRef.current = true;
@@ -376,7 +412,6 @@ useEffect(() => {
           },
           filters,
           isDaily,
-          // PASS previous round potential points:
           potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
         },
         replace: true,
@@ -411,7 +446,6 @@ useEffect(() => {
           },
           filters,
           isDaily,
-          // PASS previous round potential points:
           potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
         },
         replace: true,
@@ -553,7 +587,8 @@ useEffect(() => {
               type="text"
               value={guess}
               onChange={(e) => {
-                setGuess(e.target.value);
+                // ensure we store a string
+                setGuess(typeof e.target.value === 'string' ? e.target.value : String(e.target.value ?? ''));
                 setHighlightIndex(-1);
               }}
               onKeyDown={(e) => {
@@ -599,7 +634,6 @@ useEffect(() => {
                         },
                         filters,
                         isDaily,
-                        // PASS previous round potential points:
                         potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
                       },
                       replace: true,
@@ -617,7 +651,7 @@ useEffect(() => {
             <ul className="mt-3 border rounded divide-y max-h-56 overflow-auto">
               {suggestions.map((sug, idx) => (
                 <li
-                  key={sug.id ?? sug.display}
+                  key={sug.id ?? sug.display ?? idx}
                   className={classNames(
                     'px-3 py-2 cursor-pointer text-sm',
                     idx === highlightIndex ? 'bg-sky-50' : 'hover:bg-gray-50'
@@ -628,6 +662,7 @@ useEffect(() => {
                     e.preventDefault();
                   }}
                   onClick={() => {
+                    if (!sug?.display) return;
                     setGuess(sug.display);
                     setSuggestions([]);
                     submitGuess(sug.display);
@@ -805,7 +840,6 @@ function NoCopySection({ children }) {
   return (
     <div
       ref={ref}
-      // Make selection & long-press copy impossible visually and behaviorally
       style={{
         userSelect: 'none',
         WebkitUserSelect: 'none',
