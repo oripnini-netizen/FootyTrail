@@ -1,5 +1,5 @@
 // client/src/pages/TutorialPage.jsx
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   ChevronLeft,
@@ -14,6 +14,7 @@ import {
   Trash2,
   Star,
   CheckSquare,
+  Search,
 } from 'lucide-react';
 
 import { useAuth } from '../context/AuthContext';
@@ -98,6 +99,14 @@ export default function TutorialPage() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
 
+  // ---- Competitions search state (autocomplete) ----
+  const [compQuery, setCompQuery] = useState('');
+  const [compSuggestions, setCompSuggestions] = useState([]);
+  const [showCompSuggestions, setShowCompSuggestions] = useState(false);
+  const [compActiveIndex, setCompActiveIndex] = useState(-1);
+  const compListRef = useRef(null);
+  const compItemRefs = useRef([]);
+
   // flatten list of competitions
   const flatCompetitions = useMemo(() => {
     const arr = [];
@@ -105,7 +114,7 @@ export default function TutorialPage() {
     return arr;
   }, [groupedCompetitions]);
 
-  // id -> "Country - Competition"
+  // id -> { label, country, comp }
   const compIdToLabel = useMemo(() => {
     const m = {};
     Object.entries(groupedCompetitions).forEach(([country, comps]) => {
@@ -281,6 +290,83 @@ export default function TutorialPage() {
   const selectAllSeasons = () => setSelectedSeasons(allSeasons);
   const selectLast5Seasons = () => setSelectedSeasons(allSeasons.slice(0, 5));
 
+  // ---- Competitions autocomplete logic ----
+  useEffect(() => {
+    const q = compQuery.trim().toLowerCase();
+    if (!q) {
+      setCompSuggestions([]);
+      setCompActiveIndex(-1);
+      return;
+    }
+    const pool = [];
+    Object.entries(groupedCompetitions).forEach(([country, comps]) => {
+      (comps || []).forEach((c) => {
+        const id = String(c.competition_id);
+        const name = c.competition_name || '';
+        const label = `${country} - ${name}`;
+        if (
+          country.toLowerCase().includes(q) ||
+          name.toLowerCase().includes(q) ||
+          label.toLowerCase().includes(q)
+        ) {
+          pool.push({
+            id,
+            label,
+            logo: c.logo_url,
+            country,
+            name,
+          });
+        }
+      });
+    });
+    // de-dupe by id
+    const seen = new Set();
+    const out = [];
+    for (const s of pool) {
+      if (!seen.has(s.id)) {
+        out.push(s);
+        seen.add(s.id);
+      }
+      if (out.length >= 25) break;
+    }
+    setCompSuggestions(out);
+    setCompActiveIndex(out.length ? 0 : -1);
+  }, [compQuery, groupedCompetitions]);
+
+  useEffect(() => {
+    if (compActiveIndex < 0 || !compItemRefs.current[compActiveIndex]) return;
+    compItemRefs.current[compActiveIndex].scrollIntoView({
+      block: 'nearest',
+    });
+  }, [compActiveIndex]);
+
+  const addCompetitionById = (id) => {
+    setSelectedCompetitionIds((prev) =>
+      prev.includes(id) ? prev : [...prev, id]
+    );
+  };
+
+  const handleCompKeyDown = (e) => {
+    if (!showCompSuggestions || compSuggestions.length === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setCompActiveIndex((i) => Math.min(i + 1, compSuggestions.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setCompActiveIndex((i) => Math.max(i - 1, 0));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const s = compSuggestions[compActiveIndex] || compSuggestions[0];
+      if (s) {
+        addCompetitionById(s.id);
+        setCompQuery('');
+        setShowCompSuggestions(false);
+      }
+    } else if (e.key === 'Escape') {
+      setShowCompSuggestions(false);
+    }
+  };
+
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.35 }}>
@@ -377,6 +463,56 @@ export default function TutorialPage() {
                     </>
                   }
                 >
+                  {/* Search bar */}
+                  <div className="relative mb-3">
+                    <div className="relative">
+                      <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                      <input
+                        type="text"
+                        value={compQuery}
+                        onChange={(e) => setCompQuery(e.target.value)}
+                        onFocus={() => setShowCompSuggestions(true)}
+                        onKeyDown={handleCompKeyDown}
+                        placeholder="Search country or competition…"
+                        className="w-full pl-8 pr-3 py-2 border rounded-md"
+                      />
+                    </div>
+
+                    {/* Suggestions dropdown */}
+                    {showCompSuggestions && compSuggestions.length > 0 && (
+                      <ul
+                        ref={compListRef}
+                        className="absolute z-10 mt-1 w-full max-h-56 overflow-auto rounded-md border bg-white shadow"
+                        onMouseDown={(e) => e.preventDefault()} // keep input focus on click
+                      >
+                        {compSuggestions.map((s, idx) => (
+                          <li
+                            key={`${s.id}-${idx}`}
+                            ref={(el) => (compItemRefs.current[idx] = el)}
+                            className={cx(
+                              'flex items-center gap-2 px-2 py-1 cursor-pointer',
+                              idx === compActiveIndex ? 'bg-green-100' : 'hover:bg-gray-50'
+                            )}
+                            onClick={() => {
+                              addCompetitionById(s.id);
+                              setCompQuery('');
+                              setShowCompSuggestions(false);
+                            }}
+                          >
+                            {s.logo ? (
+                              <img src={s.logo} alt="" className="w-4 h-4 object-contain" />
+                            ) : (
+                              <span className="w-4 h-4" />
+                            )}
+                            <span className="text-sm">
+                              <span className="font-medium">{s.country}</span> – {s.name}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+
                   {/* Chosen competitions chips */}
                   {!!selectedCompetitionIds.length && (
                     <div className="mb-2">
