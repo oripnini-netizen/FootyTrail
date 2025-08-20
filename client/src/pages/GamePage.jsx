@@ -5,7 +5,8 @@
 // - Distinct "Difficulty Filters" with 3 collapsibles (competitions, seasons, min MV)
 // - Pool counts refresh on change (no full page reload)
 // - Min MV quick presets (clear, 100K, 500K, 1M, 5M, 10M, 25M, 50M)
-// - Daily Challenge: fetches today's player and navigates with correct shape
+// - Daily Challenge: LLM prompt + fetch today's player and navigate with correct shape
+// - "Who are ya?!" button moved to the top of the main card with UserSearch icon
 
 import React, { useEffect, useMemo, useState, useLayoutEffect, useRef } from 'react';
 import {
@@ -55,12 +56,9 @@ function CountdownToTomorrow() {
   }, []);
   function getTimeLeft() {
     const now = new Date();
-    // Work in a "UTC+2 frame": shift now by +2h
     const plus2Now = new Date(now.getTime() + TZ_PLUS2_MS);
-    // Next midnight in that frame
     const nextMidPlus2 = new Date(plus2Now);
-    nextMidPlus2.setUTCHours(24, 0, 0, 0); // midnight of the next day in the +2h frame
-    // Diff in that same frame equals real-time diff
+    nextMidPlus2.setUTCHours(24, 0, 0, 0);
     const diff = Math.max(0, nextMidPlus2.getTime() - plus2Now.getTime());
     const hours = Math.floor(diff / 1000 / 60 / 60);
     const minutes = Math.floor((diff / 1000 / 60) % 60);
@@ -95,11 +93,16 @@ export default function GamePage() {
   const [expandedCountries, setExpandedCountries] = useState({});
   const [loadingCounts, setLoadingCounts] = useState(false);
 
-  // Prompt & limits
+  // Prompts
   const [gamePrompt, setGamePrompt] = useState(
     "Get ready to outsmart your rivals and predict the game—let’s kick off a new round now!"
   );
   const [isLoadingPrompt, setIsLoadingPrompt] = useState(true);
+
+  const [dailyPrompt, setDailyPrompt] = useState(
+    "Today's Daily Challenge is live! Guess a star from the elite leagues and grab 10,000 points and an extra game."
+  );
+  const [isLoadingDailyPrompt, setIsLoadingDailyPrompt] = useState(true);
 
   const [limits, setLimits] = useState({
     gamesToday: 0,
@@ -258,7 +261,7 @@ export default function GamePage() {
     return () => { cancelled = true; };
   }, [user?.id]);
 
-  // Prompt
+  // Regular prompt
   useEffect(() => {
     if (restoredFromCacheRef.current) {
       setIsLoadingPrompt(false);
@@ -281,6 +284,28 @@ export default function GamePage() {
         setIsLoadingPrompt(false);
       }
     })();
+  }, []);
+
+  // Daily prompt (only matters if not yet played)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setIsLoadingDailyPrompt(true);
+        const res = await fetch(`${API_BASE}/ai/generate-daily-prompt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        if (!res.ok) throw new Error('daily prompt fetch failed');
+        const data = await res.json();
+        if (!cancelled && data?.prompt) setDailyPrompt(data.prompt);
+      } catch {
+        // keep fallback
+      } finally {
+        if (!cancelled) setIsLoadingDailyPrompt(false);
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   // Counts refresh on filter changes (no full page reload)
@@ -477,7 +502,7 @@ export default function GamePage() {
             <h2 className="text-xl font-semibold mb-2">Daily Challenge</h2>
             <p className="text-gray-600 mb-4">
               {!limits.dailyPlayed
-                ? "Today's Daily Challenge is live! Play now for a chance to win 10,000 points and an extra game!"
+                ? (isLoadingDailyPrompt ? 'Loading…' : dailyPrompt)
                 : "Next challenge in "}
               {limits.dailyPlayed && <CountdownToTomorrow />}
             </p>
@@ -537,9 +562,29 @@ export default function GamePage() {
           {/* Main card or lockout */}
           {!reachedLimit ? (
             <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-6">
-              <div className="flex justify-center mb-6">
-                <UserSearch className="h-16 w-16 text-gray-400" />
+              {/* Moved Play button to the top (replacing the old big icon) */}
+              <div className="flex justify-center mb-4">
+                <button
+                  onClick={onStartGame}
+                  disabled={gameLoading || poolCount === 0}
+                  className={classNames(
+                    'relative overflow-hidden rounded-xl bg-gradient-to-r from-green-800 via-green-700 to-green-800 px-8 py-3 font-bold text-white shadow-lg transition-all hover:scale-105 hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-green-600 focus:ring-offset-2',
+                    (gameLoading || poolCount === 0) && 'opacity-70 cursor-not-allowed'
+                  )}
+                >
+                  <div className="absolute inset-0 bg-white opacity-10 transition-opacity hover:opacity-20"></div>
+                  <div className="flex items-center justify-center gap-2">
+                    {gameLoading ? (
+                      <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
+                    ) : (
+                      <UserSearch className="h-5 w-5 text-green-100" />
+                    )}
+                    <span className="text-lg">{gameLoading ? 'Loading...' : 'Who are ya?!'}</span>
+                  </div>
+                </button>
               </div>
+
+              {/* Prompt */}
               <p className="text-center text-gray-600 mb-6">
                 {isLoadingPrompt ? (
                   <span className="inline-block animate-pulse">Getting ready for your challenge...</span>
@@ -549,7 +594,7 @@ export default function GamePage() {
               </p>
 
               {/* Player Pool */}
-              <div className="bg-yellow-50 rounded-lg p-4 mb-6">
+              <div className="bg-yellow-50 rounded-lg p-4 mb-2">
                 <div className="flex justify-between items-center">
                   <div>
                     <div className="text-lg font-semibold text-yellow-800">
@@ -566,32 +611,8 @@ export default function GamePage() {
                 </div>
               </div>
 
-              {/* Play button */}
-              <div className="flex justify-center mt-6">
-                <button
-                  onClick={onStartGame}
-                  disabled={gameLoading || poolCount === 0}
-                  className={`relative overflow-hidden rounded-xl bg-gradient-to-r from-green-800 via-green-700 to-green-800 px-8 py-3 font-bold text-white shadow-lg transition-all hover:scale-105 hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-green-600 focus:ring-offset-2 ${
-                    gameLoading ? 'opacity-70' : 'opacity-100'
-                  }`}
-                >
-                  <div className="absolute inset-0 bg-white opacity-10 transition-opacity hover:opacity-20"></div>
-                  <div className="flex items-center justify-center gap-2">
-                    {gameLoading ? (
-                      <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
-                    ) : (
-                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-100">
-                        <circle cx="11" cy="11" r="8"></circle>
-                        <path d="m21 21-4.3-4.3"></path>
-                      </svg>
-                    )}
-                    <span className="text-lg">{gameLoading ? 'Loading...' : 'Who are ya?!'}</span>
-                  </div>
-                </button>
-              </div>
-
               {/* Selected Filters (chips) */}
-              <div className="mb-4">
+              <div className="mb-4 mt-4">
                 <div className="text-sm text-gray-600 mb-2">Competitions</div>
                 <SelectedChips
                   items={selectedCompetitionIds}
