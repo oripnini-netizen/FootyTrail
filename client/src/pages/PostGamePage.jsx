@@ -22,6 +22,44 @@ import {
 
 const REGULAR_START_POINTS = 6000; // kept for safety, but not used for "play again" anymore
 
+/* =========================
+   UTC day boundary helpers
+   ========================= */
+function toUtcMidnight(dateLike) {
+  const d = typeof dateLike === 'string' ? new Date(`${dateLike}T00:00:00.000Z`) : new Date(dateLike);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+}
+function todayUtcMidnight() {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
+function dayRangeUtc(dateStr) {
+  const start = toUtcMidnight(dateStr);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+/** Robust “time until next UTC midnight” */
+function msUntilNextUtcMidnight() {
+  const now = new Date();
+  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+  return next.getTime() - now.getTime();
+}
+function CountdownToTomorrow() {
+  const [timeLeft, setTimeLeft] = useState(format(msUntilNextUtcMidnight()));
+  useEffect(() => {
+    const id = setInterval(() => setTimeLeft(format(msUntilNextUtcMidnight())), 1000);
+    return () => clearInterval(id);
+  }, []);
+  function format(ms) {
+    const totalSec = Math.max(0, Math.floor(ms / 1000));
+    const h = String(Math.floor(totalSec / 3600)).padStart(2, '0');
+    const m = String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0');
+    const s = String(totalSec % 60).padStart(2, '0');
+    return `${h}:${m}:${s}`;
+  }
+  return <span>{timeLeft}</span>;
+}
+
 export default function PostGamePage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -56,10 +94,13 @@ export default function PostGamePage() {
   const actionsRef = useRef(null);
 
   // ---- cache guards ----
-  the hasRestoredRef = useRef(false);
+  const hasRestoredRef = useRef(false);
   const restoredFromCacheRef = useRef(false);
 
   const playerKey = getPlayerKey(player); // used to validate cache belongs to this result
+
+  // Personal display name resolved from public.users (fallback to auth metadata/email)
+  const [displayName, setDisplayName] = useState(null);
 
   // Fire confetti only for wins (first real render)
   useEffect(() => {
@@ -85,7 +126,7 @@ export default function PostGamePage() {
         await animate(scope.current, { x: -2 }, { duration: 0.05 });
         await animate(scope.current, { x: 2 }, { duration: 0.05 });
         await animate(scope.current, { x: 0 }, { duration: 0.05 });
-      } catch {/* dev StrictMode double-invoke safe to ignore */ }
+      } catch { /* StrictMode double-invoke safe */ }
     };
     sequence();
   }, [didWin, pageReady, animate]);
@@ -147,21 +188,56 @@ export default function PostGamePage() {
     };
   }, [playerKey, aiGeneratedFact, outroLine, gamesLeft]);
 
-  // ---------- Fetch "games left" ----------
+  // ---------- Resolve the user's display name from public.users (exactly "Ori Pnini" in your case) ----------
+  useEffect(() => {
+    let cancelled = false;
+    async function loadName() {
+      if (!user?.id) return;
+      try {
+        const { data, error } = await supabase
+          .from('users')
+          .select('full_name')
+          .eq('id', user.id)
+          .single();
+        if (error) throw error;
+        if (!cancelled) {
+          const name =
+            data?.full_name ||
+            user?.user_metadata?.full_name ||
+            (user?.email ? user.email.split('@')[0] : null) ||
+            null;
+          setDisplayName(name);
+        }
+      } catch {
+        if (!cancelled) {
+          const name =
+            user?.user_metadata?.full_name ||
+            (user?.email ? user.email.split('@')[0] : null) ||
+            null;
+          setDisplayName(name);
+        }
+      }
+    }
+    loadName();
+    return () => { cancelled = true; };
+  }, [user?.id]);
+
+  // ---------- Fetch "games left" — now using UTC day range ----------
   useEffect(() => {
     if (!user?.id) return;
     let cancelled = false;
 
-    async function fetchGamesLeft() {
+    async function fetchGamesLeftUtc() {
       try {
-        const today = new Date().toISOString().split('T')[0];
+        const todayISO = todayUtcMidnight().toISOString().slice(0, 10);
+        const { start, end } = dayRangeUtc(todayISO);
         const { data, error } = await supabase
           .from('games_records')
           .select('id')
           .eq('user_id', user.id)
           .eq('is_daily_challenge', false)
-          .gte('created_at', `${today}T00:00:00`)
-          .lte('created_at', `${today}T23:59:59`);
+          .gte('created_at', start)
+          .lt('created_at', end);
         if (error) throw error;
         if (!cancelled) {
           const remaining = 10 - (data?.length || 0);
@@ -172,36 +248,9 @@ export default function PostGamePage() {
       }
     }
 
-    fetchGamesLeft();
+    fetchGamesLeftUtc();
     return () => { cancelled = true; };
   }, [user?.id]);
-
-  /* ========= UTC daily countdown (matches Supabase day boundary) ========= */
-  function msUntilNextUtcMidnight() {
-    const now = new Date();
-    const next = new Date(Date.UTC(
-      now.getUTCFullYear(),
-      now.getUTCMonth(),
-      now.getUTCDate() + 1
-    ));
-    return next.getTime() - now.getTime();
-  }
-  function CountdownToTomorrow() {
-    const [timeLeft, setTimeLeft] = useState(getTimeLeft());
-    useEffect(() => {
-      const interval = setInterval(() => setTimeLeft(getTimeLeft()), 1000);
-      return () => clearInterval(interval);
-    }, []);
-    function getTimeLeft() {
-      const ms = Math.max(0, msUntilNextUtcMidnight());
-      const totalSec = Math.floor(ms / 1000);
-      const hours = Math.floor(totalSec / 3600);
-      const minutes = Math.floor((totalSec % 3600) / 60);
-      const seconds = totalSec % 60;
-      return `${hours}h ${minutes}m ${seconds}s`;
-    }
-    return <span>{timeLeft}</span>;
-  }
 
   // ---------- AI bits: fun fact + outro line ----------
   useEffect(() => {
@@ -240,7 +289,7 @@ export default function PostGamePage() {
           const data = await res.json();
           fact = (data && typeof data.fact === 'string') ? data.fact.trim() : '';
         }
-      } catch {/* ignore */ }
+      } catch { /* ignore */ }
 
       // 2) Dynamic top banner line (LLM endpoint if present; otherwise rich local fallback)
       try {
@@ -263,42 +312,47 @@ export default function PostGamePage() {
           }
         } catch { /* ignore */ }
 
+        // Fallback endpoint (note: if your server returns 405 for POST here, we’ll skip it and use local fallback)
         if (!line) {
-          const res2 = await fetch(`${API_BASE}/ai/game-outro`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              didWin,
-              stats,
-              playerName: player?.name,
-              isDaily: !!isDaily
-            }),
-          });
-          if (res2.ok) {
-            const data = await res2.json();
-            line = (data && typeof data.line === 'string') ? data.line.trim() : '';
-          }
+          try {
+            const res2 = await fetch(`${API_BASE}/ai/game-outro`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                didWin,
+                stats,
+                playerName: player?.name,
+                isDaily: !!isDaily
+              }),
+            });
+            if (res2.ok) {
+              const data = await res2.json();
+              line = (data && typeof data.line === 'string') ? data.line.trim() : '';
+            }
+          } catch { /* ignore network errors */ }
         }
 
         if (!line) {
           line = localOutroLine({ didWin: !!didWin, stats, player });
         }
 
-        // *** PERSONALIZE: replace a generic "Player" salutation with the user's full_name ***
-        const displayName =
+        // *** PERSONALIZE: replace a generic "Player/player" with the user's full_name ***
+        const nameForLine =
+          displayName ||
           user?.full_name ||
           user?.user_metadata?.full_name ||
           (user?.email ? user.email.split('@')[0] : null) ||
           'Player';
-        outro = personalizeUserNameInLine(line, displayName);
+        outro = personalizeUserNameInLine(line, nameForLine);
       } catch {
         const fallbackLine = localOutroLine({ didWin: !!didWin, stats, player });
-        const displayName =
+        const nameForLine =
+          displayName ||
           user?.full_name ||
           user?.user_metadata?.full_name ||
           (user?.email ? user.email.split('@')[0] : null) ||
           'Player';
-        outro = personalizeUserNameInLine(fallbackLine, displayName);
+        outro = personalizeUserNameInLine(fallbackLine, nameForLine);
       }
 
       setAiGeneratedFact(fact);
@@ -319,7 +373,14 @@ export default function PostGamePage() {
 
     fetchAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playerKey]);
+  }, [playerKey, displayName]);
+
+  // If displayName arrives a bit later, re-personalize the already-built line
+  useEffect(() => {
+    if (outroLine && displayName) {
+      setOutroLine((prev) => personalizeUserNameInLine(prev, displayName));
+    }
+  }, [displayName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // If user somehow hits this without state, redirect
   useEffect(() => {
@@ -348,7 +409,7 @@ export default function PostGamePage() {
       }
       // If pool was 1 player (prevPot = 5), block restart with same filters
       if (prevPot <= 5) {
-        alert('No players left in the pool with those filters. Please adjust your filters.');
+        alert('No players left in the pool with those filters. Please adjust your selection.');
         setLoading(false);
         return;
       }
@@ -563,11 +624,23 @@ function getPlayerKey(p) {
   );
 }
 
-/** Replace a generic "Player" salutation with the actual user's display name */
+/** Replace generic “Player/player” with the user's display name (avoids touching phrases like “the player” when possible) */
 function personalizeUserNameInLine(line, displayName) {
   if (!line || !displayName) return line;
-  // Replace standalone "Player" (capital P) to avoid touching "the player"
-  return line.replace(/\bPlayer\b/g, displayName);
+
+  // 1) Replace capitalized 'Player' as a stand-alone word (most LLM outputs use this)
+  let out = line.replace(/\bPlayer\b/g, displayName);
+
+  // 2) Also replace stand-alone 'player' (case-insensitive) when not part of "the player"
+  //    Modern JS engines support lookbehind; if not, the replace simply won’t happen.
+  try {
+    out = out.replace(/(?<!\bthe\s)\bplayer\b/gi, displayName);
+  } catch {
+    // Fallback: best-effort heuristic to catch common salutations like "Hey, player", "Well played, player"
+    out = out.replace(/(^|[.,!?\-\s])player\b/gi, (m, p1) => `${p1}${displayName}`);
+  }
+
+  return out;
 }
 
 /** Local, rich fallback line if LLM endpoint isn’t available */
