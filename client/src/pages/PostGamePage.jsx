@@ -56,7 +56,7 @@ export default function PostGamePage() {
   const actionsRef = useRef(null);
 
   // ---- cache guards ----
-  const hasRestoredRef = useRef(false);
+  the hasRestoredRef = useRef(false);
   const restoredFromCacheRef = useRef(false);
 
   const playerKey = getPlayerKey(player); // used to validate cache belongs to this result
@@ -176,6 +176,16 @@ export default function PostGamePage() {
     return () => { cancelled = true; };
   }, [user?.id]);
 
+  /* ========= UTC daily countdown (matches Supabase day boundary) ========= */
+  function msUntilNextUtcMidnight() {
+    const now = new Date();
+    const next = new Date(Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate() + 1
+    ));
+    return next.getTime() - now.getTime();
+  }
   function CountdownToTomorrow() {
     const [timeLeft, setTimeLeft] = useState(getTimeLeft());
     useEffect(() => {
@@ -183,13 +193,11 @@ export default function PostGamePage() {
       return () => clearInterval(interval);
     }, []);
     function getTimeLeft() {
-      const now = new Date();
-      const tomorrow = new Date(now);
-      tomorrow.setHours(24, 0, 0, 0);
-      const diff = tomorrow - now;
-      const hours = Math.floor(diff / 1000 / 60 / 60);
-      const minutes = Math.floor((diff / 1000 / 60) % 60);
-      const seconds = Math.floor((diff / 1000) % 60);
+      const ms = Math.max(0, msUntilNextUtcMidnight());
+      const totalSec = Math.floor(ms / 1000);
+      const hours = Math.floor(totalSec / 3600);
+      const minutes = Math.floor((totalSec % 3600) / 60);
+      const seconds = totalSec % 60;
       return `${hours}h ${minutes}m ${seconds}s`;
     }
     return <span>{timeLeft}</span>;
@@ -275,9 +283,22 @@ export default function PostGamePage() {
         if (!line) {
           line = localOutroLine({ didWin: !!didWin, stats, player });
         }
-        outro = line;
+
+        // *** PERSONALIZE: replace a generic "Player" salutation with the user's full_name ***
+        const displayName =
+          user?.full_name ||
+          user?.user_metadata?.full_name ||
+          (user?.email ? user.email.split('@')[0] : null) ||
+          'Player';
+        outro = personalizeUserNameInLine(line, displayName);
       } catch {
-        outro = localOutroLine({ didWin: !!didWin, stats, player });
+        const fallbackLine = localOutroLine({ didWin: !!didWin, stats, player });
+        const displayName =
+          user?.full_name ||
+          user?.user_metadata?.full_name ||
+          (user?.email ? user.email.split('@')[0] : null) ||
+          'Player';
+        outro = personalizeUserNameInLine(fallbackLine, displayName);
       }
 
       setAiGeneratedFact(fact);
@@ -491,6 +512,7 @@ export default function PostGamePage() {
                     ? <>Congratulations! You won the daily challenge and earned <span className="font-bold text-green-700">10,000 points</span>!<br /><span className="text-green-700 font-semibold">You also earned an extra game for today!</span></>
                     : 'Better luck next time! Try again tomorrow for another chance at 10,000 points.'}
                 </div>
+                {/* UTC-based countdown here */}
                 <div className="mt-2 text-sm text-gray-500">Next daily challenge in <CountdownToTomorrow /></div>
                 <div className="mt-4 flex gap-3">
                   <button
@@ -539,6 +561,13 @@ function getPlayerKey(p) {
     p.name ??
     ''
   );
+}
+
+/** Replace a generic "Player" salutation with the actual user's display name */
+function personalizeUserNameInLine(line, displayName) {
+  if (!line || !displayName) return line;
+  // Replace standalone "Player" (capital P) to avoid touching "the player"
+  return line.replace(/\bPlayer\b/g, displayName);
 }
 
 /** Local, rich fallback line if LLM endpoint isn’t available */
