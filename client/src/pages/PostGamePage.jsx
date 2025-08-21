@@ -13,7 +13,9 @@ import {
   Share2,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { supabase } from '../supabase/client';
+// IMPORTANT: your project exposes a single supabase.js under client/src
+// Use the default export (not { supabase } and not "../supabase/client")
+import supabase from '../supabase';
 import { getRandomPlayer, API_BASE, getGamePrompt } from '../api';
 import {
   loadPostGameCache,
@@ -190,7 +192,7 @@ export default function PostGamePage() {
     };
   }, [playerKey, aiGeneratedFact, outroLine, gamesLeft]);
 
-  // ---------- Resolve the user's display name from public.users (exactly "Ori Pnini" in your case) ----------
+  // ---------- Resolve the user's display name from public.users ----------
   useEffect(() => {
     let cancelled = false;
     async function loadName() {
@@ -314,7 +316,7 @@ export default function PostGamePage() {
           }
         } catch { /* ignore */ }
 
-        // Fallback endpoint (note: if your server returns 405 for POST here, we’ll skip it and use local fallback)
+        // Fallback endpoint
         if (!line) {
           try {
             const res2 = await fetch(`${API_BASE}/ai/game-outro`, {
@@ -338,7 +340,7 @@ export default function PostGamePage() {
           line = localOutroLine({ didWin: !!didWin, stats, player });
         }
 
-        // *** PERSONALIZE: replace a generic "Player/player" with the user's full_name ***
+        // *** PERSONALIZE ***
         const nameForLine =
           displayName ||
           user?.full_name ||
@@ -459,59 +461,62 @@ export default function PostGamePage() {
       const prevActionsVisibility = actionsEl ? actionsEl.style.visibility : '';
       if (actionsEl) actionsEl.style.visibility = 'hidden';
 
-      let dataUrl;
-
+      // Hide *external-origin* images during capture to avoid iOS/Canvas taint,
+      // but keep same-origin images (e.g., from your app/public) visible.
+      const imgs = Array.from(node.querySelectorAll('img'));
+      const prevImgVisibility = imgs.map((img) => img.style.visibility);
+      const toHide = [];
       try {
-        // First attempt: normal capture
-        dataUrl = await toPng(node, { pixelRatio: 2, cacheBust: true, backgroundColor: '#ffffff' });
-      } catch (err) {
-        console.warn('html-to-image first attempt failed, retrying without images…', err);
-        // Fallback attempt: hide all <img> inside the card (avoid cross-origin taint on iOS Safari)
-        const imgs = Array.from(node.querySelectorAll('img'));
-        const prevImgVisibility = imgs.map((img) => img.style.visibility);
-        try {
-          imgs.forEach((img) => { img.style.visibility = 'hidden'; });
-          dataUrl = await toPng(node, { pixelRatio: 2, cacheBust: true, backgroundColor: '#ffffff' });
-        } finally {
-          imgs.forEach((img, i) => { img.style.visibility = prevImgVisibility[i]; });
+        imgs.forEach((img) => {
+          const src = img.getAttribute('src') || '';
+          const origin = (() => {
+            try { return new URL(src, window.location.href).origin; } catch { return ''; }
+          })();
+          if (!origin || origin !== window.location.origin) {
+            // external (or invalid) -> hide to prevent taint
+            img.style.visibility = 'hidden';
+            toHide.push(img);
+          }
+        });
+
+        const dataUrl = await toPng(node, { pixelRatio: 2, cacheBust: true, backgroundColor: '#ffffff' });
+        // Convert to a File object
+        const file = await dataUrlToFile(dataUrl, `footytrail-${Date.now()}.png`);
+
+        // Build the message text
+        const shareText = buildShareText({ didWin, outroLine, player, stats, aiGeneratedFact });
+
+        // 1) Best path: native share with file (mobile browsers)
+        if (navigator.canShare?.({ files: [file] })) {
+          await navigator.share({ text: shareText, files: [file] });
+        } else {
+          // 2) Fallback: upload to Supabase (public bucket "shares") and open a wa.me link
+          let publicUrl = '';
+          try {
+            if (supabase?.storage) {
+              publicUrl = await uploadToSupabaseImage(file, user?.id);
+            }
+          } catch (e) {
+            console.warn('Supabase upload failed, falling back to download.', e);
+          }
+
+          const text = `${shareText}${publicUrl ? `\n${publicUrl}` : ''}`.trim();
+          const waUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
+          window.open(waUrl, '_blank', 'noopener,noreferrer');
+
+          // 3) Last resort: download the image for manual attach
+          if (!publicUrl && document.hasFocus()) {
+            const a = document.createElement('a');
+            a.href = dataUrl;
+            a.download = `footytrail-${Date.now()}.png`;
+            a.click();
+            alert('Could not share directly. Image downloaded—send it via WhatsApp manually.');
+          }
         }
       } finally {
-        // Restore actions visibility
+        // Restore visibility
         if (actionsEl) actionsEl.style.visibility = prevActionsVisibility;
-      }
-
-      // Convert to a File object
-      const file = await dataUrlToFile(dataUrl, `footytrail-${Date.now()}.png`);
-
-      // Build the message text
-      const shareText = buildShareText({ didWin, outroLine, player, stats, aiGeneratedFact });
-
-      // 1) Best path: native share with file (mobile browsers)
-      if (navigator.canShare?.({ files: [file] })) {
-        await navigator.share({ text: shareText, files: [file] });
-        shareBusyRef.current = false;
-        return;
-      }
-
-      // 2) Fallback: upload to Supabase (public bucket "shares") and open a wa.me link
-      let publicUrl = '';
-      try {
-        publicUrl = await uploadToSupabaseImage(file, user?.id);
-      } catch (e) {
-        console.warn('Supabase upload failed, falling back to download.', e);
-      }
-
-      const text = `${shareText}${publicUrl ? `\n${publicUrl}` : ''}`.trim();
-      const waUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
-      window.open(waUrl, '_blank', 'noopener,noreferrer');
-
-      // 3) Last resort: download the image for manual attach
-      if (!publicUrl && document.hasFocus()) {
-        const a = document.createElement('a');
-        a.href = dataUrl;
-        a.download = `footytrail-${Date.now()}.png`;
-        a.click();
-        alert('Could not share directly. Image downloaded—send it via WhatsApp manually.');
+        imgs.forEach((img, i) => { img.style.visibility = prevImgVisibility[i]; });
       }
     } catch (e) {
       console.error('Share failed:', e);
@@ -549,12 +554,11 @@ export default function PostGamePage() {
           {/* Player Info */}
           <div className="flex gap-6 mb-6">
             {photo ? (
+              // NOTE: removed crossOrigin/referrerPolicy so the image renders normally again
               <img
                 src={photo}
                 alt={player.name}
                 className="w-32 h-32 object-cover rounded-lg"
-                crossOrigin="anonymous"
-                referrerPolicy="no-referrer"
               />
             ) : (
               <div className="w-32 h-32 bg-gray-100 rounded-lg flex items-center justify-center">
@@ -571,7 +575,7 @@ export default function PostGamePage() {
             </div>
           </div>
 
-          {/* AI Fact (title removed as requested) */}
+          {/* AI Fact */}
           {aiGeneratedFact && (
             <div className="bg-blue-50 rounded-lg p-4 mb-6">
               <p className="italic text-gray-800">{aiGeneratedFact}</p>
@@ -685,11 +689,9 @@ function personalizeUserNameInLine(line, displayName) {
   let out = line.replace(/\bPlayer\b/g, displayName);
 
   // 2) Also replace stand-alone 'player' (case-insensitive) when not part of "the player"
-  //    Modern JS engines support lookbehind; if not, the replace simply won’t happen.
   try {
     out = out.replace(/(?<!\bthe\s)\bplayer\b/gi, displayName);
   } catch {
-    // Fallback: best-effort heuristic to catch common salutations like "Hey, player", "Well played, player"
     out = out.replace(/(^|[.,!?\-\s])player\b/gi, (m, p1) => `${p1}${displayName}`);
   }
 
