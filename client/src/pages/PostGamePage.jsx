@@ -457,9 +457,9 @@ export default function PostGamePage() {
           const src = n.getAttribute('src') || '';
           try {
             const u = new URL(src, window.location.href);
-            if (u.origin !== window.location.origin) return false; // skip
+            if (u.origin !== window.location.origin) return false; // skip external images
           } catch {
-            return false; // bad URL -> skip
+            return false; // bad or non-HTTP(S) URL -> skip
           }
         }
         return true;
@@ -521,6 +521,11 @@ export default function PostGamePage() {
   const pdata = player || {};
   const photo = pdata.player_photo || pdata.photo || null;
 
+  // PROXY the external photo through our own domain to make it same-origin (capturable)
+  const proxiedPhoto = photo
+    ? `/api/proxy-image?src=${encodeURIComponent(photo)}`
+    : null;
+
   return (
     <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
       <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
@@ -553,9 +558,10 @@ export default function PostGamePage() {
 
           {/* Player Info */}
           <div className="flex gap-6 mb-6">
-            {photo ? (
+            {proxiedPhoto ? (
               <img
-                src={photo}
+                src={proxiedPhoto}
+                crossOrigin="anonymous"
                 alt={player.name}
                 className="w-32 h-32 object-cover rounded-lg"
               />
@@ -829,7 +835,7 @@ function shareStat(label, value) {
     </div>`;
 }
 
-/** NEW: Short, engaging WhatsApp text instead of repeating the card details */
+/** Short, engaging WhatsApp text instead of repeating the card details */
 function buildShareText({ didWin, player }) {
   const outcome = didWin ? 'succeeded phenomenally' : 'failed miserably';
   const name = player?.name ? ` — ${player.name}` : '';
