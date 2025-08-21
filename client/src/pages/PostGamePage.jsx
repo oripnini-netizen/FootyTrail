@@ -450,16 +450,33 @@ export default function PostGamePage() {
       const prevActionsVisibility = actionsEl ? actionsEl.style.visibility : '';
       if (actionsEl) actionsEl.style.visibility = 'hidden';
 
-      // Filter that EXCLUDES any cross-origin <img> from the render to prevent iOS/Canvas taint
+      // If we have a player photo, temporarily swap it to a data URL (strongest fix for iOS)
+      const playerImg = node.querySelector('img[data-role="player-photo"]');
+      let restoreImg = null;
+      if (playerImg && playerImg.src) {
+        try {
+          restoreImg = await swapImgSrcToDataURL(playerImg);
+        } catch {
+          // if inline fails, we still try capture with proxy URL
+          restoreImg = null;
+        }
+      }
+
+      // Filter that EXCLUDES cross-origin <img>, but ALLOWS data: and blob:
       const filter = (n) => {
         if (!(n instanceof Element)) return true;
         if (n.tagName === 'IMG') {
           const src = n.getAttribute('src') || '';
           try {
             const u = new URL(src, window.location.href);
-            if (u.origin !== window.location.origin) return false; // skip external images
+            // allow same-origin
+            if (u.origin === window.location.origin) return true;
+            // allow data: and blob:
+            if (u.protocol === 'data:' || u.protocol === 'blob:') return true;
+            return false; // skip external HTTP(S)
           } catch {
-            return false; // bad or non-HTTP(S) URL -> skip
+            // If URL parsing fails (e.g., invalid), skip it to be safe
+            return false;
           }
         }
         return true;
@@ -471,6 +488,11 @@ export default function PostGamePage() {
         backgroundColor: '#ffffff',
         filter,
       });
+
+      // restore photo src if we changed it
+      if (typeof restoreImg === 'function') {
+        restoreImg();
+      }
 
       if (actionsEl) actionsEl.style.visibility = prevActionsVisibility;
 
@@ -526,6 +548,9 @@ export default function PostGamePage() {
     ? `/api/proxy-image?src=${encodeURIComponent(photo)}`
     : null;
 
+  // Compute guesses used (fix: prefer history length when present; never negative)
+  const guessesUsed = computeGuessesUsed(stats);
+
   return (
     <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
       <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
@@ -564,6 +589,7 @@ export default function PostGamePage() {
                 crossOrigin="anonymous"
                 alt={player.name}
                 className="w-32 h-32 object-cover rounded-lg"
+                data-role="player-photo"
               />
             ) : (
               <div className="w-32 h-32 bg-gray-100 rounded-lg flex items-center justify-center">
@@ -604,7 +630,7 @@ export default function PostGamePage() {
             />
             <StatCard
               label="Guesses Used"
-              value={stats?.guessesUsed}
+              value={guessesUsed}
               icon={<Target className="h-5 w-5 text-green-600" />}
             />
             <StatCard
@@ -766,6 +792,14 @@ function localOutroLine({ didWin, stats, player }) {
   }
 }
 
+/** Prefer guessHistory length when present; fallback to guessesUsed; never negative */
+function computeGuessesUsed(stats) {
+  if (!stats) return 0;
+  if (Array.isArray(stats.guessHistory)) return Math.max(0, stats.guessHistory.length);
+  const n = Number(stats.guessesUsed);
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
+}
+
 function buildShareHTML({ didWin, outroLine, player, stats, aiGeneratedFact }) {
   const color = didWin ? '#166534' : '#991b1b';
   const badgeBG = didWin ? '#dcfce7' : '#fee2e2';
@@ -815,7 +849,7 @@ function buildShareHTML({ didWin, outroLine, player, stats, aiGeneratedFact }) {
     <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;">
       ${shareStat('Points Earned', String(stats?.pointsEarned ?? '—'))}
       ${shareStat('Time Taken', `${String(stats?.timeSec ?? '—')}s`)}
-      ${shareStat('Guesses Used', String(stats?.guessesUsed ?? '—'))}
+      ${shareStat('Guesses Used', String(computeGuessesUsed(stats)))}
       ${shareStat(
         'Hints Used',
         String(Object.values(stats?.usedHints || {}).filter(Boolean).length)
@@ -870,6 +904,40 @@ async function uploadToSupabaseImage(file, userId) {
 
   const { data: pub } = supabase.storage.from('shares').getPublicUrl(path);
   return pub?.publicUrl;
+}
+
+/** Swap an <img> src to a data URL version and return a restore() function */
+async function swapImgSrcToDataURL(imgEl) {
+  const original = imgEl.src;
+  const res = await fetch(original, { mode: 'cors' });
+  const blob = await res.blob();
+  const dataUrl = await blobToDataURL(blob);
+  imgEl.src = dataUrl;
+  await waitForImageLoad(imgEl);
+  return () => {
+    imgEl.src = original;
+  };
+}
+
+function blobToDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('reader failed'));
+    reader.onloadend = () => resolve(reader.result);
+    reader.readAsDataURL(blob);
+  });
+}
+
+function waitForImageLoad(img) {
+  // Use decode when available; fall back to load event
+  if (img.decode) {
+    return img.decode().catch(() => {});
+  }
+  return new Promise((res) => {
+    if (img.complete) return res();
+    img.onload = () => res();
+    img.onerror = () => res();
+  });
 }
 
 /** Full-screen loader */
