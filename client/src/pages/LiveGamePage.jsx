@@ -83,7 +83,7 @@ export default function LiveGamePage() {
   const [suggestions, setSuggestions] = useState([]);
   const [highlightIndex, setHighlightIndex] = useState(-1);
 
-  // NEW: refs for auto-scrolling the highlighted suggestion into view
+  // refs for auto-scrolling the highlighted suggestion into view
   const listRef = useRef(null);
   const itemRefs = useRef([]);
 
@@ -113,7 +113,7 @@ export default function LiveGamePage() {
       try {
         // prefer full_name from public.users
         if (user?.id) {
-          const { data, error } = await supabase
+          const { data } = await supabase
             .from('users')
             .select('full_name')
             .eq('id', user.id)
@@ -303,7 +303,7 @@ export default function LiveGamePage() {
     };
   }, [guess]);
 
-  // NEW: keep highlighted item scrolled into view as you arrow through the list
+  // keep highlighted item scrolled into view as you arrow through the list
   useEffect(() => {
     if (highlightIndex < 0 || !listRef.current) return;
     const el = itemRefs.current[highlightIndex];
@@ -358,7 +358,7 @@ export default function LiveGamePage() {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Anti-cheat / tab leave → loss  (existing visibilitychange + NEW: window blur)
+  // Anti-cheat / tab leave → loss  (visibilitychange + window blur)
   useEffect(() => {
     const lose = () => {
       if (endedRef.current) return;
@@ -565,13 +565,12 @@ export default function LiveGamePage() {
   // -------------------------
   return (
     <div className="max-w-5xl mx-auto p-4 space-y-6">
-      {/* Warning */}
+      {/* Notice */}
       <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 text-amber-800 font-medium text-center">
         ⚠️ Don’t leave this page — leaving or switching windows will count as a loss.
       </div>
 
-      {/* Header Card (Points / Type / Timer+Guesses)
-          Mobile order: 1) Current points, 2) Game type + Potential, 3) Guesses left (with timer) */}
+      {/* Points Card */}
       <div className="rounded-xl bg-white shadow p-6">
         <div className="grid md:grid-cols-3 items-center">
           {/* Center: Current points (gold) — FIRST on mobile */}
@@ -611,75 +610,13 @@ export default function LiveGamePage() {
         </div>
       </div>
 
-      {/* Transfer History (MOBILE-ONLY card shown above Hints) */}
-      <div className="rounded-xl bg-white shadow p-6 block lg:hidden">
-        <h4 className="font-semibold mb-2">Transfer History</h4>
-        <NoCopySection>
-          {loadingTransfers ? (
-            <div className="text-sm text-gray-500">Loading transfers…</div>
-          ) : (
-            <TransfersList transfers={transferHistory} />
-          )}
-        </NoCopySection>
-      </div>
-
-      {/* Hints + Guess (desktop also shows transfers inside Guess) */}
-      <div className="grid lg:grid-cols-3 gap-6">
-        {/* Hints */}
-        <div className="rounded-xl bg-white shadow p-6 space-y-4 lg:col-span-1">
-          <h3 className="text-lg font-semibold mb-2">Hints</h3>
-
-          <HintButton
-            label="Player's Age"
-            multiplier="×0.90"
-            disabled={usedHints.age || !gameData?.age}
-            onClick={() => reveal('age')}
-            valueShown={usedHints.age ? String(gameData?.age) : null}
-          />
-          <HintButton
-            label="Nationality"
-            multiplier="×0.90"
-            disabled={usedHints.nationality || !gameData?.nationality}
-            onClick={() => reveal('nationality')}
-            valueShown={usedHints.nationality ? String(gameData?.nationality) : null}
-          />
-          <HintButton
-            label="Player's Position"
-            multiplier="×0.80"
-            disabled={usedHints.position || !gameData?.position}
-            onClick={() => reveal('position')}
-            valueShown={usedHints.position ? String(gameData?.position) : null}
-          />
-          <HintButton
-            label="Player's Image"
-            multiplier="×0.50"
-            disabled={usedHints.partialImage || !gameData?.photo}
-            onClick={() => reveal('partialImage')}
-            valueShown={
-              usedHints.partialImage ? (
-                <div className="flex justify-center">
-                  <img
-                    src={gameData?.photo}
-                    alt="Player Hint"
-                    className="w-32 h-32 object-cover object-top"
-                    style={{ clipPath: 'inset(0 0 34% 0)' }} // show top ~2/3, centered & bigger
-                  />
-                </div>
-              ) : null
-            }
-          />
-          <HintButton
-            label="Player's First Letter"
-            multiplier="×0.25"
-            disabled={usedHints.firstLetter || !gameData?.name}
-            onClick={() => reveal('firstLetter')}
-            valueShown={usedHints.firstLetter ? String(gameData?.name?.[0]?.toUpperCase() || '') : null}
-          />
-        </div>
-
-        {/* Guess + Suggestions */}
+      {/* CONTENT AREA:
+          Mobile (default): order-1 Guess, order-2 Transfer, order-3 Hints
+          Desktop (lg+): Hints (col 1), Guess (cols 2-3), Transfer hidden (Transfers shown inside Guess) */}
+      <div className="grid gap-6 lg:grid-cols-3">
+        {/* Guess + Suggestions (Search bar card) */}
         <motion.div
-          className="rounded-xl bg-white shadow p-6 lg:col-span-2"
+          className="rounded-xl bg-white shadow p-6 lg:col-span-2 order-1 lg:order-2"
           animate={
             isWrongGuess
               ? { x: [-10, 10, -10, 10, 0], transition: { duration: 0.4 } }
@@ -705,7 +642,6 @@ export default function LiveGamePage() {
               type="text"
               value={guess}
               onChange={(e) => {
-                // ensure we store a string
                 setGuess(typeof e.target.value === 'string' ? e.target.value : String(e.target.value ?? ''));
                 setHighlightIndex(-1);
               }}
@@ -788,7 +724,6 @@ export default function LiveGamePage() {
                   )}
                   onMouseEnter={() => setHighlightIndex(idx)}
                   onMouseDown={(e) => {
-                    // prevent input blur before click handler
                     e.preventDefault();
                   }}
                   onClick={() => {
@@ -807,7 +742,6 @@ export default function LiveGamePage() {
           {/* Transfer History (DESKTOP-ONLY inside Guess card to preserve original desktop layout) */}
           <div className="mt-6 pt-5 border-t hidden lg:block">
             <h4 className="font-semibold mb-2">Transfer History</h4>
-            {/* NO-COPY wrapper applied ONLY to the transfers area */}
             <NoCopySection>
               {loadingTransfers ? (
                 <div className="text-sm text-gray-500">Loading transfers…</div>
@@ -817,6 +751,70 @@ export default function LiveGamePage() {
             </NoCopySection>
           </div>
         </motion.div>
+
+        {/* Transfer History (MOBILE-ONLY separate card — sits between Guess and Hints) */}
+        <div className="rounded-xl bg-white shadow p-6 order-2 lg:order-3 block lg:hidden">
+          <h4 className="font-semibold mb-2">Transfer History</h4>
+          <NoCopySection>
+            {loadingTransfers ? (
+              <div className="text-sm text-gray-500">Loading transfers…</div>
+            ) : (
+              <TransfersList transfers={transferHistory} />
+            )}
+          </NoCopySection>
+        </div>
+
+        {/* Hints (mobile last, desktop first) */}
+        <div className="rounded-xl bg-white shadow p-6 space-y-4 order-3 lg:order-1 lg:col-span-1">
+          <h3 className="text-lg font-semibold mb-2">Hints</h3>
+
+          <HintButton
+            label="Player's Age"
+            multiplier="×0.90"
+            disabled={usedHints.age || !gameData?.age}
+            onClick={() => reveal('age')}
+            valueShown={usedHints.age ? String(gameData?.age) : null}
+          />
+          <HintButton
+            label="Nationality"
+            multiplier="×0.90"
+            disabled={usedHints.nationality || !gameData?.nationality}
+            onClick={() => reveal('nationality')}
+            valueShown={usedHints.nationality ? String(gameData?.nationality) : null}
+          />
+          <HintButton
+            label="Player's Position"
+            multiplier="×0.80"
+            disabled={usedHints.position || !gameData?.position}
+            onClick={() => reveal('position')}
+            valueShown={usedHints.position ? String(gameData?.position) : null}
+          />
+          <HintButton
+            label="Player's Image"
+            multiplier="×0.50"
+            disabled={usedHints.partialImage || !gameData?.photo}
+            onClick={() => reveal('partialImage')}
+            valueShown={
+              usedHints.partialImage ? (
+                <div className="flex justify-center">
+                  <img
+                    src={gameData?.photo}
+                    alt="Player Hint"
+                    className="w-32 h-32 object-cover object-top"
+                    style={{ clipPath: 'inset(0 0 34% 0)' }}
+                  />
+                </div>
+              ) : null
+            }
+          />
+          <HintButton
+            label="Player's First Letter"
+            multiplier="×0.25"
+            disabled={usedHints.firstLetter || !gameData?.name}
+            onClick={() => reveal('firstLetter')}
+            valueShown={usedHints.firstLetter ? String(gameData?.name?.[0]?.toUpperCase() || '') : null}
+          />
+        </div>
       </div>
     </div>
   );
