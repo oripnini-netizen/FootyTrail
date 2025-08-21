@@ -13,9 +13,8 @@ import {
   Share2,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-// IMPORTANT: your project exposes a single supabase.js under client/src
-// Use the default export (not { supabase } and not "../supabase/client")
-import supabase from '../supabase';
+// FIX: your supabase.js exports a *named* export `supabase`
+import { supabase } from '../supabase';
 import { getRandomPlayer, API_BASE, getGamePrompt } from '../api';
 import {
   loadPostGameCache,
@@ -66,11 +65,9 @@ function CountdownToTomorrow() {
 export default function PostGamePage() {
   const navigate = useNavigate();
   const location = useLocation();
-  // NOTE: we no longer alias here; instead we read from multiple possible keys below
   const { didWin, player, stats, filters, isDaily } = location.state || {};
   const { user } = useAuth();
 
-  // NEW: read previous potential points from several possible places
   const prevPotentialPoints =
     location.state?.potentialPoints ??
     location.state?.prevPotentialPoints ??
@@ -81,13 +78,8 @@ export default function PostGamePage() {
   const [loading, setLoading] = useState(false);
   const [gamesLeft, setGamesLeft] = useState(null);
 
-  // LLM-only fact (still shown when available)
   const [aiGeneratedFact, setAiGeneratedFact] = useState('');
-
-  // Dynamic banner line (LLM first; has graceful local fallback)
   const [outroLine, setOutroLine] = useState('');
-
-  // Gate the entire page until fact is ready (so no “generating...” flashes)
   const [pageReady, setPageReady] = useState(false);
 
   const [scope, animate] = useAnimate();
@@ -396,7 +388,6 @@ export default function PostGamePage() {
     if (loading || gamesLeft <= 0) return;
     setLoading(true);
     try {
-      // Map filters from previous round (support both legacy & new keys)
       const competitions =
         (filters?.competitions && Array.isArray(filters.competitions)) ? filters.competitions : [];
       const seasons =
@@ -404,14 +395,12 @@ export default function PostGamePage() {
       const minMarketValue =
         Number(filters?.minMarketValue ?? filters?.min_market_value ?? 0) || 0;
 
-      // Previous potential (from LiveGamePage -> PostGamePage state, with robust fallbacks)
       const prevPot = Number(prevPotentialPoints);
       if (!Number.isFinite(prevPot) || prevPot <= 0) {
         alert("Could not determine the previous round’s pool size. Please start from the Game page.");
         setLoading(false);
         return;
       }
-      // If pool was 1 player (prevPot = 5), block restart with same filters
       if (prevPot <= 5) {
         alert('No players left in the pool with those filters. Please adjust your selection.');
         setLoading(false);
@@ -425,16 +414,13 @@ export default function PostGamePage() {
         user?.id
       );
 
-      // clear cache because we are starting a new game
       clearPostGameCache();
 
       navigate('/live', {
         state: {
           ...nextCard,
           isDaily: false,
-          // persist exactly the same filters
           filters: { competitions, seasons, minMarketValue },
-          // next round starts with previous potential - 5
           potentialPoints: nextPotential,
           fromPostGame: true,
         },
@@ -465,7 +451,6 @@ export default function PostGamePage() {
       // but keep same-origin images (e.g., from your app/public) visible.
       const imgs = Array.from(node.querySelectorAll('img'));
       const prevImgVisibility = imgs.map((img) => img.style.visibility);
-      const toHide = [];
       try {
         imgs.forEach((img) => {
           const src = img.getAttribute('src') || '';
@@ -473,24 +458,18 @@ export default function PostGamePage() {
             try { return new URL(src, window.location.href).origin; } catch { return ''; }
           })();
           if (!origin || origin !== window.location.origin) {
-            // external (or invalid) -> hide to prevent taint
             img.style.visibility = 'hidden';
-            toHide.push(img);
           }
         });
 
         const dataUrl = await toPng(node, { pixelRatio: 2, cacheBust: true, backgroundColor: '#ffffff' });
-        // Convert to a File object
         const file = await dataUrlToFile(dataUrl, `footytrail-${Date.now()}.png`);
 
-        // Build the message text
         const shareText = buildShareText({ didWin, outroLine, player, stats, aiGeneratedFact });
 
-        // 1) Best path: native share with file (mobile browsers)
         if (navigator.canShare?.({ files: [file] })) {
           await navigator.share({ text: shareText, files: [file] });
         } else {
-          // 2) Fallback: upload to Supabase (public bucket "shares") and open a wa.me link
           let publicUrl = '';
           try {
             if (supabase?.storage) {
@@ -504,7 +483,6 @@ export default function PostGamePage() {
           const waUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
           window.open(waUrl, '_blank', 'noopener,noreferrer');
 
-          // 3) Last resort: download the image for manual attach
           if (!publicUrl && document.hasFocus()) {
             const a = document.createElement('a');
             a.href = dataUrl;
@@ -514,7 +492,7 @@ export default function PostGamePage() {
           }
         }
       } finally {
-        // Restore visibility
+        // Restore visibility (both actions and any images)
         if (actionsEl) actionsEl.style.visibility = prevActionsVisibility;
         imgs.forEach((img, i) => { img.style.visibility = prevImgVisibility[i]; });
       }
@@ -554,7 +532,6 @@ export default function PostGamePage() {
           {/* Player Info */}
           <div className="flex gap-6 mb-6">
             {photo ? (
-              // NOTE: removed crossOrigin/referrerPolicy so the image renders normally again
               <img
                 src={photo}
                 alt={player.name}
@@ -685,10 +662,7 @@ function getPlayerKey(p) {
 function personalizeUserNameInLine(line, displayName) {
   if (!line || !displayName) return line;
 
-  // 1) Replace capitalized 'Player' as a stand-alone word (most LLM outputs use this)
   let out = line.replace(/\bPlayer\b/g, displayName);
-
-  // 2) Also replace stand-alone 'player' (case-insensitive) when not part of "the player"
   try {
     out = out.replace(/(?<!\bthe\s)\bplayer\b/gi, displayName);
   } catch {
@@ -719,8 +693,8 @@ function localOutroLine({ didWin, stats, player }) {
 
 /** Build a rich HTML snippet for clipboard share (no buttons included) */
 function buildShareHTML({ didWin, outroLine, player, stats, aiGeneratedFact }) {
-  const color = didWin ? '#166534' : '#991b1b'; // green-700 / red-700
-  const badgeBG = didWin ? '#dcfce7' : '#fee2e2'; // green-100 / red-100
+  const color = didWin ? '#166534' : '#991b1b';
+  const badgeBG = didWin ? '#dcfce7' : '#fee2e2';
   const factHTML = aiGeneratedFact
     ? `<div style="background:#eff6ff;padding:12px;border-radius:10px;margin:16px 0;">
          <div style="font-style:italic;color:#111827;">${escapeHTML(aiGeneratedFact)}</div>
@@ -827,7 +801,7 @@ function LoadingBounceLogo() {
           style={{ top: '40vh' }}
           animate={{
             x: ['-40vw', '40vw', '-40vw'],
-            y: [0, -10, 0, -10, 0], // subtle vertical bounce
+            y: [0, -10, 0, -10, 0],
           }}
           transition={{
             times: [0, 0.5, 1],
