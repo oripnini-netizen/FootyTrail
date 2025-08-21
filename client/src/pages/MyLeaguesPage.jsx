@@ -16,30 +16,26 @@ import {
 } from 'lucide-react';
 
 /* =========================================================
-   Time helpers — use a single universal UTC+2 day boundary
+   Time helpers — use a single universal UTC day boundary
    =======================================================*/
-const TZ_OFFSET_MIN = 120; // UTC+2 fixed boundary
-
-function toUtcPlus2Midnight(dateLike) {
+function toUtcMidnight(dateLike) {
   const d =
     typeof dateLike === 'string'
       ? new Date(`${dateLike}T00:00:00.000Z`)
       : new Date(dateLike);
-  const utcMid = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-  return new Date(utcMid.getTime() + TZ_OFFSET_MIN * 60 * 1000);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
 }
-function todayUtcPlus2Midnight() {
+function todayUtcMidnight() {
   const now = new Date();
-  const utcMid = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  return new Date(utcMid.getTime() + TZ_OFFSET_MIN * 60 * 1000);
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 }
-function dayRangeUtcPlus2(dateStr) {
-  const start = toUtcPlus2Midnight(dateStr);
+function dayRangeUtc(dateStr) {
+  const start = toUtcMidnight(dateStr);
   const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
   return { start: start.toISOString(), end: end.toISOString() };
 }
 const tomorrowStr = (() => {
-  const t = todayUtcPlus2Midnight();
+  const t = todayUtcMidnight();
   const plus1 = new Date(t.getTime() + 24 * 60 * 60 * 1000);
   return plus1.toISOString().slice(0, 10);
 })();
@@ -63,7 +59,7 @@ function computeStandings(participants, matches, dayPointsMap) {
     return stats.get(pid);
   };
 
-  const today0 = todayUtcPlus2Midnight();
+  const today0 = todayUtcMidnight();
 
   matches
     .filter((m) => new Date(m.match_date) <= today0) // include today (live)
@@ -341,15 +337,15 @@ export default function MyLeaguesPage() {
     };
   }, [searchEmail, user?.id]);
 
-  // Tab buckets by status using UTC+2
+  // Tab buckets by status using UTC
   const classified = useMemo(() => {
     const out = { Scheduled: [], Active: [], Ended: [] };
-    const today0 = todayUtcPlus2Midnight();
+    const today0 = todayUtcMidnight();
 
     for (const L of leagues) {
-      const start = toUtcPlus2Midnight(L.league.start_date);
+      const start = toUtcMidnight(L.league.start_date);
       const last = L.matches.length
-        ? toUtcPlus2Midnight(L.matches[L.matches.length - 1].match_date)
+        ? toUtcMidnight(L.matches[L.matches.length - 1].match_date)
         : start;
 
       const key = start > today0 ? 'Scheduled' : last < today0 ? 'Ended' : 'Active';
@@ -378,7 +374,7 @@ export default function MyLeaguesPage() {
         const dates = [...new Set(matches.map((m) => m.match_date))];
 
         for (const d of dates) {
-          const { start, end } = dayRangeUtcPlus2(d);
+          const { start, end } = dayRangeUtc(d);
           const humans = participants.filter((p) => !p.is_bot);
           const humanIds = humans.map((h) => h.user_id).filter(Boolean);
 
@@ -471,7 +467,7 @@ export default function MyLeaguesPage() {
     // Round-robin double fixtures
     const partIds = parts.map((p) => p.id);
     const rounds = generateDoubleRoundRobin(partIds);
-    const start = toUtcPlus2Midnight(startDate);
+    const start = toUtcMidnight(startDate);
     const matchesPayload = [];
     rounds.forEach((round, idx) => {
       const date = new Date(start.getTime() + idx * 24 * 60 * 60 * 1000);
@@ -929,7 +925,7 @@ function NameWithBotChip({ participant, alignRight, onClick, forceTruncate = fal
         </span>
       )}
       {/* explicit two-dot truncate already applied in JS; keep CSS safe too */}
-      <span className="font-medium text-gray-900 whitespace-nowrap overflow-hidden">{shown}</span>
+      <span className="font-medium text-gray-9 00 whitespace-nowrap overflow-hidden">{shown}</span>
     </span>
   );
 
@@ -961,37 +957,26 @@ function formatHHMMSS(msLeft) {
   return `${hh}:${mm}:${ss}`;
 }
 
-/** Robust “time until next UTC+2 midnight” (independent of local timezone/DST) */
-function msUntilNextUtcPlus2Midnight() {
-  const nowLocalMs = Date.now();
-  const tzOffsetMin = new Date().getTimezoneOffset(); // minutes
-  const nowUtcMs = nowLocalMs + tzOffsetMin * 60 * 1000;
-  const nowUtcPlus2Ms = nowUtcMs + TZ_OFFSET_MIN * 60 * 1000;
-
-  const nowUtcPlus2 = new Date(nowUtcPlus2Ms);
-  const y = nowUtcPlus2.getUTCFullYear();
-  const m = nowUtcPlus2.getUTCMonth();
-  const d = nowUtcPlus2.getUTCDate();
-
-  const startOfTomorrowUtcPlus2_utcMs = Date.UTC(y, m, d + 1); // 00:00 +2 clock
-  const boundaryEpochMs = startOfTomorrowUtcPlus2_utcMs - TZ_OFFSET_MIN * 60 * 1000;
-
-  return boundaryEpochMs - nowLocalMs;
+/** Robust “time until next UTC midnight” (independent of local timezone/DST) */
+function msUntilNextUtcMidnight() {
+  const now = new Date();
+  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+  return next.getTime() - now.getTime();
 }
 
 function FixtureDay({ league, group, participantsById, dayPoints, onOpenUser }) {
-  const today0 = todayUtcPlus2Midnight();
-  const matchDate0 = toUtcPlus2Midnight(group.match_date);
+  const today0 = todayUtcMidnight();
+  const matchDate0 = toUtcMidnight(group.match_date);
 
   const isFuture = matchDate0 > today0;
   const isToday = matchDate0.getTime() === today0.getTime();
   const status = isFuture ? 'Upcoming' : isToday ? 'Live' : 'Finished';
 
-  // Live countdown (HH:MM:SS) to the NEXT UTC+2 midnight (global day boundary)
+  // Live countdown (HH:MM:SS) to the NEXT UTC midnight (global day boundary)
   const [countdown, setCountdown] = useState('');
   useEffect(() => {
     if (!isToday) return;
-    const tick = () => setCountdown(formatHHMMSS(msUntilNextUtcPlus2Midnight()));
+    const tick = () => setCountdown(formatHHMMSS(msUntilNextUtcMidnight()));
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
@@ -1198,7 +1183,7 @@ function PlayersBreakdown({ label, participant, date }) {
     async function load() {
       setLoading(true);
       try {
-        const { start, end } = dayRangeUtcPlus2(date);
+        const { start, end } = dayRangeUtc(date);
         const { data } = await supabase
           .from('games_records')
           .select('player_name, points_earned')
