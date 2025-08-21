@@ -48,25 +48,24 @@ const fmt = (n) => new Intl.NumberFormat('en-US').format(n || 0);
 const fmtCurrency = (n) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(Number(n || 0));
 
-// --- UTC+2 countdown helper ---
-const TZ_PLUS2_MS = 2 * 60 * 60 * 1000;
+/* --- UTC countdown helper (Supabase uses UTC day boundary) --- */
+function msUntilNextUtcMidnight() {
+  const now = new Date();
+  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+  return next.getTime() - now.getTime();
+}
 function CountdownToTomorrow() {
-  const [timeLeft, setTimeLeft] = useState(getTimeLeft());
+  const [timeLeft, setTimeLeft] = useState(format(msUntilNextUtcMidnight()));
   useEffect(() => {
-    const id = setInterval(() => setTimeLeft(getTimeLeft()), 1000);
+    const id = setInterval(() => setTimeLeft(format(msUntilNextUtcMidnight())), 1000);
     return () => clearInterval(id);
   }, []);
-  function getTimeLeft() {
-    const now = new Date();
-    const plus2Now = new Date(now.getTime() + TZ_PLUS2_MS);
-    const nextMidPlus2 = new Date(plus2Now);
-    nextMidPlus2.setUTCHours(24, 0, 0, 0);
-    const diff = Math.max(0, nextMidPlus2.getTime() - plus2Now.getTime());
-    const hours = Math.floor(diff / 1000 / 60 / 60);
-    const minutes = Math.floor((diff / 1000 / 60) % 60);
-    const seconds = Math.floor((diff / 1000) % 60);
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+  function format(ms) {
+    const totalSec = Math.max(0, Math.floor(ms / 1000));
+    const h = String(Math.floor(totalSec / 3600)).padStart(2, '0');
+    const m = String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0');
+    const s = String(totalSec % 60).padStart(2, '0');
+    return `${h}:${m}:${s}`;
   }
   return <span>{timeLeft}</span>;
 }
