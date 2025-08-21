@@ -13,7 +13,6 @@ import {
   Share2,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-// FIX: your supabase.js exports a *named* export `supabase`
 import { supabase } from '../supabase';
 import { getRandomPlayer, API_BASE, getGamePrompt } from '../api';
 import {
@@ -22,7 +21,7 @@ import {
   clearPostGameCache,
 } from '../state/postGameCache';
 
-const REGULAR_START_POINTS = 6000; // kept for safety, but not used for "play again" anymore
+const REGULAR_START_POINTS = 6000;
 
 /* =========================
    UTC day boundary helpers
@@ -40,7 +39,6 @@ function dayRangeUtc(dateStr) {
   const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
   return { start: start.toISOString(), end: end.toISOString() };
 }
-/** Robust “time until next UTC midnight” */
 function msUntilNextUtcMidnight() {
   const now = new Date();
   const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
@@ -84,28 +82,25 @@ export default function PostGamePage() {
 
   const [scope, animate] = useAnimate();
 
-  // For “share” we capture only the card (hide the actions during capture)
+  // For sharing we capture only the card
   const cardRef = useRef(null);
   const actionsRef = useRef(null);
   const shareBusyRef = useRef(false);
 
-  // ---- cache guards ----
+  // cache guards
   const hasRestoredRef = useRef(false);
   const restoredFromCacheRef = useRef(false);
 
-  const playerKey = getPlayerKey(player); // used to validate cache belongs to this result
+  const playerKey = getPlayerKey(player);
 
-  // Personal display name resolved from public.users (fallback to auth metadata/email)
   const [displayName, setDisplayName] = useState(null);
 
-  // Fire confetti only for wins (first real render)
   useEffect(() => {
     if (didWin) {
       confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
     }
   }, [didWin]);
 
-  // Shake animation only on losses after page mounts
   useEffect(() => {
     if (didWin) return;
     if (!pageReady) return;
@@ -122,34 +117,24 @@ export default function PostGamePage() {
         await animate(scope.current, { x: -2 }, { duration: 0.05 });
         await animate(scope.current, { x: 2 }, { duration: 0.05 });
         await animate(scope.current, { x: 0 }, { duration: 0.05 });
-      } catch { /* StrictMode double-invoke safe */ }
+      } catch {}
     };
     sequence();
   }, [didWin, pageReady, animate]);
 
-  // ---------- Restore from cache instantly ----------
+  // Restore from cache
   useLayoutEffect(() => {
     if (hasRestoredRef.current) return;
 
     const cached = loadPostGameCache();
     if (cached && cached.playerKey === playerKey) {
       try {
-        if (typeof cached.aiGeneratedFact === 'string') {
-          setAiGeneratedFact(cached.aiGeneratedFact);
-        }
-        if (typeof cached.gamesLeft === 'number') {
-          setGamesLeft(cached.gamesLeft);
-        }
-        if (typeof cached.outroLine === 'string') {
-          setOutroLine(cached.outroLine);
-        }
-        // Show page right away
+        if (typeof cached.aiGeneratedFact === 'string') setAiGeneratedFact(cached.aiGeneratedFact);
+        if (typeof cached.gamesLeft === 'number') setGamesLeft(cached.gamesLeft);
+        if (typeof cached.outroLine === 'string') setOutroLine(cached.outroLine);
         setPageReady(true);
-
-        // Restore scroll gently
         requestAnimationFrame(() => window.scrollTo(0, cached.scrollY || 0));
         setTimeout(() => window.scrollTo(0, cached.scrollY || 0), 0);
-
         restoredFromCacheRef.current = true;
       } catch {
         clearPostGameCache();
@@ -159,7 +144,7 @@ export default function PostGamePage() {
     hasRestoredRef.current = true;
   }, [playerKey]);
 
-  // Save cache on unmount / tab hide
+  // Save cache
   useEffect(() => {
     const saveNow = () => {
       savePostGameCache({
@@ -170,7 +155,6 @@ export default function PostGamePage() {
         scrollY: window.scrollY,
       });
     };
-
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') saveNow();
     };
@@ -184,7 +168,7 @@ export default function PostGamePage() {
     };
   }, [playerKey, aiGeneratedFact, outroLine, gamesLeft]);
 
-  // ---------- Resolve the user's display name from public.users ----------
+  // Load display name
   useEffect(() => {
     let cancelled = false;
     async function loadName() {
@@ -218,7 +202,7 @@ export default function PostGamePage() {
     return () => { cancelled = true; };
   }, [user?.id]);
 
-  // ---------- Fetch "games left" — now using UTC day range ----------
+  // Games left (UTC)
   useEffect(() => {
     if (!user?.id) return;
     let cancelled = false;
@@ -248,14 +232,12 @@ export default function PostGamePage() {
     return () => { cancelled = true; };
   }, [user?.id]);
 
-  // ---------- AI bits: fun fact + outro line ----------
+  // AI content
   useEffect(() => {
     if (!player) {
       navigate('/game', { replace: true });
       return;
     }
-
-    // If we restored both from cache, just show the page.
     if (restoredFromCacheRef.current && (aiGeneratedFact || outroLine)) {
       setPageReady(true);
       return;
@@ -265,7 +247,6 @@ export default function PostGamePage() {
       let fact = '';
       let outro = '';
 
-      // 1) Fun fact
       try {
         const transfers = player.transfers || player.transferHistory || [];
         const res = await fetch(`${API_BASE}/ai/generate-player-fact`, {
@@ -285,9 +266,8 @@ export default function PostGamePage() {
           const data = await res.json();
           fact = (data && typeof data.fact === 'string') ? data.fact.trim() : '';
         }
-      } catch { /* ignore */ }
+      } catch {}
 
-      // 2) Dynamic top banner line (LLM endpoint if present; otherwise rich local fallback)
       try {
         let line = '';
         try {
@@ -306,9 +286,8 @@ export default function PostGamePage() {
               line = promptRes.text.trim();
             }
           }
-        } catch { /* ignore */ }
+        } catch {}
 
-        // Fallback endpoint
         if (!line) {
           try {
             const res2 = await fetch(`${API_BASE}/ai/game-outro`, {
@@ -325,14 +304,13 @@ export default function PostGamePage() {
               const data = await res2.json();
               line = (data && typeof data.line === 'string') ? data.line.trim() : '';
             }
-          } catch { /* ignore network errors */ }
+          } catch {}
         }
 
         if (!line) {
           line = localOutroLine({ didWin: !!didWin, stats, player });
         }
 
-        // *** PERSONALIZE ***
         const nameForLine =
           displayName ||
           user?.full_name ||
@@ -353,11 +331,8 @@ export default function PostGamePage() {
 
       setAiGeneratedFact(fact);
       setOutroLine(outro);
-
-      // Page is ready to show
       setPageReady(true);
 
-      // persist to cache
       savePostGameCache({
         playerKey,
         aiGeneratedFact: fact,
@@ -371,19 +346,17 @@ export default function PostGamePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playerKey, displayName]);
 
-  // If displayName arrives a bit later, re-personalize the already-built line
   useEffect(() => {
     if (outroLine && displayName) {
       setOutroLine((prev) => personalizeUserNameInLine(prev, displayName));
     }
   }, [displayName]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // If user somehow hits this without state, redirect
   useEffect(() => {
     if (!player) navigate('/game', { replace: true });
   }, [player, navigate]);
 
-  // ------- Play again with SAME FILTERS and next potential points = previous - 5 -------
+  // ------- Play again with SAME FILTERS -------
   const playAgainWithSameFilters = async () => {
     if (loading || gamesLeft <= 0) return;
     setLoading(true);
@@ -433,7 +406,7 @@ export default function PostGamePage() {
     }
   };
 
-  // ---- Share button: send a WhatsApp message with an IMAGE of the game card ----
+  // ---- Share: capture card, share/upload, or download fallback ----
   const onShare = async () => {
     if (shareBusyRef.current) return;
     shareBusyRef.current = true;
@@ -442,59 +415,59 @@ export default function PostGamePage() {
       const node = cardRef?.current;
       if (!node) throw new Error('Game card element not found');
 
-      // Hide the actions row during capture so buttons are not in the image
+      // Hide the actions buttons so they won't appear in the capture
       const actionsEl = actionsRef?.current;
       const prevActionsVisibility = actionsEl ? actionsEl.style.visibility : '';
       if (actionsEl) actionsEl.style.visibility = 'hidden';
 
-      // Hide *external-origin* images during capture to avoid iOS/Canvas taint,
-      // but keep same-origin images (e.g., from your app/public) visible.
-      const imgs = Array.from(node.querySelectorAll('img'));
-      const prevImgVisibility = imgs.map((img) => img.style.visibility);
-      try {
-        imgs.forEach((img) => {
-          const src = img.getAttribute('src') || '';
-          const origin = (() => {
-            try { return new URL(src, window.location.href).origin; } catch { return ''; }
-          })();
-          if (!origin || origin !== window.location.origin) {
-            img.style.visibility = 'hidden';
-          }
-        });
-
-        const dataUrl = await toPng(node, { pixelRatio: 2, cacheBust: true, backgroundColor: '#ffffff' });
-        const file = await dataUrlToFile(dataUrl, `footytrail-${Date.now()}.png`);
-
-        const shareText = buildShareText({ didWin, outroLine, player, stats, aiGeneratedFact });
-
-        if (navigator.canShare?.({ files: [file] })) {
-          await navigator.share({ text: shareText, files: [file] });
-        } else {
-          let publicUrl = '';
+      // Filter that EXCLUDES any cross-origin <img> from the render to prevent iOS/Canvas taint
+      const filter = (n) => {
+        if (!(n instanceof Element)) return true;
+        if (n.tagName === 'IMG') {
+          const src = n.getAttribute('src') || '';
           try {
-            if (supabase?.storage) {
-              publicUrl = await uploadToSupabaseImage(file, user?.id);
-            }
-          } catch (e) {
-            console.warn('Supabase upload failed, falling back to download.', e);
-          }
-
-          const text = `${shareText}${publicUrl ? `\n${publicUrl}` : ''}`.trim();
-          const waUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
-          window.open(waUrl, '_blank', 'noopener,noreferrer');
-
-          if (!publicUrl && document.hasFocus()) {
-            const a = document.createElement('a');
-            a.href = dataUrl;
-            a.download = `footytrail-${Date.now()}.png`;
-            a.click();
-            alert('Could not share directly. Image downloaded—send it via WhatsApp manually.');
+            const u = new URL(src, window.location.href);
+            if (u.origin !== window.location.origin) return false; // skip
+          } catch {
+            return false; // bad URL -> skip
           }
         }
-      } finally {
-        // Restore visibility (both actions and any images)
-        if (actionsEl) actionsEl.style.visibility = prevActionsVisibility;
-        imgs.forEach((img, i) => { img.style.visibility = prevImgVisibility[i]; });
+        return true;
+      };
+
+      const dataUrl = await toPng(node, {
+        pixelRatio: 2,
+        cacheBust: true,
+        backgroundColor: '#ffffff',
+        filter,
+      });
+
+      if (actionsEl) actionsEl.style.visibility = prevActionsVisibility;
+
+      const file = await dataUrlToFile(dataUrl, `footytrail-${Date.now()}.png`);
+      const shareText = buildShareText({ didWin, outroLine, player, stats, aiGeneratedFact });
+
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ text: shareText, files: [file] });
+      } else {
+        let publicUrl = '';
+        try {
+          if (supabase?.storage) publicUrl = await uploadToSupabaseImage(file, user?.id);
+        } catch (e) {
+          console.warn('Supabase upload failed, falling back to download.', e);
+        }
+
+        const text = `${shareText}${publicUrl ? `\n${publicUrl}` : ''}`.trim();
+        const waUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
+        window.open(waUrl, '_blank', 'noopener,noreferrer');
+
+        if (!publicUrl && document.hasFocus()) {
+          const a = document.createElement('a');
+          a.href = dataUrl;
+          a.download = `footytrail-${Date.now()}.png`;
+          a.click();
+          alert('Could not share directly. Image downloaded—send it via WhatsApp manually.');
+        }
       }
     } catch (e) {
       console.error('Share failed:', e);
@@ -504,12 +477,9 @@ export default function PostGamePage() {
     }
   };
 
-  // ----- Loading screen while page prepares -----
-  if (!pageReady) {
-    return <LoadingBounceLogo />;
-  }
-
-  if (!player) return null; // redirect handler above will take care
+  // ----- Loading screen -----
+  if (!pageReady) return <LoadingBounceLogo />;
+  if (!player) return null;
 
   const pdata = player || {};
   const photo = pdata.player_photo || pdata.photo || null;
@@ -519,7 +489,7 @@ export default function PostGamePage() {
       <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-4xl mx-auto px-4 py-8">
         <div ref={cardRef} className="bg-white rounded-xl shadow-sm p-6" >
-          {/* Dynamic top banner (LLM if available) */}
+          {/* Dynamic top banner */}
           <div
             ref={scope}
             className={`${didWin ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'} rounded-lg p-3 mb-6 text-center`}
@@ -607,7 +577,6 @@ export default function PostGamePage() {
                     ? <>Congratulations! You won the daily challenge and earned <span className="font-bold text-green-700">10,000 points</span>!<br /><span className="text-green-700 font-semibold">You also earned an extra game for today!</span></>
                     : 'Better luck next time! Try again tomorrow for another chance at 10,000 points.'}
                 </div>
-                {/* UTC-based countdown here */}
                 <div className="mt-2 text-sm text-gray-500">Next daily challenge in <CountdownToTomorrow /></div>
                 <div className="mt-4 flex gap-3">
                   <button
@@ -658,21 +627,17 @@ function getPlayerKey(p) {
   );
 }
 
-/** Replace generic “Player/player” with the user's display name (avoids touching phrases like “the player” when possible) */
 function personalizeUserNameInLine(line, displayName) {
   if (!line || !displayName) return line;
-
   let out = line.replace(/\bPlayer\b/g, displayName);
   try {
     out = out.replace(/(?<!\bthe\s)\bplayer\b/gi, displayName);
   } catch {
     out = out.replace(/(^|[.,!?\-\s])player\b/gi, (m, p1) => `${p1}${displayName}`);
   }
-
   return out;
 }
 
-/** Local, rich fallback line if LLM endpoint isn’t available */
 function localOutroLine({ didWin, stats, player }) {
   const name = player?.name || 'the player';
   const t = Number(stats?.timeSec || 0);
@@ -691,7 +656,6 @@ function localOutroLine({ didWin, stats, player }) {
   }
 }
 
-/** Build a rich HTML snippet for clipboard share (no buttons included) */
 function buildShareHTML({ didWin, outroLine, player, stats, aiGeneratedFact }) {
   const color = didWin ? '#166534' : '#991b1b';
   const badgeBG = didWin ? '#dcfce7' : '#fee2e2';
@@ -789,28 +753,17 @@ async function uploadToSupabaseImage(file, userId) {
   return pub?.publicUrl;
 }
 
-/** Full-screen loader with the app logo slowly spinning + bouncing left↔right */
+/** Full-screen loader */
 function LoadingBounceLogo() {
   return (
     <div className="fixed inset-0 z-50 bg-gradient-to-b from-green-50 to-transparent">
-      {/* The track area */}
       <div className="absolute inset-0">
-        {/* Horizontally moving + lightly bouncing Y */}
         <motion.div
           className="absolute left-1/2 -translate-x-1/2"
           style={{ top: '40vh' }}
-          animate={{
-            x: ['-40vw', '40vw', '-40vw'],
-            y: [0, -10, 0, -10, 0],
-          }}
-          transition={{
-            times: [0, 0.5, 1],
-            duration: 6,
-            ease: 'easeInOut',
-            repeat: Infinity,
-          }}
+          animate={{ x: ['-40vw', '40vw', '-40vw'], y: [0, -10, 0, -10, 0] }}
+          transition={{ times: [0, 0.5, 1], duration: 6, ease: 'easeInOut', repeat: Infinity }}
         >
-          {/* Spinning logo */}
           <motion.img
             src="/footytrail_logo.png"
             alt="FootyTrail"
@@ -819,11 +772,7 @@ function LoadingBounceLogo() {
             aria-label="Loading"
             role="img"
             animate={{ rotate: 360 }}
-            transition={{
-              repeat: Infinity,
-              duration: 8,
-              ease: 'linear',
-            }}
+            transition={{ repeat: Infinity, duration: 8, ease: 'linear' }}
           />
         </motion.div>
       </div>
