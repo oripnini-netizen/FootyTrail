@@ -1,1014 +1,973 @@
-// src/pages/LiveGamePage.jsx
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+// client/src/pages/PostGamePage.jsx
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { suggestNames, saveGameCompleted, fetchTransfers } from '../api';
+import { motion, useAnimate } from 'framer-motion';
+import confetti from 'canvas-confetti';
+import { toPng } from 'html-to-image';
 import {
-  AlarmClock,
-  Lightbulb,
+  User as UserIcon,
   Trophy,
-  CalendarDays,
-  ArrowRight,
-  BadgeEuro,
+  Clock,
+  Target,
+  ArrowLeft,
+  Share2,
 } from 'lucide-react';
-import { motion } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../supabase';
+import { getRandomPlayer, API_BASE, getGamePrompt } from '../api';
+import {
+  loadPostGameCache,
+  savePostGameCache,
+  clearPostGameCache,
+} from '../state/postGameCache';
 
-function classNames(...s) {
-  return s.filter(Boolean).join(' ');
+const REGULAR_START_POINTS = 6000;
+
+/* =========================
+   UTC day boundary helpers
+   ========================= */
+function toUtcMidnight(dateLike) {
+  const d =
+    typeof dateLike === 'string'
+      ? new Date(`${dateLike}T00:00:00.000Z`)
+      : new Date(dateLike);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+}
+function todayUtcMidnight() {
+  const now = new Date();
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+  );
+}
+function dayRangeUtc(dateStr) {
+  const start = toUtcMidnight(dateStr);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+function msUntilNextUtcMidnight() {
+  const now = new Date();
+  const next = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)
+  );
+  return next.getTime() - now.getTime();
+}
+function CountdownToTomorrow() {
+  const [timeLeft, setTimeLeft] = useState(format(msUntilNextUtcMidnight()));
+  useEffect(() => {
+    const id = setInterval(
+      () => setTimeLeft(format(msUntilNextUtcMidnight())),
+      1000
+    );
+    return () => clearInterval(id);
+  }, []);
+  function format(ms) {
+    const totalSec = Math.max(0, Math.floor(ms / 1000));
+    const h = String(Math.floor(totalSec / 3600)).padStart(2, '0');
+    const m = String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0');
+    const s = String(totalSec % 60).padStart(2, '0');
+    return `${h}:${m}:${s}`;
+  }
+  return <span>{timeLeft}</span>;
 }
 
-// -------------------------
-// Name matching helpers (kept in case you want local filtering later)
-// -------------------------
-function normalize(str) {
-  return (str || '')
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '');
-}
-function tokenize(s) {
-  return normalize(s).split(/\s+/).filter(Boolean);
-}
-function multiTokenStartsWithMatch(query, candidate) {
-  const qTokens = tokenize(query);
-  const cTokens = tokenize(candidate);
-  if (!qTokens.length || !cTokens.length) return false;
-  return qTokens.every((qt) => cTokens.some((ct) => ct.startsWith(qt)));
-}
-function longestToken(s) {
-  const t = tokenize(s);
-  return t.reduce((a, b) => (b.length > a.length ? b : a), '');
-}
-
-// -------------------------
-
-const HINTS = [
-  { key: 'age', label: "Player's Age", mult: '×0.90' },
-  { key: 'nationality', label: 'Nationality', mult: '×0.90' },
-  { key: 'position', label: "Player's Position", mult: '×0.80' },
-  { key: 'partialImage', label: "Player's Image", mult: '×0.50' },
-  { key: 'firstLetter', label: "Player's First Letter", mult: '×0.25' },
-];
-
-export default function LiveGamePage() {
-  const location = useLocation();
+export default function PostGamePage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { didWin, player, stats, filters, isDaily } = location.state || {};
   const { user } = useAuth();
 
-  // Boot payload: either daily (from GamePage) or normal
-  const isDaily = !!location.state?.isDaily;
-  const gameData = location.state
-    ? {
-        id: location.state.id,
-        name: location.state.name,
-        age: location.state.age,
-        nationality: location.state.nationality,
-        position: location.state.position,
-        photo: location.state.photo,
-        funFact: location.state.funFact,
-        potentialPoints: location.state.potentialPoints ?? 10000,
-        player_id: location.state.id, // keep for safety
-      }
-    : null;
+  const prevPotentialPoints =
+    location.state?.potentialPoints ??
+    location.state?.prevPotentialPoints ??
+    location.state?.potential_points ??
+    filters?.potentialPoints ??
+    null;
 
-  // Filters passed only for PostGame
-  const filters = location.state?.filters || { potentialPoints: 0 };
+  const [loading, setLoading] = useState(false);
+  const [gamesLeft, setGamesLeft] = useState(null);
 
-  // 2 minutes timer
-  const INITIAL_TIME = 120;
+  const [aiGeneratedFact, setAiGeneratedFact] = useState('');
+  const [outroLine, setOutroLine] = useState('');
+  const [pageReady, setPageReady] = useState(false);
 
-  const [guessesLeft, setGuessesLeft] = useState(3);
-  const [guess, setGuess] = useState(''); // keep string
-  const [suggestions, setSuggestions] = useState([]);
-  const [highlightIndex, setHighlightIndex] = useState(-1);
+  const [scope, animate] = useAnimate();
 
-  // NEW: refs for auto-scrolling the highlighted suggestion into view
-  const listRef = useRef(null);
-  const itemRefs = useRef([]);
+  // For sharing we capture only the card
+  const cardRef = useRef(null);
+  const actionsRef = useRef(null);
+  const shareBusyRef = useRef(false);
 
-  const [usedHints, setUsedHints] = useState({
-    age: false,
-    nationality: false,
-    position: false,
-    partialImage: false,
-    firstLetter: false,
-  });
-  const [isWrongGuess, setIsWrongGuess] = useState(false);
+  // cache guards
+  const hasRestoredRef = useRef(false);
+  const restoredFromCacheRef = useRef(false);
 
-  const [timeSec, setTimeSec] = useState(INITIAL_TIME);
-  const timerRef = useRef(null);
-  const endedRef = useRef(false);
+  const playerKey = getPlayerKey(player);
 
-  // Transfers
-  const [transferHistory, setTransferHistory] = useState([]);
-  const [loadingTransfers, setLoadingTransfers] = useState(true);
-
-  // -------- username from public.users.full_name (fallbacks to email local-part -> "Player") --------
-  const [displayName, setDisplayName] = useState('Player');
+  const [displayName, setDisplayName] = useState(null);
 
   useEffect(() => {
-    let cancelled = false;
-    async function loadFullName() {
+    if (didWin) {
+      confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+    }
+  }, [didWin]);
+
+  useEffect(() => {
+    if (didWin) return;
+    if (!pageReady) return;
+    if (!scope.current) return;
+
+    const sequence = async () => {
       try {
-        // prefer full_name from public.users
-        if (user?.id) {
-          const { data, error } = await supabase
-            .from('users')
-            .select('full_name')
-            .eq('id', user.id)
-            .maybeSingle();
-          if (!cancelled) {
-            const dbName = (data?.full_name || '').trim();
-            if (dbName) {
-              setDisplayName(dbName);
-              return;
-            }
-          }
-        }
-        // fallback: auth email local part
-        const emailName = (user?.email || '').split('@')[0]?.trim();
+        await animate(scope.current, { x: -5 }, { duration: 0.05 });
+        await animate(scope.current, { x: 5 }, { duration: 0.05 });
+        await animate(scope.current, { x: -5 }, { duration: 0.05 });
+        await animate(scope.current, { x: 5 }, { duration: 0.05 });
+        await animate(scope.current, { x: -3 }, { duration: 0.05 });
+        await animate(scope.current, { x: 3 }, { duration: 0.05 });
+        await animate(scope.current, { x: -2 }, { duration: 0.05 });
+        await animate(scope.current, { x: 2 }, { duration: 0.05 });
+        await animate(scope.current, { x: 0 }, { duration: 0.05 });
+      } catch {}
+    };
+    sequence();
+  }, [didWin, pageReady, animate]);
+
+  // Restore from cache
+  useLayoutEffect(() => {
+    if (hasRestoredRef.current) return;
+
+    const cached = loadPostGameCache();
+    if (cached && cached.playerKey === playerKey) {
+      try {
+        if (typeof cached.aiGeneratedFact === 'string')
+          setAiGeneratedFact(cached.aiGeneratedFact);
+        if (typeof cached.gamesLeft === 'number')
+          setGamesLeft(cached.gamesLeft);
+        if (typeof cached.outroLine === 'string')
+          setOutroLine(cached.outroLine);
+        setPageReady(true);
+        requestAnimationFrame(() => window.scrollTo(0, cached.scrollY || 0));
+        setTimeout(() => window.scrollTo(0, cached.scrollY || 0), 0);
+        restoredFromCacheRef.current = true;
+      } catch {
+        clearPostGameCache();
+      }
+    }
+
+    hasRestoredRef.current = true;
+  }, [playerKey]);
+
+  // Save cache
+  useEffect(() => {
+    const saveNow = () => {
+      savePostGameCache({
+        playerKey,
+        aiGeneratedFact,
+        outroLine,
+        gamesLeft,
+        scrollY: window.scrollY,
+      });
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') saveNow();
+    };
+    document.addEventListener('visibilitychange', onVisibility, {
+      passive: true,
+    });
+    window.addEventListener('pagehide', saveNow, { passive: true });
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', saveNow);
+      saveNow();
+    };
+  }, [playerKey, aiGeneratedFact, outroLine, gamesLeft]);
+
+  // Load display name
+  useEffect(() => {
+    let cancelled = false;
+    async function loadName() {
+      if (!user?.id) return;
+      try {
+        const { data, error } = await supabase
+          .from('users')
+          .select('full_name')
+          .eq('id', user.id)
+          .single();
+        if (error) throw error;
         if (!cancelled) {
-          setDisplayName(emailName || 'Player');
+          const name =
+            data?.full_name ||
+            user?.user_metadata?.full_name ||
+            (user?.email ? user.email.split('@')[0] : null) ||
+            null;
+          setDisplayName(name);
         }
       } catch {
         if (!cancelled) {
-          const emailName = (user?.email || '').split('@')[0]?.trim();
-          setDisplayName(emailName || 'Player');
+          const name =
+            user?.user_metadata?.full_name ||
+            (user?.email ? user.email.split('@')[0] : null) ||
+            null;
+          setDisplayName(name);
         }
       }
     }
-    loadFullName();
+    loadName();
     return () => {
       cancelled = true;
     };
-  }, [user?.id, user?.email]);
+  }, [user?.id]);
 
-  // helper to call backend outro with username
-  const generateOutro = async (won, pointsValue, guessesUsed, elapsedSec) => {
-    try {
-      const resp = await fetch('/api/ai/game-outro', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          didWin: !!won,
-          points: pointsValue,
-          guesses: guessesUsed,
-          timeSeconds: elapsedSec,
-          playerName: gameData?.name || null,
-          isDaily: !!isDaily,
-          username: displayName, // <-- pass the name from public.users
-        }),
-      });
-      const data = await resp.json();
-      return data?.line || null;
-    } catch {
-      return null;
-    }
-  };
-
-  // -------------------------
-  // BOOTSTRAP: get the card
-  // -------------------------
+  // Games left (UTC)
   useEffect(() => {
-    let mounted = true;
+    if (!user?.id) return;
+    let cancelled = false;
 
-    const bootstrap = async () => {
+    async function fetchGamesLeftUtc() {
       try {
-        // If navigated with a prepared card in state
-        if (location.state && location.state.id && location.state.name) {
-          // kick off timer
-          timerRef.current = setInterval(() => {
-            setTimeSec((t) => {
-              if (t <= 1) {
-                clearInterval(timerRef.current);
-                if (!endedRef.current) {
-                  endedRef.current = true;
-                  (async () => {
-                    await saveGameRecord(false);
-                    const outroLine = await generateOutro(
-                      false,
-                      0,
-                      3,
-                      INITIAL_TIME /* user ran out of time */
-                    );
-                    navigate('/postgame', {
-                      state: {
-                        didWin: false,
-                        player: gameData,
-                        stats: { pointsEarned: 0, timeSec: INITIAL_TIME, guessesUsed: 3, usedHints },
-                        filters,
-                        isDaily,
-                        potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
-                        outroLine: outroLine || null,
-                      },
-                      replace: true,
-                    });
-                  })();
-                }
-              }
-              return t - 1;
-            });
-          }, 1000);
-
-          // load transfers
-          const th = await fetchTransfers(gameData.id);
-          if (mounted) {
-            setTransferHistory(Array.isArray(th) ? th : []);
-            setLoadingTransfers(false);
-          }
-          return;
+        const todayISO = todayUtcMidnight().toISOString().slice(0, 10);
+        const { start, end } = dayRangeUtc(todayISO);
+        const { data, error } = await supabase
+          .from('games_records')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('is_daily_challenge', false)
+          .gte('created_at', start)
+          .lt('created_at', end);
+        if (error) throw error;
+        if (!cancelled) {
+          const remaining = 10 - (data?.length || 0);
+          setGamesLeft(Math.max(0, remaining));
         }
-
-        // Otherwise we can't start
-        throw new Error('No game payload found.');
-      } catch (err) {
-        console.error('Failed to start game', err);
-        alert('Failed to start game. Please go back and try again.');
-        navigate('/game', { replace: true });
+      } catch {
+        if (!cancelled) setGamesLeft(null);
       }
-    };
-
-    bootstrap();
-
-    return () => {
-      mounted = false;
-      clearInterval(timerRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.state?.id, location.state?.name]);
-
-  // -------------------------
-  // Suggestions (debounced, defensive)
-  // -------------------------
-  useEffect(() => {
-    let active = true;
-    const id = setTimeout(async () => {
-      // Always coerce to string before trimming
-      const raw = typeof guess === 'string' ? guess : String(guess ?? '');
-      const q = raw.trim();
-      if (!q) {
-        if (active) setSuggestions([]);
-        return;
-      }
-      try {
-        const res = await suggestNames(q, 50); // ask for more than 5
-        if (!active) return;
-
-        // Normalize to { id, display }
-        const normalized = (Array.isArray(res) ? res : [])
-          .map((r) => {
-            if (typeof r === 'string') return { id: r, display: r };
-            const idVal =
-              r.id ??
-              r.player_id ??
-              r.pid ??
-              r.value ??
-              `${r.player_name || r.name || r.display || r.player_norm_name || r.norm || ''}`.toLowerCase();
-
-            const displayVal =
-              r.display ??
-              r.name ??
-              r.player_name ??
-              r.norm ??
-              r.player_norm_name ??
-              '';
-
-            return { id: idVal, display: String(displayVal || '').trim() };
-          })
-          .filter((x) => x.display); // drop empties
-
-        // De-duplicate by display text
-        const seen = new Set();
-        const deduped = [];
-        for (const s of normalized) {
-          const key = s.display.toLowerCase();
-          if (!seen.has(key)) {
-            seen.add(key);
-            deduped.push(s);
-          }
-        }
-
-        setSuggestions(deduped);
-        // reset item refs length to match
-        itemRefs.current = new Array(deduped.length);
-      } catch (e) {
-        console.error('[suggestNames] failed:', e);
-        if (active) setSuggestions([]);
-      }
-    }, 200);
-    return () => {
-      active = false;
-      clearTimeout(id);
-    };
-  }, [guess]);
-
-  // NEW: keep highlighted item scrolled into view as you arrow through the list
-  useEffect(() => {
-    if (highlightIndex < 0 || !listRef.current) return;
-    const el = itemRefs.current[highlightIndex];
-    if (el && el.scrollIntoView) {
-      el.scrollIntoView({ block: 'nearest' });
     }
-  }, [highlightIndex]);
 
-  // -------------------------
-  // Hints / Points
-  // -------------------------
-  const multipliers = {
-    age: 0.9,
-    nationality: 0.9,
-    position: 0.8,
-    partialImage: 0.5,
-    firstLetter: 0.25,
-  };
-
-  // Treat Transfermarkt generic silhouette as "no real photo" for hint penalty
-  const isGenericPhoto = useMemo(() => {
-    const url = gameData?.photo || '';
-    return /\/default\.jpg(\?|$)/i.test(url);
-  }, [gameData?.photo]);
-
-  // Points incl. time decay, hint penalties, and wrong-guess halving
-  const points = useMemo(() => {
-    const potentialPoints = Number(
-      gameData?.potentialPoints || filters?.potentialPoints || 0
-    );
-    let p = potentialPoints;
-
-    Object.keys(usedHints).forEach((k) => {
-      if (!usedHints[k]) return;
-      if (k === 'partialImage' && isGenericPhoto) return; // no penalty if generic photo
-      p = Math.floor(p * multipliers[k]);
-    });
-
-    const timeElapsed = INITIAL_TIME - timeSec;
-    const timeDecay = Math.pow(0.99, timeElapsed);
-    p = Math.floor(p * timeDecay);
-
-    const wrongAttempts = Math.max(0, 3 - guessesLeft);
-    p = Math.floor(p * Math.pow(0.5, wrongAttempts));
-
-    return Math.max(0, p);
-  }, [gameData?.potentialPoints, filters?.potentialPoints, usedHints, timeSec, guessesLeft, isGenericPhoto]);
-
-  const formatTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  // Anti-cheat / tab leave → loss  (existing visibilitychange + NEW: window blur)
-  useEffect(() => {
-    const lose = () => {
-      if (endedRef.current) return;
-      endedRef.current = true;
-      clearInterval(timerRef.current);
-      (async () => {
-        await saveGameRecord(false);
-        const outroLine = await generateOutro(
-          false,
-          0,
-          3,
-          INITIAL_TIME - timeSec
-        );
-        navigate('/postgame', {
-          state: {
-            didWin: false,
-            player: gameData,
-            stats: { pointsEarned: 0, timeSec: INITIAL_TIME - timeSec, guessesUsed: 3, usedHints },
-            filters,
-            isDaily,
-            potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
-            outroLine: outroLine || null,
-          },
-          replace: true,
-        });
-      })();
-    };
-
-    const onHide = () => {
-      if (document.hidden) lose();
-    };
-    const onBlur = () => {
-      // opening a new window or switching focus away will blur the current window
-      lose();
-    };
-
-    document.addEventListener('visibilitychange', onHide);
-    window.addEventListener('blur', onBlur);
-
+    fetchGamesLeftUtc();
     return () => {
-      document.removeEventListener('visibilitychange', onHide);
-      window.removeEventListener('blur', onBlur);
+      cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameData?.id, timeSec]);
+  }, [user?.id]);
 
-  // Save record helper (expects { userId, playerData, gameStats })
-  const saveGameRecord = async (won) => {
-    try {
-      const playerIdNumeric = Number(gameData?.id ?? location.state?.id);
-      if (!playerIdNumeric || Number.isNaN(playerIdNumeric)) {
-        throw new Error('Missing playerData.id in request');
-      }
-
-      const playerData = {
-        id: playerIdNumeric,
-        name: gameData.name,
-        nationality: gameData.nationality,
-        position: gameData.position,
-        age: gameData.age,
-        photo: gameData.photo,
-      };
-
-      const gameStats = {
-        won,
-        points: won ? points : 0,
-        potentialPoints:
-          gameData.potentialPoints || filters?.potentialPoints || 10000,
-        timeTaken: INITIAL_TIME - timeSec,
-        guessesAttempted: 3 - guessesLeft + (won ? 1 : 0),
-        hintsUsed: Object.values(usedHints).filter(Boolean).length,
-        isDaily: !!isDaily,
-      };
-
-      const body = {
-        userId: user?.id || null,
-        playerData,
-        gameStats,
-      };
-
-      const resp = await saveGameCompleted(body);
-      if (resp && resp.error) {
-        console.error('[saveGameCompleted] error:', resp.error);
-        return null;
-      }
-      return true;
-    } catch (err) {
-      console.error('Error in saveGameRecord:', err);
-      return null;
+  // AI content
+  useEffect(() => {
+    if (!player) {
+      navigate('/game', { replace: true });
+      return;
     }
-  };
-
-  const reveal = (key) => setUsedHints((u) => ({ ...u, [key]: true }));
-
-  const timeColorClass =
-    timeSec <= 30 ? 'text-red-600' : timeSec <= 60 ? 'text-yellow-600' : 'text-gray-900';
-
-  // Loading and missing
-  if (!location.state || !location.state.id) {
-    return (
-      <div className="max-w-3xl mx-auto p-4">
-        <div className="rounded-xl bg-white shadow p-6 text-center">
-          <p className="text-red-600 font-medium">No game payload found.</p>
-          <button
-            className="mt-3 px-4 py-2 rounded bg-gray-800 text-white"
-            onClick={() => navigate('/game')}
-          >
-            Back to Game
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // -------------------------
-  // Submit guess
-  // -------------------------
-  const submitGuess = async (value) => {
-    const v = typeof value === 'string' ? value.trim() : String(value ?? '').trim();
-    if (!v || endedRef.current) return;
-
-    const correct = v.toLowerCase() === (gameData?.name || '').trim().toLowerCase();
-
-    if (correct) {
-      endedRef.current = true;
-      clearInterval(timerRef.current);
-      await saveGameRecord(true);
-
-      const elapsed = INITIAL_TIME - timeSec;
-      const guessesUsed = 3 - guessesLeft + 1;
-      const outroLine = await generateOutro(true, points, guessesUsed, elapsed);
-
-      navigate('/postgame', {
-        state: {
-          didWin: true,
-          player: {
-            id: gameData.id,
-            name: gameData.name,
-            photo: gameData.photo,
-            age: gameData.age,
-            nationality: gameData.nationality,
-            position: gameData.position,
-            funFact: gameData.funFact,
-          },
-          stats: {
-            pointsEarned: points,
-            timeSec: elapsed,
-            guessesUsed,
-            usedHints,
-          },
-          filters,
-          isDaily,
-          potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
-          outroLine: outroLine || null,
-        },
-        replace: true,
-      });
+    if (restoredFromCacheRef.current && (aiGeneratedFact || outroLine)) {
+      setPageReady(true);
       return;
     }
 
-    // wrong guess → halve points (handled in `points` useMemo via guessesLeft)
-    setIsWrongGuess(true);
-    setTimeout(() => setIsWrongGuess(false), 350);
+    const fetchAll = async () => {
+      let fact = '';
+      let outro = '';
 
-    if (guessesLeft <= 1) {
-      endedRef.current = true;
-      clearInterval(timerRef.current);
-      await saveGameRecord(false);
+      try {
+        const transfers = player.transfers || player.transferHistory || [];
+        const res = await fetch(`${API_BASE}/ai/generate-player-fact`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            player: {
+              name: player.name || player.player_name || 'Unknown Player',
+              nationality:
+                player.nationality || player.player_nationality || '',
+              position: player.position || player.player_position || '',
+              age: player.age || player.player_age || '',
+            },
+            transferHistory: transfers,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          fact =
+            data && typeof data.fact === 'string' ? data.fact.trim() : '';
+        }
+      } catch {}
 
-      const elapsed = INITIAL_TIME - timeSec;
-      const outroLine = await generateOutro(false, 0, 3, elapsed);
+      try {
+        let line = '';
+        try {
+          if (typeof getGamePrompt === 'function') {
+            const promptRes = await getGamePrompt({
+              mode: 'postgame',
+              didWin: !!didWin,
+              stats: stats || {},
+              player: {
+                name: player?.name,
+                position: player?.position,
+                nationality: player?.nationality,
+              },
+            });
+            if (promptRes && typeof promptRes.text === 'string') {
+              line = promptRes.text.trim();
+            }
+          }
+        } catch {}
 
-      navigate('/postgame', {
+        if (!line) {
+          try {
+            const res2 = await fetch(`${API_BASE}/ai/game-outro`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                didWin,
+                stats,
+                playerName: player?.name,
+                isDaily: !!isDaily,
+              }),
+            });
+            if (res2.ok) {
+              const data = await res2.json();
+              line =
+                data && typeof data.line === 'string'
+                  ? data.line.trim()
+                  : '';
+            }
+          } catch {}
+        }
+
+        if (!line) {
+          line = localOutroLine({ didWin: !!didWin, stats, player });
+        }
+
+        const nameForLine =
+          displayName ||
+          user?.full_name ||
+          user?.user_metadata?.full_name ||
+          (user?.email ? user.email.split('@')[0] : null) ||
+          'Player';
+        outro = personalizeUserNameInLine(line, nameForLine);
+      } catch {
+        const fallbackLine = localOutroLine({ didWin: !!didWin, stats, player });
+        const nameForLine =
+          displayName ||
+          user?.full_name ||
+          user?.user_metadata?.full_name ||
+          (user?.email ? user.email.split('@')[0] : null) ||
+          'Player';
+        outro = personalizeUserNameInLine(fallbackLine, nameForLine);
+      }
+
+      setAiGeneratedFact(fact);
+      setOutroLine(outro);
+      setPageReady(true);
+
+      savePostGameCache({
+        playerKey,
+        aiGeneratedFact: fact,
+        outroLine: outro,
+        gamesLeft,
+        scrollY: window.scrollY,
+      });
+    };
+
+    fetchAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playerKey, displayName]);
+
+  useEffect(() => {
+    if (outroLine && displayName) {
+      setOutroLine((prev) => personalizeUserNameInLine(prev, displayName));
+    }
+  }, [displayName]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!player) navigate('/game', { replace: true });
+  }, [player, navigate]);
+
+  // ------- Play again with SAME FILTERS -------
+  const playAgainWithSameFilters = async () => {
+    if (loading || gamesLeft <= 0) return;
+    setLoading(true);
+    try {
+      const competitions =
+        filters?.competitions && Array.isArray(filters.competitions)
+          ? filters.competitions
+          : [];
+      const seasons =
+        filters?.seasons && Array.isArray(filters.seasons) ? filters.seasons : [];
+      const minMarketValue =
+        Number(filters?.minMarketValue ?? filters?.min_market_value ?? 0) || 0;
+
+      const prevPot = Number(prevPotentialPoints);
+      if (!Number.isFinite(prevPot) || prevPot <= 0) {
+        alert(
+          'Could not determine the previous round’s pool size. Please start from the Game page.'
+        );
+        setLoading(false);
+        return;
+      }
+      if (prevPot <= 5) {
+        alert(
+          'No players left in the pool with those filters. Please adjust your selection.'
+        );
+        setLoading(false);
+        return;
+      }
+
+      const nextPotential = prevPot - 5;
+
+      const nextCard = await getRandomPlayer(
+        { competitions, seasons, minMarketValue },
+        user?.id
+      );
+
+      clearPostGameCache();
+
+      navigate('/live', {
         state: {
-          didWin: false,
-          player: {
-            id: gameData.id,
-            name: gameData.name,
-            photo: gameData.photo,
-            age: gameData.age,
-            nationality: gameData.nationality,
-            position: gameData.position,
-          },
-          stats: {
-            pointsEarned: 0,
-            timeSec: elapsed,
-            guessesUsed: 3,
-            usedHints,
-          },
-          filters,
-          isDaily,
-          potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
-          outroLine: outroLine || null,
+          ...nextCard,
+          isDaily: false,
+          filters: { competitions, seasons, minMarketValue },
+          potentialPoints: nextPotential,
+          fromPostGame: true,
         },
         replace: true,
       });
-    } else {
-      setGuessesLeft((g) => g - 1);
+    } catch (error) {
+      console.error('Error starting new game:', error);
+      alert('Failed to start a new game. Please try again.');
+      setLoading(false);
     }
   };
 
-  // -------------------------
-  // UI
-  // -------------------------
-  return (
-    <div className="max-w-5xl mx-auto p-4 space-y-6">
-      {/* Warning */}
-      <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 text-amber-800 font-medium text-center">
-        ⚠️ Don’t leave this page — leaving or switching windows will count as a loss.
-      </div>
+  // ---- Share: capture card, share/upload, or download fallback ----
+  const onShare = async () => {
+    if (shareBusyRef.current) return;
+    shareBusyRef.current = true;
 
-      {/* Header Card */}
-      <div className="rounded-xl bg-white shadow p-6">
-        <div className="grid md:grid-cols-3 items-center">
-          {/* Left: Round type */}
-          <div className="flex items-center gap-3 justify-start">
-            <Trophy className="h-5 w-5 text-purple-600" />
-            <div className="text-sm">
-              {isDaily ? (
-                <span className="font-semibold text-purple-700">Daily Challenge</span>
-              ) : (
-                <span className="text-gray-600">Regular Round</span>
-              )}
-              <div className="text-sm">
-                <span className="text-gray-900 text-base">
-                  Potential: <span className="font-bold">{gameData.potentialPoints}</span>
-                </span>
+    try {
+      const node = cardRef?.current;
+      if (!node) throw new Error('Game card element not found');
+
+      // Hide the actions buttons so they won't appear in the capture
+      const actionsEl = actionsRef?.current;
+      const prevActionsVisibility = actionsEl ? actionsEl.style.visibility : '';
+      if (actionsEl) actionsEl.style.visibility = 'hidden';
+
+      // If we have a player photo, temporarily swap it to a data URL (strongest fix for iOS)
+      const playerImg = node.querySelector('img[data-role="player-photo"]');
+      let restoreImg = null;
+      if (playerImg && playerImg.src) {
+        try {
+          restoreImg = await swapImgSrcToDataURL(playerImg);
+        } catch {
+          // if inline fails, we still try capture with proxy URL
+          restoreImg = null;
+        }
+      }
+
+      // Filter that EXCLUDES cross-origin <img>, but ALLOWS data: and blob:
+      const filter = (n) => {
+        if (!(n instanceof Element)) return true;
+        if (n.tagName === 'IMG') {
+          const src = n.getAttribute('src') || '';
+          try {
+            const u = new URL(src, window.location.href);
+            // allow same-origin
+            if (u.origin === window.location.origin) return true;
+            // allow data: and blob:
+            if (u.protocol === 'data:' || u.protocol === 'blob:') return true;
+            return false; // skip external HTTP(S)
+          } catch {
+            // If URL parsing fails (e.g., invalid), skip it to be safe
+            return false;
+          }
+        }
+        return true;
+      };
+
+      const dataUrl = await toPng(node, {
+        pixelRatio: 2,
+        cacheBust: true,
+        backgroundColor: '#ffffff',
+        filter,
+      });
+
+      // restore photo src if we changed it
+      if (typeof restoreImg === 'function') {
+        restoreImg();
+      }
+
+      if (actionsEl) actionsEl.style.visibility = prevActionsVisibility;
+
+      const file = await dataUrlToFile(dataUrl, `footytrail-${Date.now()}.png`);
+      const shareText = buildShareText({ didWin, player });
+
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ text: shareText, files: [file] });
+      } else {
+        let publicUrl = '';
+        try {
+          if (supabase?.storage)
+            publicUrl = await uploadToSupabaseImage(file, user?.id);
+        } catch (e) {
+          console.warn('Supabase upload failed, falling back to download.', e);
+        }
+
+        const text = `${shareText}${publicUrl ? `\n${publicUrl}` : ''}`.trim();
+        const waUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
+        window.open(waUrl, '_blank', 'noopener,noreferrer');
+
+        if (!publicUrl && document.hasFocus()) {
+          const a = document.createElement('a');
+          a.href = dataUrl;
+          a.download = `footytrail-${Date.now()}.png`;
+          a.click();
+          alert(
+            'Could not share directly. Image downloaded—send it via WhatsApp manually.'
+          );
+        }
+      }
+    } catch (e) {
+      console.error('Share failed:', e);
+      alert(
+        `Sorry—something went wrong preparing the share image.${
+          e?.message ? `\n\nDetails: ${e.message}` : ''
+        }`
+      );
+    } finally {
+      shareBusyRef.current = false;
+    }
+  };
+
+  // ----- Loading screen -----
+  if (!pageReady) return <LoadingBounceLogo />;
+  if (!player) return null;
+
+  const pdata = player || {};
+  const photo = pdata.player_photo || pdata.photo || null;
+
+  // PROXY the external photo through our own domain to make it same-origin (capturable)
+  const proxiedPhoto = photo
+    ? `/api/proxy-image?src=${encodeURIComponent(photo)}`
+    : null;
+
+  // Compute guesses used (fix: prefer history length when present; never negative)
+  const guessesUsed = computeGuessesUsed(stats);
+
+  return (
+    <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
+      <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        className="max-w-4xl mx-auto px-4 py-8"
+      >
+        <div ref={cardRef} className="bg-white rounded-xl shadow-sm p-6">
+          {/* Dynamic top banner */}
+          <div
+            ref={scope}
+            className={`${
+              didWin
+                ? 'bg-green-50 border border-green-200'
+                : 'bg-red-50 border border-red-200'
+            } rounded-lg p-3 mb-6 text-center`}
+          >
+            <h2
+              className={`text-xl font-bold ${
+                didWin ? 'text-green-700' : 'text-red-700'
+              }`}
+            >
+              {outroLine ||
+                (didWin
+                  ? 'Great job! You guessed it!'
+                  : `Not quite! The player was ${player?.name}`)}
+            </h2>
+          </div>
+
+          {/* Player Info */}
+          <div className="flex gap-6 mb-6">
+            {proxiedPhoto ? (
+              <img
+                src={proxiedPhoto}
+                crossOrigin="anonymous"
+                alt={player.name}
+                className="w-32 h-32 object-cover rounded-lg"
+                data-role="player-photo"
+              />
+            ) : (
+              <div className="w-32 h-32 bg-gray-100 rounded-lg flex items-center justify-center">
+                <UserIcon className="w-12 h-12 text-gray-400" />
+              </div>
+            )}
+            <div>
+              <h1 className="text-2xl font-bold mb-2">{player?.name}</h1>
+              <div className="space-y-1 text-gray-600">
+                <p>Age: {player?.age}</p>
+                <p>Nationality: {player?.nationality}</p>
+                <p>Position: {player?.position}</p>
               </div>
             </div>
           </div>
 
-          {/* Center: Current points (gold) */}
-          <div className="flex items-center justify-center">
-            <div className="text-2xl font-extrabold text-amber-600">
-              Current points: <span>{points}</span>
+          {/* AI Fact */}
+          {aiGeneratedFact && (
+            <div className="bg-blue-50 rounded-lg p-4 mb-6">
+              <p className="italic text-gray-800">{aiGeneratedFact}</p>
+              <p className="mt-2 text-xs text-gray-500">
+                And now you'll have to google that to see if I made it all up...
+              </p>
             </div>
-          </div>
+          )}
 
-          {/* Right: timer + guesses */}
-          <div className="flex flex-col items-end gap-1">
-            <div className={classNames('flex items-center gap-3 text-2xl font-semibold', timeColorClass)}>
-              <AlarmClock className="h-6 w-6" />
-              {formatTime(timeSec)}
-            </div>
-            <div className="text-sm text-gray-600">
-              Guesses left: <span className="font-semibold">{guessesLeft}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Hints + Guess + Transfers */}
-      <div className="grid lg:grid-cols-3 gap-6">
-        {/* Hints */}
-        <div className="rounded-xl bg-white shadow p-6 space-y-4 lg:col-span-1">
-          <h3 className="text-lg font-semibold mb-2">Hints</h3>
-
-          <HintButton
-            label="Player's Age"
-            multiplier="×0.90"
-            disabled={usedHints.age || !gameData?.age}
-            onClick={() => reveal('age')}
-            valueShown={usedHints.age ? String(gameData?.age) : null}
-          />
-          <HintButton
-            label="Nationality"
-            multiplier="×0.90"
-            disabled={usedHints.nationality || !gameData?.nationality}
-            onClick={() => reveal('nationality')}
-            valueShown={usedHints.nationality ? String(gameData?.nationality) : null}
-          />
-          <HintButton
-            label="Player's Position"
-            multiplier="×0.80"
-            disabled={usedHints.position || !gameData?.position}
-            onClick={() => reveal('position')}
-            valueShown={usedHints.position ? String(gameData?.position) : null}
-          />
-          <HintButton
-            label="Player's Image"
-            multiplier="×0.50"
-            disabled={usedHints.partialImage || !gameData?.photo}
-            onClick={() => reveal('partialImage')}
-            valueShown={
-              usedHints.partialImage ? (
-                <div className="flex justify-center">
-                  <img
-                    src={gameData?.photo}
-                    alt="Player Hint"
-                    className="w-32 h-32 object-cover object-top"
-                    style={{ clipPath: 'inset(0 0 34% 0)' }} // show top ~2/3, centered & bigger
-                  />
-                </div>
-              ) : null
-            }
-          />
-          <HintButton
-            label="Player's First Letter"
-            multiplier="×0.25"
-            disabled={usedHints.firstLetter || !gameData?.name}
-            onClick={() => reveal('firstLetter')}
-            valueShown={usedHints.firstLetter ? String(gameData?.name?.[0]?.toUpperCase() || '') : null}
-          />
-        </div>
-
-        {/* Guess + Suggestions */}
-        <motion.div
-          className="rounded-xl bg-white shadow p-6 lg:col-span-2"
-          animate={
-            isWrongGuess
-              ? { x: [-10, 10, -10, 10, 0], transition: { duration: 0.4 } }
-              : {}
-          }
-        >
-          <h3 className="text-lg font-semibold mb-3">Who are ya?!</h3>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (highlightIndex >= 0 && highlightIndex < suggestions.length) {
-                const chosen = suggestions[highlightIndex];
-                if (chosen?.display) {
-                  submitGuess(chosen.display);
-                  return;
-                }
-              }
-              submitGuess(guess);
-            }}
-            className="space-y-4"
-          >
-            <input
-              type="text"
-              value={guess}
-              onChange={(e) => {
-                // ensure we store a string
-                setGuess(typeof e.target.value === 'string' ? e.target.value : String(e.target.value ?? ''));
-                setHighlightIndex(-1);
-              }}
-              onKeyDown={(e) => {
-                if (!suggestions.length) return;
-                if (e.key === 'ArrowDown') {
-                  e.preventDefault();
-                  setHighlightIndex((i) => (i + 1) % suggestions.length);
-                } else if (e.key === 'ArrowUp') {
-                  e.preventDefault();
-                  setHighlightIndex((i) => (i - 1 + suggestions.length) % suggestions.length);
-                } else if (e.key === 'Escape') {
-                  setSuggestions([]);
-                  setHighlightIndex(-1);
-                }
-              }}
-              placeholder="Type a player's name"
-              className="w-full px-4 py-3 rounded border"
-              autoFocus
+          {/* Stats */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <StatCard
+              label="Points Earned"
+              value={stats?.pointsEarned}
+              icon={<Trophy className="h-5 w-5 text-yellow-600" />}
             />
-            <div className="flex gap-3">
-              <button
-                type="submit"
-                className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded font-medium"
-              >
-                Submit Guess
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (endedRef.current) return;
-                  endedRef.current = true;
-                  clearInterval(timerRef.current);
-                  (async () => {
-                    await saveGameRecord(false);
-                    const outroLine = await generateOutro(
-                      false,
-                      0,
-                      3,
-                      INITIAL_TIME - timeSec
-                    );
-                    navigate('/postgame', {
-                      state: {
-                        didWin: false,
-                        player: gameData,
-                        stats: {
-                          pointsEarned: 0,
-                          timeSec: INITIAL_TIME - timeSec,
-                          guessesUsed: 3,
-                          usedHints,
-                        },
-                        filters,
-                        isDaily,
-                        potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
-                        outroLine: outroLine || null,
-                      },
-                      replace: true,
-                    });
-                  })();
-                }}
-                className="px-4 py-2 rounded bg-red-600 hover:bg-red-700 text-white"
-              >
-                Give up
-              </button>
-            </div>
-          </form>
-
-          {suggestions?.length ? (
-            <ul
-              ref={listRef}
-              className="mt-3 border rounded divide-y max-h-56 overflow-auto"
-            >
-              {suggestions.map((sug, idx) => (
-                <li
-                  key={sug.id ?? sug.display ?? idx}
-                  ref={(el) => (itemRefs.current[idx] = el)}
-                  className={classNames(
-                    'px-3 py-2 cursor-pointer text-sm',
-                    idx === highlightIndex ? 'bg-sky-50' : 'hover:bg-gray-50'
-                  )}
-                  onMouseEnter={() => setHighlightIndex(idx)}
-                  onMouseDown={(e) => {
-                    // prevent input blur before click handler
-                    e.preventDefault();
-                  }}
-                  onClick={() => {
-                    if (!sug?.display) return;
-                    setGuess(sug.display);
-                    setSuggestions([]);
-                    submitGuess(sug.display);
-                  }}
-                >
-                  {sug.display}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-
-          <div className="mt-6 pt-5 border-t">
-            <h4 className="font-semibold mb-2">Transfer History</h4>
-            {/* NO-COPY wrapper applied ONLY to the transfers area */}
-            <NoCopySection>
-              {loadingTransfers ? (
-                <div className="text-sm text-gray-500">Loading transfers…</div>
-              ) : (
-                <TransfersList transfers={transferHistory} />
-              )}
-            </NoCopySection>
+            <StatCard
+              label="Time Taken"
+              value={`${stats?.timeSec}s`}
+              icon={<Clock className="h-5 w-5 text-blue-600" />}
+            />
+            <StatCard
+              label="Guesses Used"
+              value={guessesUsed}
+              icon={<Target className="h-5 w-5 text-green-600" />}
+            />
+            <StatCard
+              label="Hints Used"
+              value={
+                Object.values(stats?.usedHints || {}).filter(Boolean).length
+              }
+              icon={<Target className="h-5 w-5 text-amber-600" />}
+            />
           </div>
+
+          {/* Actions (hidden during image capture) */}
+          <div ref={actionsRef} className="flex gap-3">
+            {!isDaily && (
+              <>
+                <button
+                  onClick={() => {
+                    clearPostGameCache();
+                    navigate('/game');
+                  }}
+                  className="flex-none bg-gray-100 hover:bg-gray-200 p-2 rounded-lg"
+                  title="Back to Game Setup"
+                >
+                  <ArrowLeft className="h-5 w-5 text-gray-700" />
+                </button>
+                <button
+                  onClick={onShare}
+                  className="flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-3 rounded-lg flex items-center gap-2"
+                  title="Share to WhatsApp"
+                >
+                  <Share2 className="h-4 w-4" />
+                  Share
+                </button>
+                <button
+                  onClick={playAgainWithSameFilters}
+                  disabled={loading || gamesLeft <= 0}
+                  className={`flex-1 ${
+                    gamesLeft <= 0
+                      ? 'bg-gray-300 cursor-not-allowed'
+                      : 'bg-green-600 hover:bg-green-700'
+                  } text-white py-2 rounded-lg font-medium flex items-center justify-center`}
+                >
+                  {loading ? (
+                    'Loading...'
+                  ) : (
+                    <>
+                      Play Again (Same Filters){' '}
+                      <span className="ml-1 text-sm">
+                        {gamesLeft !== null ? `(${gamesLeft} left)` : ''}
+                      </span>
+                    </>
+                  )}
+                </button>
+              </>
+            )}
+
+            {isDaily && (
+              <div className="w-full flex flex-col items-center text-center">
+                <div className="text-xl font-bold text-yellow-700 mb-2">
+                  This was today's Daily Challenge!
+                </div>
+                <div className="text-lg text-gray-700">
+                  {didWin ? (
+                    <>
+                      Congratulations! You won the daily challenge and earned{' '}
+                      <span className="font-bold text-green-700">
+                        10,000 points
+                      </span>
+                      !
+                      <br />
+                      <span className="text-green-700 font-semibold">
+                        You also earned an extra game for today!
+                      </span>
+                    </>
+                  ) : (
+                    'Better luck next time! Try again tomorrow for another chance at 10,000 points.'
+                  )}
+                </div>
+                <div className="mt-2 text-sm text-gray-500">
+                  Next daily challenge in <CountdownToTomorrow />
+                </div>
+                <div className="mt-4 flex gap-3">
+                  <button
+                    onClick={onShare}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg flex items-center gap-2"
+                    title="Share to WhatsApp"
+                  >
+                    <Share2 className="h-4 w-4" />
+                    Share
+                  </button>
+                  <button
+                    onClick={() => {
+                      clearPostGameCache();
+                      navigate('/game');
+                    }}
+                    className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg"
+                  >
+                    Back to Game Setup
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function StatCard({ label, value, icon }) {
+  return (
+    <div className="border rounded-lg p-3">
+      <div className="flex items-center gap-2 mb-1">
+        {icon}
+        <div className="text-sm text-gray-600">{label}</div>
+      </div>
+      <div className="text-xl font-semibold">{value}</div>
+    </div>
+  );
+}
+
+// ---- helpers ----
+function getPlayerKey(p) {
+  if (!p) return '';
+  return String(p.id ?? p.player_id ?? p.player_league_season_id ?? p.name ?? '');
+}
+
+function personalizeUserNameInLine(line, displayName) {
+  if (!line || !displayName) return line;
+  let out = line.replace(/\bPlayer\b/g, displayName);
+  try {
+    out = out.replace(/(?<!\bthe\s)\bplayer\b/gi, displayName);
+  } catch {
+    out = out.replace(/(^|[.,!?\-\s])player\b/gi, (m, p1) => `${p1}${displayName}`);
+  }
+  return out;
+}
+
+function localOutroLine({ didWin, stats, player }) {
+  const name = player?.name || 'the player';
+  const t = Number(stats?.timeSec || 0);
+  const g = Number(stats?.guessesUsed || 0);
+  const hints = Object.values(stats?.usedHints || {}).filter(Boolean).length;
+
+  if (didWin) {
+    if (t <= 30 && g <= 2)
+      return `Lightning! You nailed ${name} in ${t}s with just ${g} guess${
+        g === 1 ? '' : 'es'
+      } ⚡`;
+    if (g === 1) return `Perfect memory! ${name} in a single guess — sensational 🎯`;
+    if (hints === 0) return `Pure skill! You cracked ${name} with no hints used 👏`;
+    return `Well played — ${name} solved in ${g} guess${
+      g === 1 ? '' : 'es'
+    } after ${t}s ✅`;
+  } else {
+    if (g >= 6) return `Close, but not quite — ${name} slipped away after ${g} guesses 😬`;
+    if (hints >= 2) return `Even with hints, ${name} stayed elusive — tough one! 😵`;
+    return `So close! ${name} was the answer — tomorrow’s your day 💪`;
+  }
+}
+
+/** Prefer guessHistory length when present; fallback to guessesUsed; never negative */
+function computeGuessesUsed(stats) {
+  if (!stats) return 0;
+  if (Array.isArray(stats.guessHistory)) return Math.max(0, stats.guessHistory.length);
+  const n = Number(stats.guessesUsed);
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
+}
+
+function buildShareHTML({ didWin, outroLine, player, stats, aiGeneratedFact }) {
+  const color = didWin ? '#166534' : '#991b1b';
+  const badgeBG = didWin ? '#dcfce7' : '#fee2e2';
+  const factHTML = aiGeneratedFact
+    ? `<div style="background:#eff6ff;padding:12px;border-radius:10px;margin:16px 0;">
+         <div style="font-style:italic;color:#111827;">${escapeHTML(aiGeneratedFact)}</div>
+         <div style="margin-top:6px;font-size:11px;color:#6b7280;">And now you'll have to google that to see if I made it all up...</div>
+       </div>`
+    : '';
+
+  return `
+  <div style="max-width:720px;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Helvetica,Arial,sans-serif;line-height:1.5;background:#ffffff;border-radius:12px;padding:16px;border:1px solid #e5e7eb;">
+    <div style="text-align:center;background:${badgeBG};border:1px solid #e5e7eb;padding:10px;border-radius:10px;margin-bottom:16px;">
+      <div style="font-weight:700;color:${color};font-size:18px;">${escapeHTML(
+        outroLine ||
+          (didWin
+            ? 'Great job! You guessed it!'
+            : `Not quite! The player was ${player?.name || ''}`)
+      )}</div>
+    </div>
+
+    <div style="display:flex;gap:16px;margin-bottom:16px;align-items:center;">
+      ${player?.photo || player?.player_photo
+        ? `<img src="${player.photo || player.player_photo}" alt="${escapeHTML(
+            player?.name || ''
+          )}" style="width:96px;height:96px;border-radius:10px;object-fit:cover;border:1px solid #e5e7eb;" />`
+        : `<div style="width:96px;height:96px;border-radius:10px;background:#f3f4f6;display:flex;align-items:center;justify-content:center;color:#9ca3af;">👤</div>`
+      }
+      <div>
+        <div style="font-weight:800;font-size:20px;margin-bottom:6px;">${escapeHTML(
+          player?.name || ''
+        )}</div>
+        <div style="color:#4b5563;font-size:14px;">Age: ${escapeHTML(
+          String(player?.age ?? '—')
+        )}</div>
+        <div style="color:#4b5563;font-size:14px;">Nationality: ${escapeHTML(
+          player?.nationality || '—'
+        )}</div>
+        <div style="color:#4b5563;font-size:14px;">Position: ${escapeHTML(
+          player?.position || '—'
+        )}</div>
+      </div>
+    </div>
+
+    ${factHTML}
+
+    <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;">
+      ${shareStat('Points Earned', String(stats?.pointsEarned ?? '—'))}
+      ${shareStat('Time Taken', `${String(stats?.timeSec ?? '—')}s`)}
+      ${shareStat('Guesses Used', String(computeGuessesUsed(stats)))}
+      ${shareStat(
+        'Hints Used',
+        String(Object.values(stats?.usedHints || {}).filter(Boolean).length)
+      )}
+    </div>
+  </div>`;
+}
+
+function shareStat(label, value) {
+  return `<div style="border:1px solid #e5e7eb;border-radius:10px;padding:10px;">
+      <div style="color:#6b7280;font-size:12px;margin-bottom:4px;">${escapeHTML(
+        label
+      )}</div>
+      <div style="font-weight:700;font-size:18px;color:#111827;">${escapeHTML(
+        value
+      )}</div>
+    </div>`;
+}
+
+/** Short, engaging WhatsApp text instead of repeating the card details */
+function buildShareText({ didWin, player }) {
+  const outcome = didWin ? 'succeeded phenomenally' : 'failed miserably';
+  const name = player?.name ? ` — ${player.name}` : '';
+  return `Look at the player I just ${outcome} to identify on FootyTrail${name}!\nCome join the fun at https://footy-trail.vercel.app`;
+}
+
+function escapeHTML(s) {
+  return String(s)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+/** Convert a data URL to a File object */
+async function dataUrlToFile(dataUrl, filename) {
+  const res = await fetch(dataUrl);
+  const blob = await res.blob();
+  return new File([blob], filename, { type: 'image/png' });
+}
+
+/** Upload an image File to Supabase Storage (bucket: "shares") and return its public URL */
+async function uploadToSupabaseImage(file, userId) {
+  const uid = userId || 'anon';
+  const path = `whatsapp/${uid}/${Date.now()}.png`;
+
+  const { error: uploadError } = await supabase.storage
+    .from('shares')
+    .upload(path, file, { contentType: 'image/png', upsert: true });
+  if (uploadError) throw uploadError;
+
+  const { data: pub } = supabase.storage.from('shares').getPublicUrl(path);
+  return pub?.publicUrl;
+}
+
+/** Swap an <img> src to a data URL version and return a restore() function */
+async function swapImgSrcToDataURL(imgEl) {
+  const original = imgEl.src;
+  const res = await fetch(original, { mode: 'cors' });
+  const blob = await res.blob();
+  const dataUrl = await blobToDataURL(blob);
+  imgEl.src = dataUrl;
+  await waitForImageLoad(imgEl);
+  return () => {
+    imgEl.src = original;
+  };
+}
+
+function blobToDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('reader failed'));
+    reader.onloadend = () => resolve(reader.result);
+    reader.readAsDataURL(blob);
+  });
+}
+
+function waitForImageLoad(img) {
+  // Use decode when available; fall back to load event
+  if (img.decode) {
+    return img.decode().catch(() => {});
+  }
+  return new Promise((res) => {
+    if (img.complete) return res();
+    img.onload = () => res();
+    img.onerror = () => res();
+  });
+}
+
+/** Full-screen loader */
+function LoadingBounceLogo() {
+  return (
+    <div className="fixed inset-0 z-50 bg-gradient-to-b from-green-50 to-transparent">
+      <div className="absolute inset-0">
+        <motion.div
+          className="absolute left-1/2 -translate-x-1/2"
+          style={{ top: '40vh' }}
+          animate={{ x: ['-40vw', '40vw', '-40vw'], y: [0, -10, 0, -10, 0] }}
+          transition={{
+            times: [0, 0.5, 1],
+            duration: 6,
+            ease: 'easeInOut',
+            repeat: Infinity,
+          }}
+        >
+          <motion.img
+            src="/footytrail_logo.png"
+            alt="FootyTrail"
+            className="w-20 h-20 select-none"
+            draggable="false"
+            aria-label="Loading"
+            role="img"
+            animate={{ rotate: 360 }}
+            transition={{ repeat: Infinity, duration: 8, ease: 'linear' }}
+          />
         </motion.div>
       </div>
-    </div>
-  );
-}
-
-// -------------------------
-// Small UI bits
-// -------------------------
-function HintButton({ label, multiplier, onClick, disabled, valueShown }) {
-  const hasValue =
-    valueShown !== null && valueShown !== undefined && valueShown !== '';
-
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={() => !disabled && onClick?.()}
-      className={classNames(
-        'w-full text-left px-3 py-3 rounded-lg border transition',
-        hasValue
-          ? 'bg-emerald-50 border-emerald-200'
-          : disabled
-          ? 'bg-gray-50 text-gray-400 cursor-not-allowed'
-          : 'hover:bg-gray-50'
-      )}
-    >
-      <div
-        className={classNames(
-          'flex items-center gap-2 text-sm',
-          hasValue ? 'text-emerald-800' : ''
-        )}
-      >
-        <Lightbulb
-          className={classNames(
-            'h-4 w-4',
-            hasValue ? 'text-emerald-600' : 'text-amber-500'
-          )}
-        />
-        <span className="font-medium">{label}</span>
-        <span
-          className={classNames(
-            'text-xs',
-            hasValue ? 'text-emerald-600' : 'text-gray-500'
-          )}
-        >
-          {multiplier}
-        </span>
-        {hasValue && (
-          <span className="ml-auto text-[10px] uppercase tracking-wider font-semibold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded">
-            Revealed
-          </span>
-        )}
-      </div>
-
-      {hasValue ? (
-        typeof valueShown === 'string' || typeof valueShown === 'number' ? (
-          <div className="mt-2 text-2xl font-extrabold text-emerald-700">
-            {valueShown}
-          </div>
-        ) : (
-          <div className="mt-3 overflow-hidden rounded-lg ring-2 ring-emerald-300 inline-block">
-            {valueShown}
-          </div>
-        )
-      ) : null}
-    </button>
-  );
-}
-
-function ClubPill({ logo, name, flag }) {
-  return (
-    <div className="flex items-center gap-2 min-w-0">
-      {/* Icon stack: logo above flag */}
-      <div className="flex flex-col items-center justify-center gap-1 shrink-0">
-        {logo ? <img src={logo} alt="" className="h-6 w-6 rounded-md object-contain" /> : null}
-        {flag ? <img src={flag} alt="" className="h-3.5 w-5 rounded-sm object-cover" /> : null}
-      </div>
-      {/* Name */}
-      <span className="text-sm font-medium whitespace-nowrap truncate max-w-[260px] md:max-w-[360px] lg:max-w-[420px] select-none">
-        {name || 'Unknown'}
-      </span>
-    </div>
-  );
-}
-
-function Chip({ children, tone = 'slate' }) {
-  const tones = {
-    slate: 'bg-slate-50 text-slate-700 border-slate-200',
-    green: 'bg-green-50 text-green-700 border-green-200',
-    blue: 'bg-blue-50 text-blue-700 border-blue-200',
-    amber: 'bg-amber-50 text-amber-700 border-amber-200',
-    violet: 'bg-violet-50 text-violet-700 border-violet-200',
-  };
-  return (
-    <span className={classNames('inline-flex items-center gap-1 text-xs px-2 py-1 rounded border select-none', tones[tone])}>
-      {children}
-    </span>
-  );
-}
-
-function formatFee(raw) {
-  const v = raw ?? '';
-  if (!v) return '—';
-  let s = String(v);
-  // Remove HTML breaks/tags like "<br /><i ...>€2.00m</i>"
-  s = s.replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]*>/g, '');
-  // Remove common prefixes like "Loan fee:" or "Fee:"
-  s = s.replace(/^\s*(Loan\s*fee:|Fee:)\s*/i, '');
-  // Normalize any accidental "$" to "€"
-  s = s.replace(/^\$/, '€').replace(/\$/g, '€');
-  s = s.trim();
-  return s || '—';
-}
-
-function TransfersList({ transfers }) {
-  if (!transfers?.length) {
-    return <div className="text-sm text-gray-500 text-center">No transfers found.</div>;
-  }
-
-  return (
-    <ul className="space-y-3">
-      {transfers.map((t, idx) => {
-        const fee = t.valueRaw ?? '';
-        return (
-          <li
-            key={`${t.date || t.season || 'row'}-${idx}`}
-            className="grid grid-cols-12 gap-3 items-center border rounded-lg p-3"
-          >
-            {/* Season + Date (centered vertical stack) */}
-            <div className="col-span-12 md:col-span-3 flex flex-col items-center text-center gap-1">
-              <Chip tone="violet">
-                <CalendarDays className="h-3.5 w-3.5" />
-                <span className="font-semibold">{t.season || '—'}</span>
-              </Chip>
-              <div className="text-xs text-gray-500 select-none">{t.date || '—'}</div>
-            </div>
-
-            {/* From → To (names have max width + truncate) */}
-            <div className="col-span-12 md:col-span-6 flex items-center justify-center gap-3 flex-wrap md:flex-nowrap min-w-0">
-              <ClubPill logo={t.out?.logo} name={t.out?.name} flag={t.out?.flag} />
-              <ArrowRight className="h-4 w-4 text-gray-400 shrink-0" />
-              <ClubPill logo={t.in?.logo} name={t.in?.name} flag={t.in?.flag} />
-            </div>
-
-            {/* Value + Type (stacked & centered) */}
-            <div className="col-span-12 md:col-span-3 flex flex-col items-center justify-center gap-1">
-              <Chip tone="green">
-                <BadgeEuro className="h-3.5 w-3.5" />
-                <span>{formatFee(fee)}</span>
-              </Chip>
-              {t.type ? <Chip tone="amber">{t.type}</Chip> : null}
-            </div>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-/**
- * Wrapper that disables copying/selection/drag/context menu for its children.
- * Applied only to the Transfer History section to prevent cheating.
- */
-function NoCopySection({ children }) {
-  const ref = useRef(null);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-
-    const prevent = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      return false;
-    };
-
-    el.addEventListener('copy', prevent);
-    el.addEventListener('cut', prevent);
-    el.addEventListener('contextmenu', prevent, { capture: true });
-    el.addEventListener('dragstart', prevent);
-    el.addEventListener('selectstart', prevent);
-
-    return () => {
-      el.removeEventListener('copy', prevent);
-      el.removeEventListener('cut', prevent);
-      el.removeEventListener('contextmenu', prevent, { capture: true });
-      el.removeEventListener('dragstart', prevent);
-      el.removeEventListener('selectstart', prevent);
-    };
-  }, []);
-
-  return (
-    <div
-      ref={ref}
-      style={{
-        userSelect: 'none',
-        WebkitUserSelect: 'none',
-        MsUserSelect: 'none',
-        MozUserSelect: 'none',
-        WebkitTouchCallout: 'none',
-      }}
-      draggable={false}
-      tabIndex={-1}
-      className="select-none"
-    >
-      {children}
     </div>
   );
 }
