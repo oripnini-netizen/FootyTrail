@@ -456,14 +456,29 @@ export default function PostGamePage() {
 
       // Hide the actions row during capture so buttons are not in the image
       const actionsEl = actionsRef?.current;
-      const prevVisibility = actionsEl ? actionsEl.style.visibility : '';
+      const prevActionsVisibility = actionsEl ? actionsEl.style.visibility : '';
       if (actionsEl) actionsEl.style.visibility = 'hidden';
 
-      // Render the card to a PNG (sharper with pixelRatio 2) on white BG
-      const dataUrl = await toPng(node, { pixelRatio: 2, cacheBust: true, backgroundColor: '#ffffff' });
+      let dataUrl;
 
-      // Restore actions visibility
-      if (actionsEl) actionsEl.style.visibility = prevVisibility;
+      try {
+        // First attempt: normal capture
+        dataUrl = await toPng(node, { pixelRatio: 2, cacheBust: true, backgroundColor: '#ffffff' });
+      } catch (err) {
+        console.warn('html-to-image first attempt failed, retrying without images…', err);
+        // Fallback attempt: hide all <img> inside the card (avoid cross-origin taint on iOS Safari)
+        const imgs = Array.from(node.querySelectorAll('img'));
+        const prevImgVisibility = imgs.map((img) => img.style.visibility);
+        try {
+          imgs.forEach((img) => { img.style.visibility = 'hidden'; });
+          dataUrl = await toPng(node, { pixelRatio: 2, cacheBust: true, backgroundColor: '#ffffff' });
+        } finally {
+          imgs.forEach((img, i) => { img.style.visibility = prevImgVisibility[i]; });
+        }
+      } finally {
+        // Restore actions visibility
+        if (actionsEl) actionsEl.style.visibility = prevActionsVisibility;
+      }
 
       // Convert to a File object
       const file = await dataUrlToFile(dataUrl, `footytrail-${Date.now()}.png`);
@@ -500,7 +515,7 @@ export default function PostGamePage() {
       }
     } catch (e) {
       console.error('Share failed:', e);
-      alert('Sorry—something went wrong preparing the share image.');
+      alert(`Sorry—something went wrong preparing the share image.${e?.message ? `\n\nDetails: ${e.message}` : ''}`);
     } finally {
       shareBusyRef.current = false;
     }
@@ -534,7 +549,13 @@ export default function PostGamePage() {
           {/* Player Info */}
           <div className="flex gap-6 mb-6">
             {photo ? (
-              <img src={photo} alt={player.name} className="w-32 h-32 object-cover rounded-lg" />
+              <img
+                src={photo}
+                alt={player.name}
+                className="w-32 h-32 object-cover rounded-lg"
+                crossOrigin="anonymous"
+                referrerPolicy="no-referrer"
+              />
             ) : (
               <div className="w-32 h-32 bg-gray-100 rounded-lg flex items-center justify-center">
                 <UserIcon className="w-12 h-12 text-gray-400" />
