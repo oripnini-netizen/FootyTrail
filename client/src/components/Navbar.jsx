@@ -24,7 +24,7 @@ export default function Navbar() {
   const [scrolled, setScrolled] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // ---- unread notifications for My Leagues (uses read_at IS NULL) ----
+  // ---- unread notifications for My Leagues ----
   const [unreadLeagues, setUnreadLeagues] = useState(0);
 
   async function refreshUnread() {
@@ -76,9 +76,7 @@ export default function Navbar() {
         supabase.removeChannel(channel);
       } catch {}
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
-  // -------------------------------------------------------------------
 
   useEffect(() => {
     setMobileOpen(false);
@@ -142,13 +140,13 @@ export default function Navbar() {
       >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16 relative">
-            {/* Left: Logo only */}
+            {/* Left: Logo */}
             <div className="flex items-center">
               <Link to="/game" className="flex items-center">
                 <img
                   src={`${process.env.PUBLIC_URL}/footytrail_logo.png`}
                   alt="FootyTrail"
-                  className="h-12 w-12"   // increased size
+                  className="h-12 w-12"
                   style={{ objectFit: 'contain' }}
                 />
               </Link>
@@ -172,7 +170,7 @@ export default function Navbar() {
                 className="relative -mb-3 sm:-mb-4 pointer-events-auto group"
                 title="Play"
               >
-                <div className="rounded-full shadow-md border bg-green-600 group-hover:bg-green-700 text-white p-3 sm:p-4 flex flex-col items-center transition-all duration-300 group-hover:scale-110">
+                <div className="rounded-full shadow-md border bg-green-900 group-hover:bg-green-800 text-white p-3 sm:p-4 flex flex-col items-center transition-all duration-300 group-hover:scale-110">
                   <Aperture className="h-7 w-7 sm:h-8 sm:w-8 group-hover:rotate-45 transition-transform duration-300" />
                   <span className="text-[10px] sm:text-xs mt-1 font-semibold">
                     Play
@@ -181,7 +179,7 @@ export default function Navbar() {
               </button>
             </div>
 
-            {/* Right (desktop): nav icons + avatar */}
+            {/* Right: nav + avatar */}
             <div className="hidden md:flex items-center">
               <div className="flex items-center space-x-8 mr-8">
                 <NavItem
@@ -226,7 +224,7 @@ export default function Navbar() {
               </button>
             </div>
 
-            {/* Right (mobile): hamburger menu */}
+            {/* Mobile menu */}
             <div className="flex items-center md:hidden">
               {user?.role === 'admin' && (
                 <button
