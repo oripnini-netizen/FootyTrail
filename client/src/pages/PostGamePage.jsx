@@ -3,6 +3,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, useAnimate } from 'framer-motion';
 import confetti from 'canvas-confetti';
+import { toPng } from 'html-to-image';
 import {
   User as UserIcon,
   Trophy,
@@ -89,9 +90,10 @@ export default function PostGamePage() {
 
   const [scope, animate] = useAnimate();
 
-  // For “share” (copy) we capture only the card (minus buttons)
+  // For “share” we capture only the card (hide the actions during capture)
   const cardRef = useRef(null);
   const actionsRef = useRef(null);
+  const shareBusyRef = useRef(false);
 
   // ---- cache guards ----
   const hasRestoredRef = useRef(false);
@@ -443,34 +445,64 @@ export default function PostGamePage() {
     }
   };
 
-  // ---- Share card (copy to clipboard as rich HTML; fallback to plain text) ----
+  // ---- Share button: send a WhatsApp message with an IMAGE of the game card ----
   const onShare = async () => {
+    if (shareBusyRef.current) return;
+    shareBusyRef.current = true;
+
     try {
-      const html = buildShareHTML({ didWin, outroLine, player, stats, aiGeneratedFact });
-      const text = buildShareText({ didWin, outroLine, player, stats, aiGeneratedFact });
+      const node = cardRef?.current;
+      if (!node) throw new Error('Game card element not found');
 
-      if (navigator.clipboard && 'write' in navigator.clipboard && window.ClipboardItem) {
-        const blobHTML = new Blob([html], { type: 'text/html' });
-        const blobText = new Blob([text], { type: 'text/plain' });
-        await navigator.clipboard.write([new window.ClipboardItem({
-          'text/html': blobHTML,
-          'text/plain': blobText,
-        })]);
-        alert('Post-game card copied to clipboard!');
+      // Hide the actions row during capture so buttons are not in the image
+      const actionsEl = actionsRef?.current;
+      const prevVisibility = actionsEl ? actionsEl.style.visibility : '';
+      if (actionsEl) actionsEl.style.visibility = 'hidden';
+
+      // Render the card to a PNG (sharper with pixelRatio 2) on white BG
+      const dataUrl = await toPng(node, { pixelRatio: 2, cacheBust: true, backgroundColor: '#ffffff' });
+
+      // Restore actions visibility
+      if (actionsEl) actionsEl.style.visibility = prevVisibility;
+
+      // Convert to a File object
+      const file = await dataUrlToFile(dataUrl, `footytrail-${Date.now()}.png`);
+
+      // Build the message text
+      const shareText = buildShareText({ didWin, outroLine, player, stats, aiGeneratedFact });
+
+      // 1) Best path: native share with file (mobile browsers)
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ text: shareText, files: [file] });
+        shareBusyRef.current = false;
         return;
       }
 
-      // Fallback: copy text
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-        alert('Post-game summary copied to clipboard!');
-        return;
+      // 2) Fallback: upload to Supabase (public bucket "shares") and open a wa.me link
+      let publicUrl = '';
+      try {
+        publicUrl = await uploadToSupabaseImage(file, user?.id);
+      } catch (e) {
+        console.warn('Supabase upload failed, falling back to download.', e);
       }
 
-      alert('Sorry, your browser blocked clipboard access.');
+      const text = `${shareText}${publicUrl ? `\n${publicUrl}` : ''}`.trim();
+      const waUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
+      window.open(waUrl, '_blank', 'noopener,noreferrer');
+
+      // 3) Last resort: download the image for manual attach
+      if (!publicUrl && document.hasFocus()) {
+        const a = document.createElement('a');
+        a.href = dataUrl;
+        a.download = `footytrail-${Date.now()}.png`;
+        a.click();
+        alert('Could not share directly. Image downloaded—send it via WhatsApp manually.');
+      }
     } catch (e) {
       console.error('Share failed:', e);
-      alert('Could not copy the card. Please try again.');
+      alert('Sorry—something went wrong preparing the share image.');
+    } finally {
+      shareBusyRef.current = false;
     }
   };
 
@@ -536,7 +568,7 @@ export default function PostGamePage() {
             <StatCard label="Hints Used" value={Object.values(stats?.usedHints || {}).filter(Boolean).length} icon={<Target className="h-5 w-5 text-amber-600" />} />
           </div>
 
-          {/* Actions (not included in “Share” HTML) */}
+          {/* Actions (hidden during image capture) */}
           <div ref={actionsRef} className="flex gap-3">
             {!isDaily && (
               <>
@@ -550,7 +582,7 @@ export default function PostGamePage() {
                 <button
                   onClick={onShare}
                   className="flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-3 rounded-lg flex items-center gap-2"
-                  title="Copy post-game card"
+                  title="Share to WhatsApp"
                 >
                   <Share2 className="h-4 w-4" />
                   Share
@@ -579,7 +611,7 @@ export default function PostGamePage() {
                   <button
                     onClick={onShare}
                     className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg flex items-center gap-2"
-                    title="Copy post-game card"
+                    title="Share to WhatsApp"
                   >
                     <Share2 className="h-4 w-4" />
                     Share
@@ -737,6 +769,27 @@ function escapeHTML(s) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+/** Convert a data URL to a File object */
+async function dataUrlToFile(dataUrl, filename) {
+  const res = await fetch(dataUrl);
+  const blob = await res.blob();
+  return new File([blob], filename, { type: 'image/png' });
+}
+
+/** Upload an image File to Supabase Storage (bucket: "shares") and return its public URL */
+async function uploadToSupabaseImage(file, userId) {
+  const uid = userId || 'anon';
+  const path = `whatsapp/${uid}/${Date.now()}.png`;
+
+  const { error: uploadError } = await supabase.storage
+    .from('shares')
+    .upload(path, file, { contentType: 'image/png', upsert: true });
+  if (uploadError) throw uploadError;
+
+  const { data: pub } = supabase.storage.from('shares').getPublicUrl(path);
+  return pub?.publicUrl;
 }
 
 /** Full-screen loader with the app logo slowly spinning + bouncing left↔right */
