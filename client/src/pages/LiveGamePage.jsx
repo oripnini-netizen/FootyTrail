@@ -812,22 +812,62 @@ export default function LiveGamePage() {
 // Small UI bits
 // -------------------------
 function HintButton({ label, multiplier, onClick, disabled, valueShown }) {
+  const hasValue =
+    valueShown !== null && valueShown !== undefined && valueShown !== '';
+
   return (
     <button
       type="button"
       disabled={disabled}
       onClick={() => !disabled && onClick?.()}
       className={classNames(
-        'w-full text-left px-3 py-2 rounded border',
-        disabled ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : 'hover:bg-gray-50'
+        'w-full text-left px-3 py-3 rounded-lg border transition',
+        hasValue
+          ? 'bg-emerald-50 border-emerald-200'
+          : disabled
+          ? 'bg-gray-50 text-gray-400 cursor-not-allowed'
+          : 'hover:bg-gray-50'
       )}
     >
-      <div className="flex items-center gap-2 text-sm">
-        <Lightbulb className="h-4 w-4 text-amber-500" />
+      <div
+        className={classNames(
+          'flex items-center gap-2 text-sm',
+          hasValue ? 'text-emerald-800' : ''
+        )}
+      >
+        <Lightbulb
+          className={classNames(
+            'h-4 w-4',
+            hasValue ? 'text-emerald-600' : 'text-amber-500'
+          )}
+        />
         <span className="font-medium">{label}</span>
-        <span className="text-xs text-gray-500">{multiplier}</span>
+        <span
+          className={classNames(
+            'text-xs',
+            hasValue ? 'text-emerald-600' : 'text-gray-500'
+          )}
+        >
+          {multiplier}
+        </span>
+        {hasValue && (
+          <span className="ml-auto text-[10px] uppercase tracking-wider font-semibold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded">
+            Revealed
+          </span>
+        )}
       </div>
-      {valueShown ? <div className="mt-2 text-sm">{valueShown}</div> : null}
+
+      {hasValue ? (
+        typeof valueShown === 'string' || typeof valueShown === 'number' ? (
+          <div className="mt-2 text-2xl font-extrabold text-emerald-700">
+            {valueShown}
+          </div>
+        ) : (
+          <div className="mt-3 overflow-hidden rounded-lg ring-2 ring-emerald-300 inline-block">
+            {valueShown}
+          </div>
+        )
+      ) : null}
     </button>
   );
 }
