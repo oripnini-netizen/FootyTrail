@@ -151,7 +151,7 @@ export default function LeaderboardPage() {
       const total = allGames?.length || 0;
       const pts = (allGames || []).reduce((s, g) => s + (g.points_earned || 0), 0);
       const wins = (allGames || []).filter(g => g.won).length;
-      const time = (allGames || []).reduce((s, g) => s + (g.time_taken_seconds || 0), 0;
+      const time = (allGames || []).reduce((s, g) => s + (g.time_taken_seconds || 0), 0);
 
       setUserStats({
         totalPoints: pts,
