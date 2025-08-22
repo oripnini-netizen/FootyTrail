@@ -66,19 +66,27 @@ export default function LiveGamePage() {
         nationality: location.state.nationality,
         position: location.state.position,
         photo: location.state.photo,
-        potentialPoints: location.state.potentialPoints,
+        funFact: location.state.funFact,
+        potentialPoints: location.state.potentialPoints ?? 10000,
+        player_id: location.state.id, // keep for safety
       }
     : null;
 
-  const INITIAL_TIME = 120; // seconds
+  // Filters passed only for PostGame
+  const filters = location.state?.filters || { potentialPoints: 0 };
 
-  // Guess state
-  const [guess, setGuess] = useState('');
+  // 2 minutes timer
+  const INITIAL_TIME = 120;
+
   const [guessesLeft, setGuessesLeft] = useState(3);
+  const [guess, setGuess] = useState(''); // keep string
   const [suggestions, setSuggestions] = useState([]);
   const [highlightIndex, setHighlightIndex] = useState(-1);
 
-  // Hints
+  // refs for auto-scrolling the highlighted suggestion into view
+  const listRef = useRef(null);
+  const itemRefs = useRef([]);
+
   const [usedHints, setUsedHints] = useState({
     age: false,
     nationality: false,
@@ -114,33 +122,62 @@ export default function LiveGamePage() {
             const dbName = (data?.full_name || '').trim();
             if (dbName) {
               setDisplayName(dbName);
-            } else if (user?.email) {
-              const local = String(user.email).split('@')[0] || '';
-              setDisplayName(local ? local : 'Player');
+              return;
             }
           }
-        } else if (user?.email && !cancelled) {
-          const local = String(user.email).split('@')[0] || '';
-          setDisplayName(local ? local : 'Player');
         }
-      } catch (e) {
-        if (!cancelled) setDisplayName('Player');
+        // fallback: auth email local part
+        const emailName = (user?.email || '').split('@')[0]?.trim();
+        if (!cancelled) {
+          setDisplayName(emailName || 'Player');
+        }
+      } catch {
+        if (!cancelled) {
+          const emailName = (user?.email || '').split('@')[0]?.trim();
+          setDisplayName(emailName || 'Player');
+        }
       }
     }
     loadFullName();
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [user?.id, user?.email]);
 
-  // Bootstrap game
+  // helper to call backend outro with username
+  const generateOutro = async (won, pointsValue, guessesUsed, elapsedSec) => {
+    try {
+      const resp = await fetch('/api/ai/game-outro', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          didWin: !!won,
+          points: pointsValue,
+          guesses: guessesUsed,
+          timeSeconds: elapsedSec,
+          playerName: gameData?.name || null,
+          isDaily: !!isDaily,
+          username: displayName, // <-- pass the name from public.users
+        }),
+      });
+      const data = await resp.json();
+      return data?.line || null;
+    } catch {
+      return null;
+    }
+  };
+
+  // -------------------------
+  // BOOTSTRAP: get the card
+  // -------------------------
   useEffect(() => {
     let mounted = true;
 
     const bootstrap = async () => {
       try {
-        if (location.state?.id) {
-          // start timer
+        // If navigated with a prepared card in state
+        if (location.state && location.state.id && location.state.name) {
+          // kick off timer
           timerRef.current = setInterval(() => {
             setTimeSec((t) => {
               if (t <= 1) {
@@ -149,15 +186,21 @@ export default function LiveGamePage() {
                   endedRef.current = true;
                   (async () => {
                     await saveGameRecord(false);
-                    navigate('/post-game', {
+                    const outroLine = await generateOutro(
+                      false,
+                      0,
+                      3,
+                      INITIAL_TIME /* user ran out of time */
+                    );
+                    navigate('/postgame', {
                       state: {
-                        won: false,
+                        didWin: false,
+                        player: gameData,
+                        stats: { pointsEarned: 0, timeSec: INITIAL_TIME, guessesUsed: 3, usedHints },
+                        filters,
                         isDaily,
-                        playerName: gameData.name,
-                        displayName,
-                        elapsedSeconds: INITIAL_TIME,
-                        potentialPoints: gameData.potentialPoints,
-                        finalPoints: 0,
+                        potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
+                        outroLine: outroLine || null,
                       },
                       replace: true,
                     });
@@ -190,47 +233,88 @@ export default function LiveGamePage() {
 
     return () => {
       mounted = false;
-      if (timerRef.current) clearInterval(timerRef.current);
+      clearInterval(timerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [location.state?.id, location.state?.name]);
 
-  // Suggest names
+  // -------------------------
+  // Suggestions (debounced, defensive)
+  // -------------------------
   useEffect(() => {
-    let cancelled = false;
-
-    async function run() {
-      try {
-        const q = guess.trim();
-        if (!q || q.length < 2) {
-          setSuggestions([]);
-          return;
-        }
-        const res = await suggestNames(q);
-        if (cancelled) return;
-
-        // Basic ranking help to nudge better matches up
-        const longest = longestToken(q);
-        const scored = (Array.isArray(res) ? res : []).map((r) => ({
-          ...r,
-          _score:
-            (multiTokenStartsWithMatch(q, r.display) ? 2 : 0) +
-            (normalize(r.display).includes(longest) ? 1 : 0),
-        }));
-        scored.sort((a, b) => b._score - a._score);
-        setSuggestions(scored.slice(0, 8));
-      } catch (e) {
-        if (!cancelled) setSuggestions([]);
+    let active = true;
+    const id = setTimeout(async () => {
+      // Always coerce to string before trimming
+      const raw = typeof guess === 'string' ? guess : String(guess ?? '');
+      const q = raw.trim();
+      if (!q) {
+        if (active) setSuggestions([]);
+        return;
       }
-    }
+      try {
+        const res = await suggestNames(q, 50); // ask for more than 5
+        if (!active) return;
 
-    run();
+        // Normalize to { id, display }
+        const normalized = (Array.isArray(res) ? res : [])
+          .map((r) => {
+            if (typeof r === 'string') return { id: r, display: r };
+            const idVal =
+              r.id ??
+              r.player_id ??
+              r.pid ??
+              r.value ??
+              `${r.player_name || r.name || r.display || r.player_norm_name || r.norm || ''}`.toLowerCase();
+
+            const displayVal =
+              r.display ??
+              r.name ??
+              r.player_name ??
+              r.norm ??
+              r.player_norm_name ??
+              '';
+
+            return { id: idVal, display: String(displayVal || '').trim() };
+          })
+          .filter((x) => x.display); // drop empties
+
+        // De-duplicate by display text
+        const seen = new Set();
+        const deduped = [];
+        for (const s of normalized) {
+          const key = s.display.toLowerCase();
+          if (!seen.has(key)) {
+            seen.add(key);
+            deduped.push(s);
+          }
+        }
+
+        setSuggestions(deduped);
+        // reset item refs length to match
+        itemRefs.current = new Array(deduped.length);
+      } catch (e) {
+        console.error('[suggestNames] failed:', e);
+        if (active) setSuggestions([]);
+      }
+    }, 200);
     return () => {
-      cancelled = true;
+      active = false;
+      clearTimeout(id);
     };
   }, [guess]);
 
-  // Derived hint multipliers
+  // keep highlighted item scrolled into view as you arrow through the list
+  useEffect(() => {
+    if (highlightIndex < 0 || !listRef.current) return;
+    const el = itemRefs.current[highlightIndex];
+    if (el && el.scrollIntoView) {
+      el.scrollIntoView({ block: 'nearest' });
+    }
+  }, [highlightIndex]);
+
+  // -------------------------
+  // Hints / Points
+  // -------------------------
   const multipliers = {
     age: 0.9,
     nationality: 0.9,
@@ -248,7 +332,7 @@ export default function LiveGamePage() {
   // Points incl. time decay, hint penalties, and wrong-guess halving
   const points = useMemo(() => {
     const potentialPoints = Number(
-      gameData?.potentialPoints || 0
+      gameData?.potentialPoints || filters?.potentialPoints || 0
     );
     let p = potentialPoints;
 
@@ -266,38 +350,87 @@ export default function LiveGamePage() {
     p = Math.floor(p * Math.pow(0.5, wrongAttempts));
 
     return Math.max(0, p);
-  }, [gameData?.potentialPoints, usedHints, multipliers, timeSec, guessesLeft, isGenericPhoto]);
+  }, [gameData?.potentialPoints, filters?.potentialPoints, usedHints, timeSec, guessesLeft, isGenericPhoto]);
 
-  // Reveal hint payloads
-  const ageValue = usedHints.age ? gameData?.age ?? null : null;
-  const nationalityValue = usedHints.nationality ? gameData?.nationality ?? null : null;
-  const positionValue = usedHints.position ? gameData?.position ?? null : null;
-  const firstLetterValue =
-    usedHints.firstLetter && gameData?.name ? gameData.name.trim()[0] : null;
-  const partialImageValue = usedHints.partialImage ? gameData?.photo ?? null : null;
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
-  // Save result
+  // Anti-cheat / tab leave → loss  (visibilitychange + window blur)
+  useEffect(() => {
+    const lose = () => {
+      if (endedRef.current) return;
+      endedRef.current = true;
+      clearInterval(timerRef.current);
+      (async () => {
+        await saveGameRecord(false);
+        const outroLine = await generateOutro(
+          false,
+          0,
+          3,
+          INITIAL_TIME - timeSec
+        );
+        navigate('/postgame', {
+          state: {
+            didWin: false,
+            player: gameData,
+            stats: { pointsEarned: 0, timeSec: INITIAL_TIME - timeSec, guessesUsed: 3, usedHints },
+            filters,
+            isDaily,
+            potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
+            outroLine: outroLine || null,
+          },
+          replace: true,
+        });
+      })();
+    };
+
+    const onHide = () => {
+      if (document.hidden) lose();
+    };
+    const onBlur = () => {
+      // opening a new window or switching focus away will blur the current window
+      lose();
+    };
+
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('blur', onBlur);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('blur', onBlur);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameData?.id, timeSec]);
+
+  // Save record helper (expects { userId, playerData, gameStats })
   const saveGameRecord = async (won) => {
     try {
-      const elapsedSeconds = INITIAL_TIME - timeSec;
-      const finalPoints = won ? points : 0;
+      const playerIdNumeric = Number(gameData?.id ?? location.state?.id);
+      if (!playerIdNumeric || Number.isNaN(playerIdNumeric)) {
+        throw new Error('Missing playerData.id in request');
+      }
 
       const playerData = {
-        id: gameData.id,
+        id: playerIdNumeric,
         name: gameData.name,
-        age: gameData.age,
         nationality: gameData.nationality,
         position: gameData.position,
+        age: gameData.age,
         photo: gameData.photo,
       };
 
       const gameStats = {
-        isDaily,
-        elapsedSeconds,
-        guessesUsed: 3 - guessesLeft,
-        usedHints,
-        potentialPoints: gameData.potentialPoints,
-        finalPoints,
+        won,
+        points: won ? points : 0,
+        potentialPoints:
+          gameData.potentialPoints || filters?.potentialPoints || 10000,
+        timeTaken: INITIAL_TIME - timeSec,
+        guessesAttempted: 3 - guessesLeft + (won ? 1 : 0),
+        hintsUsed: Object.values(usedHints).filter(Boolean).length,
+        isDaily: !!isDaily,
       };
 
       const body = {
@@ -330,99 +463,101 @@ export default function LiveGamePage() {
         <div className="rounded-xl bg-white shadow p-6 text-center">
           <p className="text-red-600 font-medium">No game payload found.</p>
           <button
+            className="mt-3 px-4 py-2 rounded bg-gray-800 text-white"
             onClick={() => navigate('/game')}
-            className="mt-3 px-4 py-2 rounded bg-gray-900 text-white"
           >
-            Back
+            Back to Game
           </button>
         </div>
       </div>
     );
   }
 
-  const formatTime = (t) => {
-    const mm = Math.floor(t / 60)
-      .toString()
-      .padStart(1, '0');
-    const ss = (t % 60).toString().padStart(2, '0');
-    return `${mm}:${ss}`;
-  };
+  // -------------------------
+  // Submit guess
+  // -------------------------
+  const submitGuess = async (value) => {
+    const v = typeof value === 'string' ? value.trim() : String(value ?? '').trim();
+    if (!v || endedRef.current) return;
 
-  const onSubmitGuess = (e) => {
-    e.preventDefault();
-    const val = guess.trim();
-    if (!val) return;
-    submitGuess(val);
-  };
+    const correct = v.toLowerCase() === (gameData?.name || '').trim().toLowerCase();
 
-  const submitGuess = async (submitted) => {
-    try {
-      if (endedRef.current) return;
-      // Correct?
-      if (normalize(submitted) === normalize(gameData.name)) {
-        endedRef.current = true;
-        clearInterval(timerRef.current);
-        await saveGameRecord(true);
-        navigate('/post-game', {
-          state: {
-            won: true,
-            isDaily,
-            playerName: gameData.name,
-            displayName,
-            elapsedSeconds: INITIAL_TIME - timeSec,
-            potentialPoints: gameData.potentialPoints,
-            finalPoints: points,
+    if (correct) {
+      endedRef.current = true;
+      clearInterval(timerRef.current);
+      await saveGameRecord(true);
+
+      const elapsed = INITIAL_TIME - timeSec;
+      const guessesUsed = 3 - guessesLeft + 1;
+      const outroLine = await generateOutro(true, points, guessesUsed, elapsed);
+
+      navigate('/postgame', {
+        state: {
+          didWin: true,
+          player: {
+            id: gameData.id,
+            name: gameData.name,
+            photo: gameData.photo,
+            age: gameData.age,
+            nationality: gameData.nationality,
+            position: gameData.position,
+            funFact: gameData.funFact,
           },
-          replace: true,
-        });
-        return;
-      }
-
-      // Wrong guess
-      setIsWrongGuess(true);
-      setTimeout(() => setIsWrongGuess(false), 400);
-      if (guessesLeft <= 1) {
-        // No guesses left -> lose
-        endedRef.current = true;
-        clearInterval(timerRef.current);
-        await saveGameRecord(false);
-        navigate('/post-game', {
-          state: {
-            won: false,
-            isDaily,
-            playerName: gameData.name,
-            displayName,
-            elapsedSeconds: INITIAL_TIME - timeSec,
-            potentialPoints: gameData.potentialPoints,
-            finalPoints: 0,
+          stats: {
+            pointsEarned: points,
+            timeSec: elapsed,
+            guessesUsed,
+            usedHints,
           },
-          replace: true,
-        });
-      } else {
-        setGuessesLeft((g) => g - 1);
-      }
-    } catch (e) {
-      console.error(e);
+          filters,
+          isDaily,
+          potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
+          outroLine: outroLine || null,
+        },
+        replace: true,
+      });
+      return;
     }
-  };
 
-  const onGiveUp = async () => {
-    if (endedRef.current) return;
-    endedRef.current = true;
-    clearInterval(timerRef.current);
-    await saveGameRecord(false);
-    navigate('/post-game', {
-      state: {
-        won: false,
-        isDaily,
-        playerName: gameData.name,
-        displayName,
-        elapsedSeconds: INITIAL_TIME - timeSec,
-        potentialPoints: gameData.potentialPoints,
-        finalPoints: 0,
-      },
-      replace: true,
-    });
+    // wrong guess → halve points (handled in `points` useMemo via guessesLeft)
+    setIsWrongGuess(true);
+    setTimeout(() => setIsWrongGuess(false), 350);
+
+    if (guessesLeft <= 1) {
+      endedRef.current = true;
+      clearInterval(timerRef.current);
+      await saveGameRecord(false);
+
+      const elapsed = INITIAL_TIME - timeSec;
+      const outroLine = await generateOutro(false, 0, 3, elapsed);
+
+      navigate('/postgame', {
+        state: {
+          didWin: false,
+          player: {
+            id: gameData.id,
+            name: gameData.name,
+            photo: gameData.photo,
+            age: gameData.age,
+            nationality: gameData.nationality,
+            position: gameData.position,
+          },
+          stats: {
+            pointsEarned: 0,
+            timeSec: elapsed,
+            guessesUsed: 3,
+            usedHints,
+          },
+          filters,
+          isDaily,
+          potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
+          outroLine: outroLine || null,
+        },
+        replace: true,
+      });
+    } else {
+      setGuessesLeft((g) => g - 1);
+    }
   };
 
   // -------------------------
@@ -435,65 +570,18 @@ export default function LiveGamePage() {
         ⚠️ Don’t leave this page — leaving or switching windows will count as a loss.
       </div>
 
-      {/* Points Card (Responsive) */}
-      {/* Mobile: split into 3 cards stacked. Desktop: keep original single grid card. */}
-      {/* MOBILE VERSION */}
-      <div className="md:hidden space-y-3">
-        {/* 1) Game type + Potential */}
-        <div className="rounded-xl bg-white shadow p-6">
-          <div className="flex items-center gap-3">
-            <Trophy className="h-5 w-5 text-purple-600" />
-            <div className="text-sm">
-              {isDaily ? (
-                <span className="font-semibold text-purple-700">Daily Challenge</span>
-              ) : (
-                <span className="text-gray-600">Regular Round</span>
-              )}
-              <div className="text-sm">
-                <span className="text-gray-900 text-base">
-                  Potential: <span className="font-bold">{gameData.potentialPoints}</span>
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Sticky container holding 2) Time+Guesses and 3) Live points */}
-        <div className="sticky top-2 z-30 space-y-3">
-          {/* 2) Time left + Guesses left */}
-          <div className="rounded-xl bg-white shadow p-6">
-            <div className="flex items-center justify-between">
-              <div className={classNames('flex items-center gap-3 text-2xl font-semibold', timeColorClass)}>
-                <AlarmClock className="h-6 w-6" />
-                {formatTime(timeSec)}
-              </div>
-              <div className="text-sm text-gray-600">
-                Guesses left: <span className="font-semibold">{guessesLeft}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* 3) Live points (current points) */}
-          <div className="rounded-xl bg-white shadow p-6">
-            <div className="text-2xl font-extrabold text-amber-600 text-center">
-              Current points: <span>{points}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* DESKTOP VERSION */}
-      <div className="hidden md:block rounded-xl bg-white shadow p-6">
+      {/* Points Card */}
+      <div className="rounded-xl bg-white shadow p-6">
         <div className="grid md:grid-cols-3 items-center">
-          {/* Center: Current points (gold) */}
-          <div className="flex items-center justify-center md:order-2">
+          {/* Center: Current points (gold) — FIRST on mobile */}
+          <div className="flex items-center justify-center order-1 md:order-2">
             <div className="text-2xl font-extrabold text-amber-600">
               Current points: <span>{points}</span>
             </div>
           </div>
 
-          {/* Left: Round type + Potential */}
-          <div className="flex items-center gap-3 justify-start md:order-1 mt-3 md:mt-0">
+          {/* Left: Round type + Potential — SECOND on mobile */}
+          <div className="flex items-center gap-3 justify-start order-2 md:order-1 mt-3 md:mt-0">
             <Trophy className="h-5 w-5 text-purple-600" />
             <div className="text-sm">
               {isDaily ? (
@@ -509,8 +597,8 @@ export default function LiveGamePage() {
             </div>
           </div>
 
-          {/* Right: timer + guesses */}
-          <div className="flex flex-col items-end gap-1 md:order-3 mt-3 md:mt-0">
+          {/* Right: timer + guesses — THIRD on mobile */}
+          <div className="flex flex-col items-end gap-1 order-3 md:order-3 mt-3 md:mt-0">
             <div className={classNames('flex items-center gap-3 text-2xl font-semibold', timeColorClass)}>
               <AlarmClock className="h-6 w-6" />
               {formatTime(timeSec)}
@@ -536,8 +624,20 @@ export default function LiveGamePage() {
           }
         >
           <h3 className="text-lg font-semibold mb-3">Who are ya?!</h3>
-
-          <form onSubmit={onSubmitGuess} className="space-y-4">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (highlightIndex >= 0 && highlightIndex < suggestions.length) {
+                const chosen = suggestions[highlightIndex];
+                if (chosen?.display) {
+                  submitGuess(chosen.display);
+                  return;
+                }
+              }
+              submitGuess(guess);
+            }}
+            className="space-y-4"
+          >
             <input
               type="text"
               value={guess}
@@ -566,32 +666,68 @@ export default function LiveGamePage() {
               <button
                 type="submit"
                 className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded font-medium"
-                onClick={() => setSuggestions([])}
               >
                 Submit Guess
               </button>
               <button
                 type="button"
-                className="bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded font-medium"
-                onClick={onGiveUp}
+                onClick={() => {
+                  if (endedRef.current) return;
+                  endedRef.current = true;
+                  clearInterval(timerRef.current);
+                  (async () => {
+                    await saveGameRecord(false);
+                    const outroLine = await generateOutro(
+                      false,
+                      0,
+                      3,
+                      INITIAL_TIME - timeSec
+                    );
+                    navigate('/postgame', {
+                      state: {
+                        didWin: false,
+                        player: gameData,
+                        stats: {
+                          pointsEarned: 0,
+                          timeSec: INITIAL_TIME - timeSec,
+                          guessesUsed: 3,
+                          usedHints,
+                        },
+                        filters,
+                        isDaily,
+                        potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
+                        outroLine: outroLine || null,
+                      },
+                      replace: true,
+                    });
+                  })();
+                }}
+                className="px-4 py-2 rounded bg-red-600 hover:bg-red-700 text-white"
               >
                 Give up
               </button>
             </div>
           </form>
 
-          {/* Suggestions dropdown */}
-          {suggestions.length ? (
-            <ul className="mt-3 border rounded-lg divide-y max-h-64 overflow-auto">
-              {suggestions.map((sug, i) => (
+          {suggestions?.length ? (
+            <ul
+              ref={listRef}
+              className="mt-3 border rounded divide-y max-h-56 overflow-auto"
+            >
+              {suggestions.map((sug, idx) => (
                 <li
-                  key={sug.id ?? `${sug.display}-${i}`}
+                  key={sug.id ?? sug.display ?? idx}
+                  ref={(el) => (itemRefs.current[idx] = el)}
                   className={classNames(
-                    'px-3 py-2 text-sm cursor-pointer',
-                    i === highlightIndex ? 'bg-gray-100' : ''
+                    'px-3 py-2 cursor-pointer text-sm',
+                    idx === highlightIndex ? 'bg-sky-50' : 'hover:bg-gray-50'
                   )}
+                  onMouseEnter={() => setHighlightIndex(idx)}
                   onMouseDown={(e) => {
                     e.preventDefault();
+                  }}
+                  onClick={() => {
+                    if (!sug?.display) return;
                     setGuess(sug.display);
                     setSuggestions([]);
                     submitGuess(sug.display);
@@ -628,52 +764,65 @@ export default function LiveGamePage() {
           </NoCopySection>
         </div>
 
-        {/* Hints (left column on desktop, last card on mobile) */}
-        <div className="rounded-xl bg-white shadow p-6 order-3 lg:order-1">
-          <h3 className="text-lg font-semibold mb-3">Hints</h3>
-          <div className="space-y-3">
-            <HintButton
-              label="Player's Age"
-              multiplier="×0.90"
-              disabled={usedHints.age}
-              valueShown={ageValue}
-              onClick={() => reveal('age')}
-            />
-            <HintButton
-              label="Nationality"
-              multiplier="×0.90"
-              disabled={usedHints.nationality}
-              valueShown={nationalityValue}
-              onClick={() => reveal('nationality')}
-            />
-            <HintButton
-              label="Position"
-              multiplier="×0.80"
-              disabled={usedHints.position}
-              valueShown={positionValue}
-              onClick={() => reveal('position')}
-            />
-            <HintButton
-              label="Player's Image"
-              multiplier="×0.50"
-              disabled={usedHints.partialImage}
-              valueShown={partialImageValue ? 'revealed' : ''}
-              onClick={() => reveal('partialImage')}
-            />
-            <HintButton
-              label="First letter of the name"
-              multiplier="×0.25"
-              disabled={usedHints.firstLetter}
-              valueShown={firstLetterValue}
-              onClick={() => reveal('firstLetter')}
-            />
-          </div>
+        {/* Hints (mobile last, desktop first) */}
+        <div className="rounded-xl bg-white shadow p-6 space-y-4 order-3 lg:order-1 lg:col-span-1">
+          <h3 className="text-lg font-semibold mb-2">Hints</h3>
+
+          <HintButton
+            label="Player's Age"
+            multiplier="×0.90"
+            disabled={usedHints.age || !gameData?.age}
+            onClick={() => reveal('age')}
+            valueShown={usedHints.age ? String(gameData?.age) : null}
+          />
+          <HintButton
+            label="Nationality"
+            multiplier="×0.90"
+            disabled={usedHints.nationality || !gameData?.nationality}
+            onClick={() => reveal('nationality')}
+            valueShown={usedHints.nationality ? String(gameData?.nationality) : null}
+          />
+          <HintButton
+            label="Player's Position"
+            multiplier="×0.80"
+            disabled={usedHints.position || !gameData?.position}
+            onClick={() => reveal('position')}
+            valueShown={usedHints.position ? String(gameData?.position) : null}
+          />
+          <HintButton
+            label="Player's Image"
+            multiplier="×0.50"
+            disabled={usedHints.partialImage || !gameData?.photo}
+            onClick={() => reveal('partialImage')}
+            valueShown={
+              usedHints.partialImage ? (
+                <div className="flex justify-center">
+                  <img
+                    src={gameData?.photo}
+                    alt="Player Hint"
+                    className="w-32 h-32 object-cover object-top"
+                    style={{ clipPath: 'inset(0 0 34% 0)' }}
+                  />
+                </div>
+              ) : null
+            }
+          />
+          <HintButton
+            label="Player's First Letter"
+            multiplier="×0.25"
+            disabled={usedHints.firstLetter || !gameData?.name}
+            onClick={() => reveal('firstLetter')}
+            valueShown={usedHints.firstLetter ? String(gameData?.name?.[0]?.toUpperCase() || '') : null}
+          />
         </div>
       </div>
     </div>
   );
 }
 
+// -------------------------
+// Small UI bits
+// -------------------------
 function HintButton({ label, multiplier, onClick, disabled, valueShown }) {
   const hasValue =
     valueShown !== null && valueShown !== undefined && valueShown !== '';
@@ -705,29 +854,79 @@ function HintButton({ label, multiplier, onClick, disabled, valueShown }) {
           )}
         />
         <span className="font-medium">{label}</span>
-        <span className="ml-auto text-xs text-gray-500">{multiplier}</span>
+        <span
+          className={classNames(
+            'text-xs',
+            hasValue ? 'text-emerald-600' : 'text-gray-500'
+          )}
+        >
+          {multiplier}
+        </span>
+        {hasValue && (
+          <span className="ml-auto text-[10px] uppercase tracking-wider font-semibold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded">
+            Revealed
+          </span>
+        )}
       </div>
 
-      {/* revealed value */}
       {hasValue ? (
-        <div className="mt-2">
-          {label === "Player's Image" ? (
-            <div className="flex items-center justify-center">
-              <img
-                src={valueShown && valueShown !== 'revealed' ? valueShown : undefined}
-                alt=""
-                className="max-h-40 rounded-lg"
-              />
-            </div>
-          ) : (
-            <div className="px-2 py-1 rounded bg-white border inline-block text-sm">
-              {String(valueShown)}
-            </div>
-          )}
-        </div>
+        typeof valueShown === 'string' || typeof valueShown === 'number' ? (
+          <div className="mt-2 text-2xl font-extrabold text-emerald-700">
+            {valueShown}
+          </div>
+        ) : (
+          <div className="mt-3 overflow-hidden rounded-lg ring-2 ring-emerald-300 inline-block">
+            {valueShown}
+          </div>
+        )
       ) : null}
     </button>
   );
+}
+
+function ClubPill({ logo, name, flag }) {
+  return (
+    <div className="flex items-center gap-2 min-w-0">
+      {/* Icon stack: logo above flag */}
+      <div className="flex flex-col items-center justify-center gap-1 shrink-0">
+        {logo ? <img src={logo} alt="" className="h-6 w-6 rounded-md object-contain" /> : null}
+        {flag ? <img src={flag} alt="" className="h-3.5 w-5 rounded-sm object-cover" /> : null}
+      </div>
+      {/* Name */}
+      <span className="text-sm font-medium whitespace-nowrap truncate max-w-[260px] md:max-w-[360px] lg:max-w-[420px] select-none">
+        {name || 'Unknown'}
+      </span>
+    </div>
+  );
+}
+
+function Chip({ children, tone = 'slate' }) {
+  const tones = {
+    slate: 'bg-slate-50 text-slate-700 border-slate-200',
+    green: 'bg-green-50 text-green-700 border-green-200',
+    blue: 'bg-blue-50 text-blue-700 border-blue-200',
+    amber: 'bg-amber-50 text-amber-700 border-amber-200',
+    violet: 'bg-violet-50 text-violet-700 border-violet-200',
+  };
+  return (
+    <span className={classNames('inline-flex items-center gap-1 text-xs px-2 py-1 rounded border select-none', tones[tone])}>
+      {children}
+    </span>
+  );
+}
+
+function formatFee(raw) {
+  const v = raw ?? '';
+  if (!v) return '—';
+  let s = String(v);
+  // Remove HTML breaks/tags like "<br /><i ...>€2.00m</i>"
+  s = s.replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]*>/g, '');
+  // Remove common prefixes like "Loan fee:" or "Fee:"
+  s = s.replace(/^\s*(Loan\s*fee:|Fee:)\s*/i, '');
+  // Normalize any accidental "$" to "€"
+  s = s.replace(/^\$/, '€').replace(/\$/g, '€');
+  s = s.trim();
+  return s || '—';
 }
 
 function TransfersList({ transfers }) {
@@ -761,14 +960,12 @@ function TransfersList({ transfers }) {
             </div>
 
             {/* Value + Type (stacked & centered) */}
-            <div className="col-span-12 md:col-span-3 flex flex-col items-center gap-1">
-              <Chip tone="amber">
+            <div className="col-span-12 md:col-span-3 flex flex-col items-center justify-center gap-1">
+              <Chip tone="green">
                 <BadgeEuro className="h-3.5 w-3.5" />
-                <span className="font-semibold">{fee || '—'}</span>
+                <span>{formatFee(fee)}</span>
               </Chip>
-              <div className="text-xs text-gray-500 select-none">
-                {t.type || '—'}
-              </div>
+              {t.type ? <Chip tone="amber">{t.type}</Chip> : null}
             </div>
           </li>
         );
@@ -777,37 +974,41 @@ function TransfersList({ transfers }) {
   );
 }
 
-function Chip({ tone = 'gray', children }) {
-  const tones = {
-    gray: 'bg-gray-100 text-gray-800 border-gray-200',
-    amber: 'bg-amber-100 text-amber-800 border-amber-200',
-    violet: 'bg-violet-100 text-violet-800 border-violet-200',
-  };
-  return (
-    <span className={classNames('px-2 py-1 rounded border text-xs inline-flex items-center gap-1', tones[tone])}>
-      {children}
-    </span>
-  );
-}
-
-function ClubPill({ logo, name, flag }) {
-  return (
-    <div className="inline-flex items-center gap-2 max-w-[44%] min-w-0">
-      {logo ? (
-        <img src={logo} alt="" className="h-5 w-5 rounded-sm object-cover border" />
-      ) : null}
-      <span className="text-sm font-medium truncate">{name || '—'}</span>
-      {flag ? <img src={flag} alt="" className="h-3 w-5 object-cover rounded-sm border" /> : null}
-    </div>
-  );
-}
-
 /**
- * Prevents copying / selecting nested content (hints & transfers).
+ * Wrapper that disables copying/selection/drag/context menu for its children.
+ * Applied only to the Transfer History section to prevent cheating.
  */
 function NoCopySection({ children }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    const prevent = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    };
+
+    el.addEventListener('copy', prevent);
+    el.addEventListener('cut', prevent);
+    el.addEventListener('contextmenu', prevent, { capture: true });
+    el.addEventListener('dragstart', prevent);
+    el.addEventListener('selectstart', prevent);
+
+    return () => {
+      el.removeEventListener('copy', prevent);
+      el.removeEventListener('cut', prevent);
+      el.removeEventListener('contextmenu', prevent, { capture: true });
+      el.removeEventListener('dragstart', prevent);
+      el.removeEventListener('selectstart', prevent);
+    };
+  }, []);
+
   return (
     <div
+      ref={ref}
       style={{
         userSelect: 'none',
         WebkitUserSelect: 'none',
