@@ -3,7 +3,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabase';
 import { Trophy, Clock, Award, X } from 'lucide-react';
 
-const tabs = ['All Time', 'Month', 'Week', 'Today'];
+// CHANGE #1: order tabs as Today, Week, Month, All Time
+const tabs = ['Today', 'Week', 'Month', 'All Time'];
 const metrics = ['Total Points', 'Points/Game'];
 
 const PERIOD_TO_START = (now, tab) => {
@@ -13,8 +14,20 @@ const PERIOD_TO_START = (now, tab) => {
   return null;
 };
 
+// Helper to check if a timestamp is "today" (local time)
+const isToday = (isoOrDate) => {
+  const d = new Date(isoOrDate);
+  const now = new Date();
+  return (
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  );
+};
+
 export default function LeaderboardPage() {
-  const [tab, setTab] = useState('All Time');
+  // CHANGE #1: default tab is Today
+  const [tab, setTab] = useState('Today');
   const [metric, setMetric] = useState('Total Points');
   const [loading, setLoading] = useState(true);
   const [dailyChampions, setDailyChampions] = useState([]);
@@ -138,7 +151,7 @@ export default function LeaderboardPage() {
       const total = allGames?.length || 0;
       const pts = (allGames || []).reduce((s, g) => s + (g.points_earned || 0), 0);
       const wins = (allGames || []).filter(g => g.won).length;
-      const time = (allGames || []).reduce((s, g) => s + (g.time_taken_seconds || 0), 0);
+      const time = (allGames || []).reduce((s, g) => s + (g.time_taken_seconds || 0), 0;
 
       setUserStats({
         totalPoints: pts,
@@ -390,27 +403,35 @@ export default function LeaderboardPage() {
                 <div className="p-6 text-center text-gray-500">No recent games.</div>
               ) : (
                 <div className="space-y-3">
-                  {userGames.map(g => (
-                    <div key={g.id} className="rounded border p-3">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className={`font-medium ${g.is_daily_challenge ? 'font-semibold text-yellow-600' : ''}`}>
-                            {g.player_name || 'Unknown Player'}
+                  {userGames.map(g => {
+                    // CHANGE #2: mask today's daily challenge player name
+                    const maskedName =
+                      g.is_daily_challenge && isToday(g.created_at)
+                        ? 'Daily Challenge Player'
+                        : (g.player_name || 'Unknown Player');
+
+                    return (
+                      <div key={g.id} className="rounded border p-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className={`font-medium ${g.is_daily_challenge ? 'font-semibold text-yellow-600' : ''}`}>
+                              {maskedName}
+                            </div>
+                            <div className="text-xs text-gray-500">{new Date(g.created_at).toLocaleString()}</div>
                           </div>
-                          <div className="text-xs text-gray-500">{new Date(g.created_at).toLocaleString()}</div>
-                        </div>
-                        <div className="text-right">
-                          <div className={`font-semibold ${g.won ? 'text-green-600' : 'text-red-600'}`}>
-                            {g.won ? `+${g.points_earned}` : '0'} pts
-                          </div>
-                          <div className="text-xs text-gray-500">
-                            {g.guesses_attempted} {g.guesses_attempted === 1 ? 'guess' : 'guesses'}
-                            {g.is_daily_challenge && ' • Daily'}
+                          <div className="text-right">
+                            <div className={`font-semibold ${g.won ? 'text-green-600' : 'text-red-600'}`}>
+                              {g.won ? `+${g.points_earned}` : '0'} pts
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              {g.guesses_attempted} {g.guesses_attempted === 1 ? 'guess' : 'guesses'}
+                              {g.is_daily_challenge && ' • Daily'}
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
