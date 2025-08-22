@@ -48,6 +48,20 @@ const displayName = (p) => (p.is_bot ? p.display_name : p.user?.full_name || 'Un
 const keyDP = (m, p) => `${m.league_id}|${m.match_date}|${p.id}`;
 
 /* =========================================================
+   Helper: check if a timestamp is "today" in local time
+   (used for masking daily challenge names in the modal)
+   =======================================================*/
+function isToday(isoOrDate) {
+  const d = new Date(isoOrDate);
+  const now = new Date();
+  return (
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  );
+}
+
+/* =========================================================
    Live standings from “today’s totals” (games_records)
    =======================================================*/
 function computeStandings(participants, matches, dayPointsMap) {
@@ -1479,39 +1493,46 @@ function UserStatsModal({ user, onClose }) {
             <div className="p-6 text-center text-gray-500">No recent games.</div>
           ) : (
             <div className="space-y-3">
-              {recent.map((g) => (
-                <div key={g.id} className="rounded border p-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div
-                        className={`font-medium ${
-                          g.is_daily_challenge ? 'text-yellow-600 font-semibold' : ''
-                        }`}
-                      >
-                        {g.player_name || 'Unknown Player'}
-                        {g.is_daily_challenge && (
-                          <span className="ml-2 text-xs text-yellow-700">(Daily)</span>
-                        )}
+              {recent.map((g) => {
+                // Mask the player name if this is today's daily challenge
+                const maskedName =
+                  g.is_daily_challenge && isToday(g.created_at)
+                    ? 'Daily Challenge Player'
+                    : (g.player_name || 'Unknown Player');
+
+                return (
+                  <div key={g.id} className="rounded border p-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div
+                          className={`font-medium ${
+                            g.is_daily_challenge ? 'text-yellow-600 font-semibold' : ''
+                          }`}
+                        >
+                          {maskedName}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {new Date(g.created_at).toLocaleString()}
+                        </div>
                       </div>
-                      <div className="text-xs text-gray-500">
-                        {new Date(g.created_at).toLocaleString()}
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div
-                        className={`font-semibold ${
-                          g.won ? 'text-green-600' : 'text-red-600'
-                        }`}
-                      >
-                        {g.won ? `+${g.points_earned}` : '0'} pts
-                      </div>
-                      <div className="text-xs text-gray-500">
-                        {g.guesses_attempted} {g.guesses_attempted === 1 ? 'guess' : 'guesses'}
+                      <div className="text-right">
+                        <div
+                          className={`font-semibold ${
+                            g.won ? 'text-green-600' : 'text-red-600'
+                          }`}
+                        >
+                          {g.won ? `+${g.points_earned}` : '0'} pts
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {g.guesses_attempted}{' '}
+                          {g.guesses_attempted === 1 ? 'guess' : 'guesses'}
+                          {g.is_daily_challenge && ' • Daily'}
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
