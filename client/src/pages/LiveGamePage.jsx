@@ -495,6 +495,7 @@ export default function LiveGamePage() {
         guessesAttempted: 3 - guessesLeft + (won ? 1 : 0),
         hintsUsed: Object.values(usedHints).filter(Boolean).length,
         isDaily: !!isDaily,
+        is_elimination_game: !!elimination,
         // NOTE: elimination context intentionally not sent here to avoid impacting existing backend;
         // front-end passes it to PostGame via navigation.state only.
       };

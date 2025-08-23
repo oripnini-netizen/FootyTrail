@@ -221,7 +221,7 @@ export default function PostGamePage() {
     };
   }, [user?.id]);
 
-  // Games left (UTC)
+  // Games left (UTC) — exclude elimination games from daily tally
   useEffect(() => {
     if (!user?.id) return;
     let cancelled = false;
@@ -235,6 +235,7 @@ export default function PostGamePage() {
           .select('id')
           .eq('user_id', user.id)
           .eq('is_daily_challenge', false)
+          .eq('is_elimination_game', false) // <— NEW: exclude elimination games
           .gte('created_at', start)
           .lt('created_at', end);
         if (error) throw error;
@@ -676,7 +677,7 @@ export default function PostGamePage() {
                   <button
                     onClick={() => {
                       clearPostGameCache();
-                      navigate('/elimination');
+                      navigate('/elimination-tournaments'); // <— FIXED route
                     }}
                     className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg font-medium"
                   >

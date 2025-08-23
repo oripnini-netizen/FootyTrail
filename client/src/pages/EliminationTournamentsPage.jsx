@@ -18,6 +18,7 @@ import {
   CheckSquare,
   Trash2,
   CalendarClock,
+  Axe,
 } from "lucide-react";
 
 /* ------------------------------------------------------------
@@ -166,9 +167,10 @@ export default function EliminationTournamentsPage() {
       <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
       <div className="container mx-auto py-8 px-4 max-w-6xl">
         {/* Page header */}
-        <header className="mb-4 sm:mb-6">
-          <h1 className="text-4xl font-extrabold text-green-800">
-            Elimination Tournaments
+        <header className="mb-4 sm:mb-6 text-center">
+          <h1 className="flex items-center justify-center gap-3 text-4xl font-extrabold text-green-800">
+            <Axe className="h-8 w-8 text-green-800" aria-hidden="true" />
+            <span>Elimination Tournaments</span>
           </h1>
           <p className="mt-2 text-sm text-gray-700">
             Create and follow elimination tournaments with friends. Each round
@@ -212,7 +214,7 @@ export default function EliminationTournamentsPage() {
 
         {/* Content area */}
         <section
-          className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
+          className="grid grid-cols-1 gap-4 sm:grid-cols-1 lg:grid-cols-2"
           aria-live="polite"
           aria-busy={activeTab === "live" ? loading.live : loading.finished}
         >
@@ -923,7 +925,7 @@ function ErrorCard({ title, message }) {
 
 /* ------------------------------------------------------------
    CreateTournamentModal
-   (unchanged aside from previous fixes)
+   (changed: default filters collapsed; chips summary shown ABOVE sections)
 ------------------------------------------------------------ */
 function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   const dialogRef = useRef(null);
@@ -941,9 +943,10 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   const [minMarketValue, setMinMarketValue] = useState(0);
 
   const [expandedCountries, setExpandedCountries] = useState({});
-  const [compCollapsed, setCompCollapsed] = useState(false);
-  const [seasonsCollapsed, setSeasonsCollapsed] = useState(false);
-  const [mvCollapsed, setMvCollapsed] = useState(false);
+  // Default collapsed as requested:
+  const [compCollapsed, setCompCollapsed] = useState(true);
+  const [seasonsCollapsed, setSeasonsCollapsed] = useState(true);
+  const [mvCollapsed, setMvCollapsed] = useState(true);
 
   // Counts
   const [poolCount, setPoolCount] = useState(0);
@@ -1391,7 +1394,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                 )}
               </div>
 
-              {/* Difficulty Filters (same controls as GamePage) */}
+              {/* Difficulty Filters (summary chips ABOVE, sections can be collapsed) */}
               <DifficultyFilters
                 loadingFilters={loadingFilters}
                 compCollapsed={compCollapsed}
@@ -1571,50 +1574,83 @@ function Section({ title, icon, collapsed, onToggle, actions, children }) {
   );
 }
 
-function SelectedChips({
-  title,
-  items,
-  onClear,
-  getLabel,
-  onRemoveItem,
-  hoverClose = false,
+function SelectedChipsRow({
+  selectedCompetitionIds,
+  compIdToLabel,
+  selectedSeasons,
+  minMarketValue,
+  onRemoveCompetition,
+  onRemoveSeason,
+  onClearAll,
 }) {
-  if (!items?.length) return null;
+  const hasAny =
+    (selectedCompetitionIds?.length || 0) +
+      (selectedSeasons?.length || 0) +
+      (minMarketValue ? 1 : 0) >
+    0;
+
+  if (!hasAny) {
+    return (
+      <div className="rounded-md border border-dashed p-3 text-xs text-gray-600 bg-white">
+        No filters selected yet.
+      </div>
+    );
+  }
+
   return (
-    <div className="mb-2">
-      {title && <div className="text-xs text-gray-600 mb-1">{title}</div>}
-      <div className="flex flex-wrap gap-2">
-        {items.map((t, index) => {
-          const label = getLabel ? getLabel(t) : String(t);
-          return (
-            <span
-              key={`${String(t)}-${index}`}
-              className={classNames(
-                "group relative inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800",
-                hoverClose && "pr-6"
-              )}
-            >
-              {label}
-              {hoverClose && onRemoveItem && (
-                <button
-                  type="button"
-                  onClick={() => onRemoveItem(t)}
-                  className="absolute right-0 top-0 bottom-0 hidden group-hover:flex items-center justify-center w-5 text-red-600 hover:text-red-700"
-                  title="Remove"
-                >
-                  ×
-                </button>
-              )}
-            </span>
-          );
-        })}
-        <button
-          type="button"
-          onClick={onClear}
-          className="text-xs text-gray-600 underline hover:text-gray-800"
-        >
-          Clear
-        </button>
+    <div className="rounded-md border p-3 bg-white">
+      <div className="flex flex-wrap items-center gap-2">
+        {selectedCompetitionIds?.map((id) => (
+          <span
+            key={`comp-${id}`}
+            className="inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800"
+          >
+            {compIdToLabel?.[id] || `Competition ${id}`}
+            {onRemoveCompetition && (
+              <button
+                type="button"
+                onClick={() => onRemoveCompetition(id)}
+                className="text-red-600 hover:text-red-700"
+                title="Remove"
+              >
+                ×
+              </button>
+            )}
+          </span>
+        ))}
+        {selectedSeasons?.map((s) => (
+          <span
+            key={`season-${s}`}
+            className="inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800"
+          >
+            {String(s)}
+            {onRemoveSeason && (
+              <button
+                type="button"
+                onClick={() => onRemoveSeason(s)}
+                className="text-red-600 hover:text-red-700"
+                title="Remove"
+              >
+                ×
+              </button>
+            )}
+          </span>
+        ))}
+        {minMarketValue ? (
+          <span className="inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800">
+            Min MV: €{fmtCurrency(minMarketValue)}
+          </span>
+        ) : null}
+        {onClearAll && (
+          <button
+            type="button"
+            onClick={onClearAll}
+            className="ml-1 text-xs text-gray-600 underline hover:text-gray-800"
+            title="Clear all filters"
+          >
+            Clear
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1688,6 +1724,30 @@ function DifficultyFilters(props) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-green-900 font-semibold">Difficulty Filters</span>
+        </div>
+      </div>
+
+      {/* Selected filters chips row (ABOVE sections, visible when collapsed) */}
+      <div className="mt-3">
+        <SelectedChipsRow
+          selectedCompetitionIds={selectedCompetitionIds}
+          compIdToLabel={compIdToLabel}
+          selectedSeasons={selectedSeasons}
+          minMarketValue={minMarketValue}
+          onRemoveCompetition={(id) => toggleCompetition(id)}
+          onRemoveSeason={(s) =>
+            setSelectedSeasons((prev) => prev.filter((x) => x !== s))
+          }
+          onClearAll={() => {
+            clearCompetitions();
+            clearSeasons();
+            setMinMarketValue(0);
+          }}
+        />
+        <div className="mt-2 text-xs text-gray-600">
+          {loadingCounts
+            ? "Calculating player pool…"
+            : `Player pool: ${poolCount} of ${totalCount}`}
         </div>
       </div>
 
@@ -1799,14 +1859,6 @@ function DifficultyFilters(props) {
               )}
             </div>
 
-            <SelectedChips
-              title="Chosen competitions"
-              items={selectedCompetitionIds}
-              onClear={clearCompetitions}
-              getLabel={(id) => compIdToLabel[id] || `Competition ${id}`}
-              onRemoveItem={(id) => toggleCompetition(id)}
-              hoverClose
-            />
             <div className="max-h-72 overflow-y-auto pr-2">
               {Object.entries(groupedCompetitions)
                 .sort(([a], [b]) => a.localeCompare(b))
@@ -1927,14 +1979,6 @@ function DifficultyFilters(props) {
               </>
             }
           >
-            <SelectedChips
-              items={selectedSeasons}
-              onClear={clearSeasons}
-              onRemoveItem={(season) =>
-                setSelectedSeasons((prev) => prev.filter((x) => x !== season))
-              }
-              hoverClose
-            />
             <div className="max-h-60 overflow-y-auto pr-2">
               {allSeasons.map((s) => {
                 const checked = selectedSeasons.includes(s);
@@ -1995,11 +2039,6 @@ function DifficultyFilters(props) {
                 }
                 className="w-44 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-700"
               />
-            </div>
-            <div className="mt-3 text-xs text-gray-600">
-              {loadingCounts
-                ? "Calculating player pool…"
-                : `Player pool: ${poolCount} of ${totalCount}`}
             </div>
           </Section>
         </div>
