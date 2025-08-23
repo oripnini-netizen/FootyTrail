@@ -1,11 +1,5 @@
 // src/pages/EliminationTournamentsPage.jsx
-import React, {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useLayoutEffect,
-} from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../supabase";
 import { useAuth } from "../context/AuthContext";
@@ -31,6 +25,24 @@ import {
 ------------------------------------------------------------ */
 function classNames(...s) {
   return s.filter(Boolean).join(" ");
+}
+
+function fmtCurrency(n) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "EUR",
+    maximumFractionDigits: 0,
+  }).format(Number(n || 0));
+}
+
+function normalizeSeasons(payload) {
+  let raw = [];
+  if (Array.isArray(payload)) raw = payload;
+  else if (payload && Array.isArray(payload.seasons)) raw = payload.seasons;
+  else if (payload && Array.isArray(payload.data)) raw = payload.data;
+  const uniq = Array.from(new Set(raw.map(String)));
+  uniq.sort((a, b) => String(b).localeCompare(String(a)));
+  return uniq;
 }
 
 /* ------------------------------------------------------------
@@ -122,7 +134,7 @@ export default function EliminationTournamentsPage() {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
         .select(
-          "id, name, status, created_at, round_time_limit_seconds, filters"
+          "id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id"
         )
         .eq("status", "finished")
         .order("created_at", { ascending: false });
@@ -154,26 +166,25 @@ export default function EliminationTournamentsPage() {
       <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
       <div className="container mx-auto py-8 px-4 max-w-6xl">
         {/* Page header */}
-        <header className="mb-6 sm:mb-8 flex items-start justify-between gap-3">
-          <div>
-            <h1 className="text-4xl font-extrabold text-center text-green-800">
-              Elimination Tournaments
-            </h1>
-            <p className="mt-2 text-sm text-gray-700">
-              Create and follow elimination tournaments with friends. Each round
-              uses the same mystery player for everyone. Lowest score(s) are
-              eliminated until a single winner remains.
-            </p>
-          </div>
-
+        <header className="mb-4 sm:mb-6">
+          <h1 className="text-4xl font-extrabold text-green-800">
+            Elimination Tournaments
+          </h1>
+          <p className="mt-2 text-sm text-gray-700">
+            Create and follow elimination tournaments with friends. Each round
+            uses the same mystery player for everyone. Lowest score(s) are
+            eliminated until a single winner remains.
+          </p>
           {activeTab === "live" && (
-            <button
-              type="button"
-              onClick={handleOpenCreate}
-              className="shrink-0 rounded-lg bg-green-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-green-800"
-            >
-              Create Tournament
-            </button>
+            <div className="mt-4 flex justify-center">
+              <button
+                type="button"
+                onClick={handleOpenCreate}
+                className="rounded-lg bg-green-700 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-green-800"
+              >
+                Create Tournament
+              </button>
+            </div>
           )}
         </header>
 
@@ -398,29 +409,25 @@ function TournamentCard({ tournament, compIdToLabel }) {
     };
   }, [tournament.id]);
 
-  // Chip helpers for filters on the card
-  const filterChips = useMemo(() => {
-    const chips = [];
+  // Build filter chips grouped under headings
+  const { compChips, seasonChips, mvChip } = useMemo(() => {
     const f = tournament.filters || {};
     const seasons = Array.isArray(f.seasons) ? f.seasons : [];
     const comps = Array.isArray(f.competitions) ? f.competitions : [];
     const mv = Number(f.minMarketValue || 0);
 
-    if (seasons.length) {
-      seasons.forEach((s) => chips.push({ key: `S-${s}`, label: String(s) }));
-    }
-    if (comps.length) {
-      comps.forEach((id) =>
-        chips.push({
-          key: `C-${id}`,
-          label: compIdToLabel?.[String(id)] || `League ${id}`,
-        })
-      );
-    }
-    if (mv > 0) {
-      chips.push({ key: "MV", label: `Min MV: €${fmtCurrency(mv)}` });
-    }
-    return chips;
+    const compChips = comps.map((id) => ({
+      key: `C-${id}`,
+      label: compIdToLabel?.[String(id)] || `League ${id}`,
+    }));
+    const seasonChips = seasons.map((s) => ({
+      key: `S-${s}`,
+      label: String(s),
+    }));
+    const mvChip =
+      mv > 0 ? { key: "MV", label: `Min MV: €${fmtCurrency(mv)}` } : null;
+
+    return { compChips, seasonChips, mvChip };
   }, [tournament.filters, compIdToLabel]);
 
   return (
@@ -441,24 +448,67 @@ function TournamentCard({ tournament, compIdToLabel }) {
 
       <p className="mt-2 text-xs text-gray-500">Created: {dateStr}</p>
 
-      {/* Filters as chips */}
-      {filterChips.length > 0 && (
-        <div className="mt-3">
-          <div className="text-xs font-semibold mb-1 text-gray-700">
-            Filters
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {filterChips.map((c) => (
+      {/* Difficulty Filters as grouped chips */}
+      <div className="mt-3">
+        <div className="text-xs font-semibold mb-1 text-gray-700">
+          Difficulty Filters
+        </div>
+
+        {/* Competitions */}
+        {compChips.length > 0 && (
+          <>
+            <div className="text-[11px] font-medium text-gray-600 mb-1">
+              Competitions
+            </div>
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {compChips.map((c) => (
+                <span
+                  key={c.key}
+                  className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-800 ring-1 ring-inset ring-green-600/20"
+                >
+                  {c.label}
+                </span>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* Seasons */}
+        {seasonChips.length > 0 && (
+          <>
+            <div className="text-[11px] font-medium text-gray-600 mb-1">
+              Seasons
+            </div>
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {seasonChips.map((c) => (
+                <span
+                  key={c.key}
+                  className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-800 ring-1 ring-inset ring-green-600/20"
+                >
+                  {c.label}
+                </span>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* Minimum MV */}
+        {mvChip && (
+          <>
+            <div className="text-[11px] font-medium text-gray-600 mb-1">
+              Minimum MV
+            </div>
+            <div className="flex flex-wrap gap-1.5">
               <span
-                key={c.key}
+                key={mvChip.key}
                 className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-800 ring-1 ring-inset ring-green-600/20"
               >
-                {c.label}
+                {mvChip.label}
               </span>
-            ))}
-          </div>
-        </div>
-      )}
+            </div>
+          </>
+        )}
+      </div>
 
       {/* Participants as chips */}
       <div className="mt-3">
@@ -777,7 +827,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
     return out;
   }, [groupedCompetitions]);
 
-  const compIdToLabel = useMemo(() => {
+  const compIdToLabelLocal = useMemo(() => {
     const map = {};
     Object.entries(groupedCompetitions || {}).forEach(([country, comps]) => {
       (comps || []).forEach((c) => {
@@ -837,13 +887,6 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
     }
     if (!currentUser?.id) {
       next.user = "You must be logged in to create a tournament.";
-    }
-    if (
-      (selectedCompetitionIds || []).length === 0 &&
-      (selectedSeasons || []).length === 0 &&
-      !Number(minMarketValue)
-    ) {
-      // allow, but warn via counts 0
     }
     setErrors(next);
     return Object.keys(next).length === 0;
@@ -911,11 +954,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
         state: "active",
       }));
       if (partsPayload.length) {
-        const { error: pErr } = await supabase
-          .from("elimination_participants")
-          .insert(partsPayload);
-        if (pErr)
-          console.warn("[CreateTournament] participants insert warning:", pErr);
+        await supabase.from("elimination_participants").insert(partsPayload);
       }
 
       // Notifications for invited users (not the owner)
@@ -949,7 +988,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
       const endsAt = new Date(
         now.getTime() + Math.floor(Number(roundTimeMinutes)) * 60 * 1000
       );
-      const { error: rErr } = await supabase.from("elimination_rounds").insert([
+      await supabase.from("elimination_rounds").insert([
         {
           tournament_id: tournament.id,
           round_number: 1,
@@ -959,7 +998,6 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
           ends_at: endsAt.toISOString(),
         },
       ]);
-      if (rErr) console.warn("[CreateTournament] create round warning:", rErr);
 
       // done → refresh list and close
       await onCreated?.();
@@ -992,7 +1030,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
           e.stopPropagation();
         }}
       >
-        {/* >>> Fixed height container + internal scroll <<< */}
+        {/* Fixed-height panel with internal scrolling */}
         <div className="w-full max-w-3xl max-h-[85vh] flex flex-col rounded-2xl border border-gray-200 bg-white p-0 shadow-xl">
           <div className="flex items-center justify-between border-b border-gray-200 p-4">
             <h2 className="text-lg font-semibold text-gray-900">
@@ -1007,7 +1045,6 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
             </button>
           </div>
 
-          {/* Make the form a column with a scrollable body and a fixed footer */}
           <form onSubmit={handleSubmit} className="flex-1 min-h-0 flex flex-col">
             {/* Scrollable content */}
             <div className="flex-1 overflow-y-auto p-4 space-y-6">
@@ -1028,346 +1065,46 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                 )}
               </div>
 
-              {/* Difficulty Filters (same as GamePage) */}
-              <div className="rounded-xl shadow-sm border bg-green-50/60 p-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-green-900 font-semibold">
-                      Difficulty Filters
-                    </span>
-                  </div>
-                </div>
-
-                {!loadingFilters && (
-                  <div className="mt-4 space-y-6">
-                    {/* Competitions */}
-                    <Section
-                      title="Competitions"
-                      icon={<Star className="h-4 w-4 text-green-700" />}
-                      collapsed={compCollapsed}
-                      onToggle={() => setCompCollapsed((v) => !v)}
-                      actions={
-                        <>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              selectTop10Competitions();
-                            }}
-                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                          >
-                            <Star className="h-3 w-3" /> Top 10
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              selectAllCompetitions();
-                            }}
-                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                          >
-                            <CheckSquare className="h-3 w-3" /> Select All
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              clearCompetitions();
-                            }}
-                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                            Clear All
-                          </button>
-                        </>
-                      }
-                    >
-                      {/* search */}
-                      <div
-                        className="mb-3 relative"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <div className="flex items-center gap-2 border rounded-md bg-white px-2 py-1">
-                          <Search className="h-4 w-4 text-gray-500" />
-                          <input
-                            ref={compSearchRef}
-                            type="text"
-                            value={compSearch}
-                            onChange={(e) => setCompSearch(e.target.value)}
-                            onFocus={() => setCompSugOpen(compSug.length > 0)}
-                            onKeyDown={handleCompSearchKeyDown}
-                            placeholder="Search country or competition…"
-                            className="w-full outline-none text-sm"
-                          />
-                        </div>
-                        {compSugOpen && compSug.length > 0 && (
-                          <div
-                            ref={compSugBoxRef}
-                            className="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-md border bg-white shadow"
-                          >
-                            {compSug.map((s, idx) => {
-                              const active = idx === compSugIndex;
-                              const checked =
-                                selectedCompetitionIds.includes(s.id);
-                              return (
-                                <button
-                                  key={`${s.id}-${idx}`}
-                                  type="button"
-                                  onClick={() => {
-                                    toggleCompetition(s.id);
-                                    setCompSearch("");
-                                    setCompSug([]);
-                                    setCompSugOpen(false);
-                                  }}
-                                  className={classNames(
-                                    "w-full text-left px-2 py-1 flex items-center gap-2 text-sm",
-                                    active ? "bg-green-100" : "hover:bg-gray-50"
-                                  )}
-                                >
-                                  {s.logo_url && (
-                                    <img
-                                      src={s.logo_url}
-                                      alt={s.name}
-                                      className="w-4 h-4 object-contain"
-                                    />
-                                  )}
-                                  <span className="flex-1">{s.label}</span>
-                                  {checked && (
-                                    <span className="text-green-700 text-xs font-semibold">
-                                      selected
-                                    </span>
-                                  )}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-
-                      <SelectedChips
-                        title="Chosen competitions"
-                        items={selectedCompetitionIds}
-                        onClear={clearCompetitions}
-                        getLabel={(id) =>
-                          compIdToLabel[id] || `Competition ${id}`
-                        }
-                        onRemoveItem={(id) =>
-                          setSelectedCompetitionIds((prev) =>
-                            prev.filter((x) => x !== id)
-                          )
-                        }
-                        hoverClose
-                      />
-                      <div className="max-h-72 overflow-y-auto pr-2">
-                        {Object.entries(groupedCompetitions)
-                          .sort(([a], [b]) => a.localeCompare(b))
-                          .map(([country, comps]) => (
-                            <div key={country} className="mb-2">
-                              <button
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  toggleCountry(country);
-                                }}
-                                type="button"
-                                className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
-                              >
-                                <div className="flex items-center gap-2">
-                                  {comps?.[0]?.flag_url && (
-                                    <img
-                                      src={comps[0].flag_url}
-                                      alt={country}
-                                      className="w-6 h-4 object-cover rounded"
-                                    />
-                                  )}
-                                  <span>{country}</span>
-                                  <span className="text-xs text-gray-500">
-                                    ({comps.length})
-                                  </span>
-                                </div>
-                                <span className="text-sm text-gray-600">
-                                  {expandedCountries[country] ? "▲" : "▼"}
-                                </span>
-                              </button>
-
-                              {expandedCountries[country] && (
-                                <div className="ml-8 space-y-2 mt-2">
-                                  {comps.map((c) => {
-                                    const cid = String(c.competition_id);
-                                    const checked =
-                                      selectedCompetitionIds.includes(cid);
-                                    return (
-                                      <label
-                                        key={cid}
-                                        className="flex items-center gap-2 cursor-pointer"
-                                        onClick={(e) => e.stopPropagation()}
-                                      >
-                                        <input
-                                          type="checkbox"
-                                          checked={checked}
-                                          onChange={() =>
-                                            toggleCompetition(cid)
-                                          }
-                                          className="rounded"
-                                        />
-                                        {c.logo_url && (
-                                          <img
-                                            src={c.logo_url}
-                                            alt={c.competition_name}
-                                            className="w-5 h-5 object-contain"
-                                          />
-                                        )}
-                                        <span className="text-sm">
-                                          {c.competition_name}
-                                        </span>
-                                        {c.tier && (
-                                          <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700">
-                                            Tier {c.tier}
-                                          </span>
-                                        )}
-                                      </label>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                      </div>
-                    </Section>
-
-                    {/* Seasons */}
-                    <Section
-                      title="Seasons"
-                      icon={<CalendarClock className="h-4 w-4 text-green-700" />}
-                      collapsed={seasonsCollapsed}
-                      onToggle={() => setSeasonsCollapsed((v) => !v)}
-                      actions={
-                        <>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              handleLast5Seasons();
-                            }}
-                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                          >
-                            <CalendarClock className="h-3 w-3" /> Last 5
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              selectAllSeasons();
-                            }}
-                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                          >
-                            <CheckSquare className="h-3 w-3" /> Select All
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              clearSeasons();
-                            }}
-                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                            Clear All
-                          </button>
-                        </>
-                      }
-                    >
-                      <SelectedChips
-                        items={selectedSeasons}
-                        onClear={clearSeasons}
-                        onRemoveItem={(season) =>
-                          setSelectedSeasons((prev) =>
-                            prev.filter((x) => x !== season)
-                          )
-                        }
-                        hoverClose
-                      />
-                      <div className="max-h-60 overflow-y-auto pr-2">
-                        {allSeasons.map((s) => {
-                          const checked = selectedSeasons.includes(s);
-                          return (
-                            <label
-                              key={s}
-                              className="flex items-center gap-2 cursor-pointer"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => {
-                                  setSelectedSeasons((prev) =>
-                                    prev.includes(s)
-                                      ? prev.filter((x) => x !== s)
-                                      : [...prev, s]
-                                  );
-                                }}
-                                className="rounded"
-                              />
-                              <span className="text-sm">{s}</span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    </Section>
-
-                    {/* Minimum Market Value */}
-                    <Section
-                      title="Minimum Market Value (€)"
-                      icon={<Star className="h-4 w-4 text-green-700" />}
-                      collapsed={mvCollapsed}
-                      onToggle={() => setMvCollapsed((v) => !v)}
-                      actions={
-                        <>
-                          {[0, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000]
-                            .concat([25_000_000, 50_000_000])
-                            .map((v) => (
-                              <PresetButton
-                                key={v}
-                                onClick={() => setMinMarketValue(v)}
-                                active={minMarketValue === v}
-                              >
-                                <Star size={14} />{" "}
-                                {v >= 1_000_000
-                                  ? `${v / 1_000_000}M €`
-                                  : `${v / 1_000}K €`}
-                              </PresetButton>
-                            ))}
-                        </>
-                      }
-                    >
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="number"
-                          min={0}
-                          step={100000}
-                          value={minMarketValue}
-                          onChange={(e) =>
-                            setMinMarketValue(Math.max(0, Number(e.target.value)))
-                          }
-                          className="w-44 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-700"
-                        />
-                      </div>
-                      <div className="mt-3 text-xs text-gray-600">
-                        {loadingCounts
-                          ? "Calculating player pool…"
-                          : `Player pool: ${poolCount} of ${totalCount} (${(
-                              poolCount * 5
-                            ).toLocaleString()} potential points)`}
-                      </div>
-                    </Section>
-                  </div>
-                )}
-              </div>
+              {/* Difficulty Filters (same controls as GamePage) */}
+              <DifficultyFilters
+                loadingFilters={loadingFilters}
+                compCollapsed={compCollapsed}
+                setCompCollapsed={setCompCollapsed}
+                seasonsCollapsed={seasonsCollapsed}
+                setSeasonsCollapsed={setSeasonsCollapsed}
+                mvCollapsed={mvCollapsed}
+                setMvCollapsed={setMvCollapsed}
+                compSearch={compSearch}
+                setCompSearch={setCompSearch}
+                compSugOpen={compSugOpen}
+                setCompSugOpen={setCompSugOpen}
+                compSug={compSug}
+                compSugIndex={compSugIndex}
+                setCompSugIndex={setCompSugIndex}
+                compSearchRef={compSearchRef}
+                compSugBoxRef={compSugBoxRef}
+                handleCompSearchKeyDown={handleCompSearchKeyDown}
+                groupedCompetitions={groupedCompetitions}
+                expandedCountries={expandedCountries}
+                toggleCountry={toggleCountry}
+                selectedCompetitionIds={selectedCompetitionIds}
+                toggleCompetition={toggleCompetition}
+                clearCompetitions={clearCompetitions}
+                selectAllCompetitions={selectAllCompetitions}
+                selectTop10Competitions={selectTop10Competitions}
+                compIdToLabel={compIdToLabelLocal}
+                allSeasons={allSeasons}
+                selectedSeasons={selectedSeasons}
+                setSelectedSeasons={setSelectedSeasons}
+                clearSeasons={clearSeasons}
+                selectAllSeasons={selectAllSeasons}
+                handleLast5Seasons={handleLast5Seasons}
+                minMarketValue={minMarketValue}
+                setMinMarketValue={setMinMarketValue}
+                loadingCounts={loadingCounts}
+                poolCount={poolCount}
+                totalCount={totalCount}
+              />
 
               {/* Invites */}
               <div className="rounded-xl shadow-sm border bg-white p-4">
@@ -1480,9 +1217,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   );
 }
 
-/* ------------------------------------------------------------
-   Small shared UI pieces copied/trimmed from GamePage
------------------------------------------------------------- */
+/* ----------------- Difficulty Filters section (reused) ----------------- */
 function Section({ title, icon, collapsed, onToggle, actions, children }) {
   return (
     <div className="rounded-lg border bg-white/60">
@@ -1581,36 +1316,368 @@ function PresetButton({ onClick, children, title, active = false }) {
   );
 }
 
-/* ------------------------------------------------------------
-   Helpers copied from GamePage where needed
------------------------------------------------------------- */
-function normalizeSeasons(payload) {
-  let raw = [];
-  if (Array.isArray(payload)) {
-    raw = payload;
-  } else if (payload && Array.isArray(payload.seasons)) {
-    raw = payload.seasons;
-  } else if (payload && Array.isArray(payload.data)) {
-    raw = payload.data;
-  } else if (payload && typeof payload === "object") {
-    const collected = [];
-    Object.values(payload).forEach((v) => {
-      if (Array.isArray(v)) collected.push(v);
-      else if (typeof v === "string" || typeof v === "number")
-        collected.push(v);
-    });
-    raw = collected.length ? collected : [];
-  }
+function DifficultyFilters(props) {
+  const {
+    loadingFilters,
+    compCollapsed,
+    setCompCollapsed,
+    seasonsCollapsed,
+    setSeasonsCollapsed,
+    mvCollapsed,
+    setMvCollapsed,
+    compSearch,
+    setCompSearch,
+    compSugOpen,
+    setCompSugOpen,
+    compSug,
+    compSugIndex,
+    setCompSugIndex,
+    compSearchRef,
+    compSugBoxRef,
+    handleCompSearchKeyDown,
+    groupedCompetitions,
+    expandedCountries,
+    toggleCountry,
+    selectedCompetitionIds,
+    toggleCompetition,
+    clearCompetitions,
+    selectAllCompetitions,
+    selectTop10Competitions,
+    compIdToLabel,
+    allSeasons,
+    selectedSeasons,
+    setSelectedSeasons,
+    clearSeasons,
+    selectAllSeasons,
+    handleLast5Seasons,
+    minMarketValue,
+    setMinMarketValue,
+    loadingCounts,
+    poolCount,
+    totalCount,
+  } = props;
 
-  const uniq = Array.from(new Set(raw.map(String)));
-  uniq.sort((a, b) => String(b).localeCompare(String(a)));
-  return uniq;
-}
+  return (
+    <div className="rounded-xl shadow-sm border bg-green-50/60 p-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-green-900 font-semibold">Difficulty Filters</span>
+        </div>
+      </div>
 
-function fmtCurrency(n) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "EUR",
-    maximumFractionDigits: 0,
-  }).format(Number(n || 0));
+      {!loadingFilters && (
+        <div className="mt-4 space-y-6">
+          {/* Competitions */}
+          <Section
+            title="Competitions"
+            icon={<Star className="h-4 w-4 text-green-700" />}
+            collapsed={compCollapsed}
+            onToggle={() => setCompCollapsed((v) => !v)}
+            actions={
+              <>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    selectTop10Competitions();
+                  }}
+                  className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                >
+                  <Star className="h-3 w-3" /> Top 10
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    selectAllCompetitions();
+                  }}
+                  className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                >
+                  <CheckSquare className="h-3 w-3" /> Select All
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    clearCompetitions();
+                  }}
+                  className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                >
+                  <Trash2 className="h-3 w-3" />
+                  Clear All
+                </button>
+              </>
+            }
+          >
+            {/* search */}
+            <div
+              className="mb-3 relative"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-2 border rounded-md bg-white px-2 py-1">
+                <Search className="h-4 w-4 text-gray-500" />
+                <input
+                  ref={compSearchRef}
+                  type="text"
+                  value={compSearch}
+                  onChange={(e) => setCompSearch(e.target.value)}
+                  onFocus={() => setCompSugOpen(compSug.length > 0)}
+                  onKeyDown={handleCompSearchKeyDown}
+                  placeholder="Search country or competition…"
+                  className="w-full outline-none text-sm"
+                />
+              </div>
+              {compSugOpen && compSug.length > 0 && (
+                <div
+                  ref={compSugBoxRef}
+                  className="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-md border bg-white shadow"
+                >
+                  {compSug.map((s, idx) => {
+                    const active = idx === compSugIndex;
+                    const checked = selectedCompetitionIds.includes(s.id);
+                    return (
+                      <button
+                        key={`${s.id}-${idx}`}
+                        type="button"
+                        onClick={() => {
+                          toggleCompetition(s.id);
+                          setCompSearch("");
+                          setCompSugOpen(false);
+                          setCompSugIndex(-1);
+                        }}
+                        className={classNames(
+                          "w-full text-left px-2 py-1 flex items-center gap-2 text-sm",
+                          active ? "bg-green-100" : "hover:bg-gray-50"
+                        )}
+                      >
+                        {s.logo_url && (
+                          <img
+                            src={s.logo_url}
+                            alt={s.name}
+                            className="w-4 h-4 object-contain"
+                          />
+                        )}
+                        <span className="flex-1">{s.label}</span>
+                        {checked && (
+                          <span className="text-green-700 text-xs font-semibold">
+                            selected
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <SelectedChips
+              title="Chosen competitions"
+              items={selectedCompetitionIds}
+              onClear={clearCompetitions}
+              getLabel={(id) => compIdToLabel[id] || `Competition ${id}`}
+              onRemoveItem={(id) => toggleCompetition(id)}
+              hoverClose
+            />
+            <div className="max-h-72 overflow-y-auto pr-2">
+              {Object.entries(groupedCompetitions)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([country, comps]) => (
+                  <div key={country} className="mb-2">
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        toggleCountry(country);
+                      }}
+                      type="button"
+                      className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
+                    >
+                      <div className="flex items-center gap-2">
+                        {comps?.[0]?.flag_url && (
+                          <img
+                            src={comps[0].flag_url}
+                            alt={country}
+                            className="w-6 h-4 object-cover rounded"
+                          />
+                        )}
+                        <span>{country}</span>
+                        <span className="text-xs text-gray-500">
+                          ({comps.length})
+                        </span>
+                      </div>
+                      <span className="text-sm text-gray-600">
+                        {expandedCountries[country] ? "▲" : "▼"}
+                      </span>
+                    </button>
+
+                    {expandedCountries[country] && (
+                      <div className="ml-8 space-y-2 mt-2">
+                        {comps.map((c) => {
+                          const cid = String(c.competition_id);
+                          const checked =
+                            selectedCompetitionIds.includes(cid);
+                          return (
+                            <label
+                              key={cid}
+                              className="flex items-center gap-2 cursor-pointer"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleCompetition(cid)}
+                                className="rounded"
+                              />
+                              {c.logo_url && (
+                                <img
+                                  src={c.logo_url}
+                                  alt={c.competition_name}
+                                  className="w-5 h-5 object-contain"
+                                />
+                              )}
+                              <span className="text-sm">
+                                {c.competition_name}
+                              </span>
+                              {c.tier && (
+                                <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700">
+                                  Tier {c.tier}
+                                </span>
+                              )}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                ))}
+            </div>
+          </Section>
+
+          {/* Seasons */}
+          <Section
+            title="Seasons"
+            icon={<CalendarClock className="h-4 w-4 text-green-700" />}
+            collapsed={seasonsCollapsed}
+            onToggle={() => setSeasonsCollapsed((v) => !v)}
+            actions={
+              <>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleLast5Seasons();
+                  }}
+                  className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                >
+                  <CalendarClock className="h-3 w-3" /> Last 5
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    selectAllSeasons();
+                  }}
+                  className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                >
+                  <CheckSquare className="h-3 w-3" /> Select All
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    clearSeasons();
+                  }}
+                  className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                >
+                  <Trash2 className="h-3 w-3" />
+                  Clear All
+                </button>
+              </>
+            }
+          >
+            <SelectedChips
+              items={selectedSeasons}
+              onClear={clearSeasons}
+              onRemoveItem={(season) =>
+                setSelectedSeasons((prev) => prev.filter((x) => x !== season))
+              }
+              hoverClose
+            />
+            <div className="max-h-60 overflow-y-auto pr-2">
+              {allSeasons.map((s) => {
+                const checked = selectedSeasons.includes(s);
+                return (
+                  <label
+                    key={s}
+                    className="flex items-center gap-2 cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        setSelectedSeasons((prev) =>
+                          prev.includes(s)
+                            ? prev.filter((x) => x !== s)
+                            : [...prev, s]
+                        );
+                      }}
+                      className="rounded"
+                    />
+                    <span className="text-sm">{s}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </Section>
+
+          {/* Minimum Market Value */}
+          <Section
+            title="Minimum Market Value (€)"
+            icon={<Star className="h-4 w-4 text-green-700" />}
+            collapsed={mvCollapsed}
+            onToggle={() => setMvCollapsed((v) => !v)}
+            actions={
+              <>
+                {[0, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000]
+                  .concat([25_000_000, 50_000_000])
+                  .map((v) => (
+                    <PresetButton
+                      key={v}
+                      onClick={() => setMinMarketValue(v)}
+                      active={minMarketValue === v}
+                    >
+                      {v >= 1_000_000 ? `${v / 1_000_000}M €` : `${v / 1_000}K €`}
+                    </PresetButton>
+                  ))}
+              </>
+            }
+          >
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={0}
+                step={100000}
+                value={minMarketValue}
+                onChange={(e) =>
+                  setMinMarketValue(Math.max(0, Number(e.target.value)))
+                }
+                className="w-44 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-700"
+              />
+            </div>
+            <div className="mt-3 text-xs text-gray-600">
+              {loadingCounts
+                ? "Calculating player pool…"
+                : `Player pool: ${poolCount} of ${totalCount}`}
+            </div>
+          </Section>
+        </div>
+      )}
+    </div>
+  );
 }
