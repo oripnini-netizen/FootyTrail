@@ -504,6 +504,9 @@ export default function LiveGamePage() {
         userId: user?.id || null,
         playerData,
         gameStats,
+        // ✅ NEW: also include the elimination flag at the TOP LEVEL
+        // Some backends only read top-level props when inserting into games_records.
+        is_elimination_game: !!elimination,
       };
 
       const resp = await saveGameCompleted(body);
