@@ -351,8 +351,57 @@ function Countdown({ endsAt }) {
   return <span>{left}</span>;
 }
 
-function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
+/** Fetches player meta only when needed (for finished rounds) */
+function RoundPlayer({ playerId }) {
+  const [meta, setMeta] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!playerId) return;
+      const { data, error } = await supabase
+        .from("players_in_seasons")
+        .select(
+          "player_id, player_name, player_position, player_dob_age, player_nationality, player_photo"
+        )
+        .eq("player_id", playerId)
+        .limit(1)
+        .maybeSingle();
+      if (!alive) return;
+      setMeta(error ? null : data || null);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [playerId]);
+
+  if (!meta) return <div className="text-sm text-gray-500">Player details unavailable.</div>;
+
+  return (
+    <div className="flex items-center gap-3">
+      {meta.player_photo ? (
+        <img
+          src={meta.player_photo}
+          alt={meta.player_name || "Player"}
+          className="h-10 w-10 rounded object-cover"
+        />
+      ) : (
+        <div className="h-10 w-10 rounded bg-gray-200" />
+      )}
+      <div className="text-sm text-gray-700">
+        <div className="font-medium">{meta.player_name || "—"}</div>
+        <div className="text-xs text-gray-500">
+          {(meta.player_position || "?") + " • " + (meta.player_nationality || "?")}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TournamentCard({ tournament, compIdToLabel }) {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const userId = user?.id || null;
+
   const createdAt = new Date(tournament.created_at);
   const dateStr = createdAt.toLocaleString();
   const isLive = tournament.status === "live";
@@ -360,11 +409,11 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
     (tournament.round_time_limit_seconds || 0) / 60
   );
 
-  const [participants, setParticipants] = useState([]);
-  const [activeRound, setActiveRound] = useState(null); // {id, ends_at, round_number, player_id}
-  const [playerMeta, setPlayerMeta] = useState(null); // row from players_in_seasons for active player
+  const [participants, setParticipants] = useState([]); // [{id, full_name, email}]
+  const [rounds, setRounds] = useState([]); // [{id, round_number, started_at, ends_at, closed_at, player_id}]
+  const [entriesByRound, setEntriesByRound] = useState({}); // { round_id : [{user_id, points_earned}] }
 
-  // Fetch participants + active round for countdown AND player_id
+  // Fetch participants + all rounds
   useEffect(() => {
     let cancelled = false;
 
@@ -373,37 +422,45 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
         // participants
         const { data: partRows } = await supabase
           .from("elimination_participants")
-          .select("user_id")
+          .select("user_id, state")
           .eq("tournament_id", tournament.id);
 
         const ids = (partRows || []).map((r) => r.user_id);
+        let userRows = [];
         if (ids.length) {
           const { data: usersRows } = await supabase
             .from("users")
             .select("id, full_name, email")
             .in("id", ids);
-          if (!cancelled) setParticipants(usersRows || []);
-        } else if (!cancelled) {
-          setParticipants([]);
+          userRows = usersRows || [];
         }
-      } catch {
-        if (!cancelled) setParticipants([]);
-      }
+        if (!cancelled) setParticipants(userRows);
 
-      try {
-        // current active round (needs player_id now)
-        const { data: round } = await supabase
+        // rounds
+        const { data: roundRows } = await supabase
           .from("elimination_rounds")
-          .select("id, ends_at, round_number, player_id")
+          .select("id, round_number, started_at, ends_at, closed_at, player_id")
           .eq("tournament_id", tournament.id)
-          .is("closed_at", null)
-          .order("round_number", { ascending: false })
-          .limit(1)
-          .maybeSingle();
+          .order("round_number", { ascending: true });
 
-        if (!cancelled) setActiveRound(round || null);
+        if (!cancelled) setRounds(Array.isArray(roundRows) ? roundRows : []);
+
+        // entries per round (batched)
+        const entriesMap = {};
+        for (const r of roundRows || []) {
+          const { data: ent } = await supabase
+            .from("elimination_round_entries")
+            .select("user_id, points_earned, finished_at")
+            .eq("round_id", r.id);
+          entriesMap[r.id] = Array.isArray(ent) ? ent : [];
+        }
+        if (!cancelled) setEntriesByRound(entriesMap);
       } catch {
-        if (!cancelled) setActiveRound(null);
+        if (!cancelled) {
+          setParticipants([]);
+          setRounds([]);
+          setEntriesByRound({});
+        }
       }
     })();
 
@@ -412,114 +469,13 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
     };
   }, [tournament.id]);
 
-  // When activeRound.player_id changes, fetch player meta from players_in_seasons
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      if (!activeRound?.player_id) {
-        if (alive) setPlayerMeta(null);
-        return;
-      }
-      // We just need one row for the player; any season suffices for bio/photo
-      const { data, error } = await supabase
-        .from("players_in_seasons")
-        .select(
-          "player_id, player_name, player_position, player_dob_age, player_nationality, player_photo"
-        )
-        .eq("player_id", activeRound.player_id)
-        .limit(1)
-        .maybeSingle();
+  const participantsMap = useMemo(() => {
+    const m = new Map();
+    for (const p of participants) m.set(p.id, p);
+    return m;
+  }, [participants]);
 
-      if (!alive) return;
-      if (error) {
-        setPlayerMeta(null);
-      } else {
-        setPlayerMeta(data || null);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [activeRound?.player_id]);
-
-  // Auto-advance: when time passes and every 30s as safety
-  useEffect(() => {
-    if (!isLive) return;
-
-    let timeoutId = null;
-    let intervalId = null;
-
-    const scheduleTimeout = () => {
-      if (!activeRound?.ends_at) return;
-      const ends = new Date(activeRound.ends_at).getTime();
-      const now = Date.now();
-      const ms = ends - now;
-      if (ms <= 0) {
-        // already past, advance now
-        advanceNow();
-      } else {
-        timeoutId = setTimeout(advanceNow, ms + 250); // small buffer
-      }
-    };
-
-    // Safety polling every 30s (in case someone finished early)
-    intervalId = setInterval(() => {
-      advanceNow(true); // silent on noop
-    }, 30000);
-
-    scheduleTimeout();
-
-    return () => {
-      if (timeoutId) clearTimeout(timeoutId);
-      if (intervalId) clearInterval(intervalId);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLive, activeRound?.id, activeRound?.ends_at]);
-
-  const advanceNow = async (silent = false) => {
-    try {
-      const { data, error } = await supabase.rpc(
-        "advance_elimination_tournament",
-        { p_tournament_id: tournament.id }
-      );
-      if (error) {
-        if (!silent) {
-          // eslint-disable-next-line no-console
-          console.error("advance RPC error", error);
-        }
-        return;
-      }
-      const action = data?.action;
-      if (action && action !== "noop") {
-        // tournament advanced (either finished or new round) → tell parent to refresh
-        onAdvanced?.();
-      } else {
-        // even if noop, refetch active round to keep countdown honest
-        await refreshActiveRound();
-      }
-    } catch (e) {
-      if (!silent) {
-        // eslint-disable-next-line no-console
-        console.error("advance exception", e);
-      }
-    }
-  };
-
-  const refreshActiveRound = async () => {
-    try {
-      const { data: round } = await supabase
-        .from("elimination_rounds")
-        .select("id, ends_at, round_number, player_id")
-        .eq("tournament_id", tournament.id)
-        .is("closed_at", null)
-        .order("round_number", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      setActiveRound(round || null);
-    } catch {
-      // ignore
-    }
-  };
+  const entriesFor = (roundId) => entriesByRound[roundId] || [];
 
   // Build filter chips grouped under headings
   const { compChips, seasonChips, mvChip } = useMemo(() => {
@@ -542,30 +498,42 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
     return { compChips, seasonChips, mvChip };
   }, [tournament.filters, compIdToLabel]);
 
-  const handlePlayRound = async () => {
-    // Ensure we have active round and player meta
-    if (!activeRound?.id || !activeRound?.round_number || !playerMeta) return;
+  // Play handler — sends a FLATTENED player payload (fixes empty player crash)
+  const handlePlayRound = async (round) => {
+    if (!round?.id || !round?.round_number || !round?.player_id) return;
 
-    const playerPayload = {
-      id: Number(playerMeta.player_id),
-      name: playerMeta.player_name || "",
-      age: playerMeta.player_dob_age || "", // raw age/dob text
-      nationality: playerMeta.player_nationality || "",
-      position: playerMeta.player_position || "",
-      photo: playerMeta.player_photo || "",
-    };
+    // Guard: don't allow play if already played
+    const already = entriesFor(round.id).some((e) => e.user_id === userId);
+    if (already) return;
 
-    const elimination = {
-      tournamentId: tournament.id,
-      tournamentName: tournament.name,
-      roundId: activeRound.id,
-      roundNumber: activeRound.round_number,
-    };
+    // Fetch one player meta row for this round's player_id
+    const { data: meta } = await supabase
+      .from("players_in_seasons")
+      .select(
+        "player_id, player_name, player_position, player_dob_age, player_nationality, player_photo"
+      )
+      .eq("player_id", round.player_id)
+      .limit(1)
+      .maybeSingle();
 
+    if (!meta?.player_id) return;
+
+    // IMPORTANT: LiveGamePage expects these at TOP-LEVEL in location.state
     navigate("/live", {
       state: {
-        player: playerPayload,
-        elimination,
+        id: Number(meta.player_id),
+        name: meta.player_name || "",
+        age: meta.player_dob_age || "",
+        nationality: meta.player_nationality || "",
+        position: meta.player_position || "",
+        photo: meta.player_photo || "",
+        potentialPoints: 10000, // default; PostGame recalculates based on hints/time
+        elimination: {
+          tournamentId: tournament.id,
+          tournamentName: tournament.name,
+          roundId: round.id,
+          roundNumber: round.round_number,
+        },
       },
     });
   };
@@ -678,69 +646,132 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
         </div>
       </div>
 
-      {/* Current round & countdown */}
-      {isLive && (
-        <div className="mt-3 space-y-1.5">
-          <div className="text-xs text-gray-600">
-            Round {activeRound?.round_number ?? "—"} ends in:{" "}
-            <span className="font-semibold">
-              <Countdown endsAt={activeRound?.ends_at || null} />
-            </span>
-          </div>
-          {timeLimitMin ? (
-            <div className="text-[11px] text-gray-500">
-              Round limit: {timeLimitMin} min
-            </div>
-          ) : null}
+      {/* Rounds list */}
+      <div className="mt-4 space-y-3">
+        {rounds.length === 0 ? (
+          <div className="text-sm text-gray-500">No rounds yet.</div>
+        ) : (
+          rounds.map((r) => {
+            const isActive = !r.closed_at;
+            const entries = entriesFor(r.id);
+            const playedUserIds = new Set(entries.map((e) => e.user_id));
+            const notPlayed = participants.filter((p) => !playedUserIds.has(p.id));
+            const mePlayed = userId ? playedUserIds.has(userId) : false;
 
-          {/* Small player preview (optional) */}
-          {playerMeta && (
-            <div className="mt-2 flex items-center gap-2">
-              {playerMeta.player_photo ? (
-                <img
-                  src={playerMeta.player_photo}
-                  alt={playerMeta.player_name || "Player"}
-                  className="h-8 w-8 rounded object-cover"
-                />
-              ) : (
-                <div className="h-8 w-8 rounded bg-gray-200" />
-              )}
-              <div className="text-xs text-gray-700">
-                <div className="font-medium">
-                  Current Round Player (hidden in-game)
+            return (
+              <div key={r.id} className="rounded-xl border bg-gray-50 p-3">
+                <div className="flex items-center justify-between">
+                  <div className="font-semibold text-gray-800">Round {r.round_number}</div>
+                  <div
+                    className={classNames(
+                      "text-xs px-2 py-0.5 rounded-full",
+                      isActive
+                        ? "bg-emerald-100 text-emerald-700"
+                        : "bg-gray-200 text-gray-700"
+                    )}
+                  >
+                    {isActive ? "Active" : "Finished"}
+                  </div>
                 </div>
-                <div className="text-[11px] text-gray-500">
-                  {playerMeta.player_name || "—"} •{" "}
-                  {playerMeta.player_position || "?"} •{" "}
-                  {playerMeta.player_nationality || "?"}
+
+                <div className="mt-1 text-xs text-gray-600">
+                  {isActive ? (
+                    <>
+                      Ends in:{" "}
+                      <span className="font-semibold">
+                        <Countdown endsAt={r.ends_at || null} />
+                      </span>{" "}
+                      {timeLimitMin ? `• Limit: ${timeLimitMin} min` : null}
+                    </>
+                  ) : (
+                    <>
+                      Started: {r.started_at ? new Date(r.started_at).toLocaleString() : "—"}
+                      {" • "}
+                      Ended: {r.closed_at ? new Date(r.closed_at).toLocaleString() : "—"}
+                    </>
+                  )}
                 </div>
+
+                {/* Player details: ONLY show after the round is finished */}
+                {!isActive && r.player_id ? (
+                  <div className="mt-3">
+                    <div className="text-xs font-semibold text-gray-700 mb-1">
+                      Round Player
+                    </div>
+                    <RoundPlayer playerId={r.player_id} />
+                  </div>
+                ) : null}
+
+                {/* Scores / participation */}
+                <div className="mt-3 grid gap-2">
+                  <div>
+                    <div className="text-xs font-semibold text-gray-700 mb-1">
+                      Played ({entries.length})
+                    </div>
+                    {entries.length === 0 ? (
+                      <div className="text-xs text-gray-500">No one has played yet.</div>
+                    ) : (
+                      <ul className="space-y-1">
+                        {entries
+                          .slice()
+                          .sort((a, b) => (b.points_earned || 0) - (a.points_earned || 0))
+                          .map((e, idx) => {
+                            const u = participantsMap.get(e.user_id);
+                            const label = u?.full_name || u?.email || e.user_id;
+                            return (
+                              <li
+                                key={`${e.user_id}-${idx}`}
+                                className="text-sm flex items-center justify-between bg-white rounded-md border px-2 py-1"
+                              >
+                                <span className="truncate mr-2">{label}</span>
+                                <span className="font-semibold text-emerald-700">
+                                  {e.points_earned ?? 0} pts
+                                </span>
+                              </li>
+                            );
+                          })}
+                      </ul>
+                    )}
+                  </div>
+
+                  {/* Yet to play */}
+                  {isActive && notPlayed.length > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold text-gray-700 mb-1">
+                        Yet to play ({notPlayed.length})
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {notPlayed.map((p) => (
+                          <span
+                            key={p.id}
+                            className="inline-flex items-center rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-gray-700 border"
+                          >
+                            {p.full_name || p.email}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Actions */}
+                {isLive && isActive && (
+                  <div className="mt-3 flex items-center justify-end">
+                    <button
+                      type="button"
+                      className="rounded-lg border border-green-600 px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-50 disabled:opacity-60"
+                      onClick={() => handlePlayRound(r)}
+                      disabled={!r.player_id || mePlayed}
+                      title={mePlayed ? "You already played this round" : "Play Round"}
+                    >
+                      {mePlayed ? "Played" : "Play Round"}
+                    </button>
+                  </div>
+                )}
               </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="mt-4 flex items-center justify-end gap-2">
-        {isLive && (
-          <button
-            type="button"
-            className="rounded-lg border border-green-600 px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-50 disabled:opacity-60"
-            onClick={handlePlayRound}
-            title={
-              activeRound?.round_number === 1 ? "Play 1st Round" : "Play Round"
-            }
-            disabled={!activeRound?.id || !playerMeta}
-          >
-            {activeRound?.round_number === 1 ? "Play 1st Round" : "Play Round"}
-          </button>
+            );
+          })
         )}
-        <button
-          type="button"
-          className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-          onClick={() => navigate(`/elimination-tournaments/${tournament.id}`)}
-        >
-          View
-        </button>
       </div>
     </div>
   );
