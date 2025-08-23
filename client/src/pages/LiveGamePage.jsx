@@ -496,6 +496,7 @@ export default function LiveGamePage() {
             hintsUsed: gameStats.hintsUsed,
             isDaily: !!isDaily,
             is_elimination_game: true,
+            playerName: gameData.name,            
             playerData: { id: playerIdNumeric },
           },
         });
