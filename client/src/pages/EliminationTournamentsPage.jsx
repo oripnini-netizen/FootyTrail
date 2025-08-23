@@ -5,10 +5,10 @@ import { useAuth } from "../context/AuthContext";
 /**
  * EliminationTournamentsPage
  * ------------------------------------------------------------
- * Lists Live / Finished tournaments using Supabase.
+ * Lists Live / Finished tournaments using Supabase (RLS).
  * - Tabs: Live | Finished
- * - "Create Tournament" button opens a modal (now submits to Supabase)
- * - Renders tournament cards for each tab
+ * - "Create Tournament" opens a modal that inserts a new tournament
+ *   and adds the owner as a participant.
  */
 export default function EliminationTournamentsPage() {
   const { user } = useAuth();
@@ -25,10 +25,9 @@ export default function EliminationTournamentsPage() {
     { key: "finished", label: "Finished" },
   ];
 
-  // Lifted handler so PlaceholderCard can open the modal
   const handleOpenCreate = () => setShowCreateModal(true);
 
-  // Helper: reload both lists (used on mount and after create)
+  // Reload both lists (used on mount and after create)
   const reloadLists = async () => {
     if (!user?.id) {
       setLive([]);
@@ -86,7 +85,7 @@ export default function EliminationTournamentsPage() {
     }
   };
 
-  // Initial/when user changes
+  // Initial / on user change
   useEffect(() => {
     reloadLists();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -108,7 +107,6 @@ export default function EliminationTournamentsPage() {
             </p>
           </div>
 
-          {/* Quick create button (also exists in empty-state card) */}
           {activeTab === "live" && (
             <button
               type="button"
@@ -142,7 +140,7 @@ export default function EliminationTournamentsPage() {
           })}
         </div>
 
-        {/* Tab underline (visual separator) */}
+        {/* Divider */}
         <div className="mb-6 h-px w-full bg-gray-200 dark:bg-gray-700" />
 
         {/* Content area */}
@@ -210,7 +208,7 @@ export default function EliminationTournamentsPage() {
                   subtitle="Completed tournaments and winners will appear here."
                   ctaLabel="View Rules"
                   onCtaClick={() => {
-                    // Later we can navigate to About/Tutorial sections
+                    // Later: navigate to About/Tutorial sections
                   }}
                 />
               )}
@@ -219,7 +217,6 @@ export default function EliminationTournamentsPage() {
         </section>
       </div>
 
-      {/* Create Tournament Modal */}
       {showCreateModal && (
         <CreateTournamentModal
           currentUserId={user?.id || null}
@@ -253,11 +250,9 @@ function PlaceholderCard({ title, subtitle, ctaLabel, onCtaClick }) {
   );
 }
 
-/** Tournament card (minimal info for now) */
 function TournamentCard({ tournament }) {
   const createdAt = new Date(tournament.created_at);
   const dateStr = createdAt.toLocaleString();
-
   const isLive = tournament.status === "live";
 
   return (
@@ -287,8 +282,7 @@ function TournamentCard({ tournament }) {
           type="button"
           className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
           onClick={() => {
-            // Later: navigate to tournament details page
-            // e.g., navigate(`/elimination-tournaments/${tournament.id}`)
+            // Later: navigate(`/elimination-tournaments/${tournament.id}`)
           }}
         >
           View
@@ -298,7 +292,6 @@ function TournamentCard({ tournament }) {
   );
 }
 
-/** Loading skeleton (simple) */
 function SkeletonCard() {
   return (
     <div className="animate-pulse rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
@@ -311,7 +304,6 @@ function SkeletonCard() {
   );
 }
 
-/** Error card */
 function ErrorCard({ title, message }) {
   return (
     <div className="rounded-2xl border border-red-200 bg-red-50 p-5 text-red-800 shadow-sm dark:border-red-900/40 dark:bg-red-950/40 dark:text-red-200">
@@ -323,30 +315,23 @@ function ErrorCard({ title, message }) {
 
 /** ----------------------------------------------------------------
  * CreateTournamentModal
- * Submits to Supabase:
- *  - Insert elimination_tournaments (owner_id, name, filters, round_time_limit_seconds)
- *  - Insert owner into elimination_participants (state 'active')
+ * Inserts: elimination_tournaments + owner into elimination_participants
  * ----------------------------------------------------------------*/
 function CreateTournamentModal({ currentUserId, onClose, onCreated }) {
   const dialogRef = useRef(null);
 
-  // Basic form state
   const [name, setName] = useState("");
-  const [difficulty, setDifficulty] = useState("medium"); // easy | medium | hard | expert
-  const [league, setLeague] = useState(""); // optional single-select (UI only)
-  const [seasons, setSeasons] = useState([]); // optional multi-select (UI only)
+  const [difficulty, setDifficulty] = useState("medium");
+  const [league, setLeague] = useState("");
+  const [seasons, setSeasons] = useState([]);
   const [minAppearances, setMinAppearances] = useState(0);
-  const [roundTimeMinutes, setRoundTimeMinutes] = useState(5); // UX minutes
+  const [roundTimeMinutes, setRoundTimeMinutes] = useState(5);
   const [invitesRaw, setInvitesRaw] = useState("");
 
-  // UX
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
-
-  // Simple local validation helpers
   const [errors, setErrors] = useState({});
 
-  // Close on Escape
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Escape") onClose?.();
@@ -355,7 +340,6 @@ function CreateTournamentModal({ currentUserId, onClose, onCreated }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  // rudimentary focus trap starter
   useEffect(() => {
     const prev = document.activeElement;
     dialogRef.current?.focus();
@@ -396,11 +380,9 @@ function CreateTournamentModal({ currentUserId, onClose, onCreated }) {
 
     setSubmitting(true);
     try {
-      // Prepare payload
       const payload = {
         owner_id: currentUserId,
         name: name.trim(),
-        // Persist difficulty inside filters for now; can explode to columns later if needed
         filters: {
           difficulty,
           league: league || null,
@@ -408,7 +390,6 @@ function CreateTournamentModal({ currentUserId, onClose, onCreated }) {
           min_appearances: Number(minAppearances) || 0,
         },
         round_time_limit_seconds: Math.floor(Number(roundTimeMinutes) * 60),
-        // status defaults to 'live' (per schema), no need to set
       };
 
       // 1) Insert tournament
@@ -433,19 +414,12 @@ function CreateTournamentModal({ currentUserId, onClose, onCreated }) {
         ]);
 
       if (pErr) {
-        // Not fatal for creation, but we should surface
+        // Not fatal, but good to log for debugging
         // eslint-disable-next-line no-console
         console.warn("[CreateTournament] participant insert warning:", pErr);
       }
 
-      // (Invites will be resolved later by email/username → user_id)
-
-      // Refresh lists, close modal
-      try {
-        await onCreated?.();
-      } catch {
-        /* ignore refresh error */
-      }
+      await onCreated?.();
       onClose?.();
     } catch (ex) {
       setSubmitError(
@@ -640,10 +614,10 @@ function CreateTournamentModal({ currentUserId, onClose, onCreated }) {
                 rows={3}
                 value={invitesRaw}
                 onChange={(e) => setInvitesRaw(e.target.value)}
-                placeholder="friend1@email.com, friend2@email.com
+                placeholder={`friend1@email.com, friend2@email.com
 or
 @username1
-@username2"
+@username2`}
                 className="mt-1 w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:ring-2 focus:ring-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
               />
               <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
