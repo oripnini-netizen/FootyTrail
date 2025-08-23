@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   Menu,
   X,
+  Axe,
 } from 'lucide-react';
 
 const SKIP_REDIRECT_KEY = 'skip_onboarding_redirect';
@@ -189,6 +190,11 @@ export default function Navbar() {
                   showDot={unreadLeagues > 0}
                 />
                 <NavItem
+                  title="Elimination"
+                  icon={Axe}
+                  onClick={() => navigate('/elimination-tournaments')}
+                />
+                <NavItem
                   title="Leaderboard"
                   icon={Trophy}
                   onClick={() => navigate('/leaderboard')}
@@ -263,6 +269,13 @@ export default function Navbar() {
                         {unreadLeagues > 0 ? (
                           <span className="ml-auto h-2.5 w-2.5 rounded-full bg-red-500" />
                         ) : null}
+                      </button>
+                      <button
+                        onClick={() => navigate('/elimination-tournaments')}
+                        className="flex items-center gap-3 p-3 hover:bg-gray-50 text-gray-700"
+                      >
+                        <Axe className="h-5 w-5" />
+                        <span>Elimination</span>
                       </button>
                       <button
                         onClick={() => navigate('/leaderboard')}
