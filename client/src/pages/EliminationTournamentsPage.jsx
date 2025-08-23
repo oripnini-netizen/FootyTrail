@@ -1,15 +1,34 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useLayoutEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../supabase";
 import { useAuth } from "../context/AuthContext";
 
-/**
- * EliminationTournamentsPage
- * ------------------------------------------------------------
- * Lists Live / Finished tournaments using Supabase (RLS).
- * - Tabs: Live | Finished
- * - "Create Tournament" opens a modal that inserts a new tournament
- *   and adds the owner as a participant.
- */
+// Reuse the same API helpers used by GamePage
+import {
+  getCompetitions,
+  getSeasons,
+  getCounts,
+  getRandomPlayer,
+} from "../api";
+
+import {
+  Search,
+  Star,
+  CheckSquare,
+  Trash2,
+  CalendarClock,
+} from "lucide-react";
+
+/* ------------------------------------------------------------
+   Small util(s)
+------------------------------------------------------------ */
+function classNames(...s) {
+  return s.filter(Boolean).join(" ");
+}
+
+/* ------------------------------------------------------------
+   Page: EliminationTournamentsPage
+------------------------------------------------------------ */
 export default function EliminationTournamentsPage() {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState("live");
@@ -43,7 +62,7 @@ export default function EliminationTournamentsPage() {
     try {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
-        .select("id, name, status, created_at")
+        .select("id, name, status, created_at, round_time_limit_seconds, filters")
         .eq("status", "live")
         .order("created_at", { ascending: false });
       if (err) {
@@ -65,7 +84,7 @@ export default function EliminationTournamentsPage() {
     try {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
-        .select("id, name, status, created_at")
+        .select("id, name, status, created_at, round_time_limit_seconds, filters")
         .eq("status", "finished")
         .order("created_at", { ascending: false });
       if (err) {
@@ -92,15 +111,16 @@ export default function EliminationTournamentsPage() {
   }, [user?.id]);
 
   return (
-    <div className="min-h-screen w-full bg-gray-50 dark:bg-gray-900">
-      <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:py-8">
+    <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
+      <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
+      <div className="container mx-auto py-8 px-4 max-w-6xl">
         {/* Page header */}
         <header className="mb-6 sm:mb-8 flex items-start justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-gray-100">
+            <h1 className="text-4xl font-extrabold text-center text-green-800">
               Elimination Tournaments
             </h1>
-            <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+            <p className="mt-2 text-sm text-gray-700">
               Create and follow elimination tournaments with friends. Each round
               uses the same mystery player for everyone. Lowest score(s) are eliminated
               until a single winner remains.
@@ -111,7 +131,7 @@ export default function EliminationTournamentsPage() {
             <button
               type="button"
               onClick={handleOpenCreate}
-              className="shrink-0 rounded-xl bg-gray-900 px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 dark:bg-white dark:text-gray-900"
+              className="shrink-0 rounded-lg bg-green-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-green-800"
             >
               Create Tournament
             </button>
@@ -119,7 +139,7 @@ export default function EliminationTournamentsPage() {
         </header>
 
         {/* Tabs */}
-        <div className="mb-4 flex items-center gap-2 overflow-x-auto">
+        <div className="flex items-center justify-center gap-2 bg-white/70 rounded-full px-2 py-1 w-fit mx-auto my-5 shadow-sm">
           {tabs.map((t) => {
             const isActive = activeTab === t.key;
             return (
@@ -127,21 +147,16 @@ export default function EliminationTournamentsPage() {
                 key={t.key}
                 type="button"
                 onClick={() => setActiveTab(t.key)}
-                className={[
-                  "whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium transition",
-                  isActive
-                    ? "bg-gray-900 text-white dark:bg-white dark:text-gray-900"
-                    : "bg-white text-gray-700 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700",
-                ].join(" ")}
+                className={classNames(
+                  "px-4 py-1.5 rounded-full text-sm font-medium",
+                  isActive ? "bg-green-700 text-white" : "bg-white text-gray-700 border"
+                )}
               >
                 {t.label}
               </button>
             );
           })}
         </div>
-
-        {/* Divider */}
-        <div className="mb-6 h-px w-full bg-gray-200 dark:bg-gray-700" />
 
         {/* Content area */}
         <section
@@ -207,9 +222,7 @@ export default function EliminationTournamentsPage() {
                   title="No finished tournaments"
                   subtitle="Completed tournaments and winners will appear here."
                   ctaLabel="View Rules"
-                  onCtaClick={() => {
-                    // Later: navigate to About/Tutorial sections
-                  }}
+                  onCtaClick={() => {}}
                 />
               )}
             </>
@@ -219,7 +232,7 @@ export default function EliminationTournamentsPage() {
 
       {showCreateModal && (
         <CreateTournamentModal
-          currentUserId={user?.id || null}
+          currentUser={user || null}
           onClose={() => setShowCreateModal(false)}
           onCreated={reloadLists}
         />
@@ -228,20 +241,21 @@ export default function EliminationTournamentsPage() {
   );
 }
 
+/* ------------------------------------------------------------
+   Cards & helpers
+------------------------------------------------------------ */
 function PlaceholderCard({ title, subtitle, ctaLabel, onCtaClick }) {
   return (
-    <div className="flex flex-col justify-between rounded-2xl border border-gray-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-gray-700 dark:bg-gray-800">
+    <div className="flex flex-col justify-between rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md">
       <div>
-        <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">
-          {title}
-        </h3>
-        <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">{subtitle}</p>
+        <h3 className="text-base font-semibold text-gray-900">{title}</h3>
+        <p className="mt-1 text-sm text-gray-600">{subtitle}</p>
       </div>
       <div className="mt-4">
         <button
           type="button"
           onClick={onCtaClick}
-          className="w-full rounded-xl bg-gray-900 px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 dark:bg-white dark:text-gray-900"
+          className="w-full rounded-lg bg-green-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-green-800"
         >
           {ctaLabel}
         </button>
@@ -251,39 +265,56 @@ function PlaceholderCard({ title, subtitle, ctaLabel, onCtaClick }) {
 }
 
 function TournamentCard({ tournament }) {
+  const navigate = useNavigate();
   const createdAt = new Date(tournament.created_at);
   const dateStr = createdAt.toLocaleString();
   const isLive = tournament.status === "live";
+  const timeLimitMin = Math.round((tournament.round_time_limit_seconds || 0) / 60);
 
   return (
-    <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-gray-700 dark:bg-gray-800">
+    <div className="rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md">
       <div className="flex items-start justify-between gap-3">
-        <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">
+        <h3 className="text-base font-semibold text-gray-900">
           {tournament.name}
         </h3>
         <span
-          className={[
+          className={classNames(
             "shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold",
-            isLive
-              ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-200"
-              : "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200",
-          ].join(" ")}
+            isLive ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-800"
+          )}
         >
           {isLive ? "Live" : "Finished"}
         </span>
       </div>
 
-      <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-        Created: {dateStr}
-      </p>
+      <p className="mt-2 text-xs text-gray-500">Created: {dateStr}</p>
+      {tournament.filters ? (
+        <div className="mt-3 text-xs text-gray-700">
+          <div className="font-semibold mb-1">Filters</div>
+          <pre className="text-[11px] bg-gray-50 rounded p-2 overflow-x-auto">
+{JSON.stringify(tournament.filters, null, 2)}
+          </pre>
+        </div>
+      ) : null}
+      {timeLimitMin ? (
+        <p className="mt-2 text-xs text-gray-600">Round limit: {timeLimitMin} min</p>
+      ) : null}
 
-      <div className="mt-4 flex items-center justify-end">
+      <div className="mt-4 flex items-center justify-end gap-2">
+        {isLive && (
+          <button
+            type="button"
+            className="rounded-lg border border-green-600 px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-50"
+            onClick={() => navigate("/live")}
+            title="Play 1st Round"
+          >
+            Play 1st Round
+          </button>
+        )}
         <button
           type="button"
-          className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
-          onClick={() => {
-            // Later: navigate(`/elimination-tournaments/${tournament.id}`)
-          }}
+          className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+          onClick={() => navigate(`/elimination-tournaments/${tournament.id}`)}
         >
           View
         </button>
@@ -294,11 +325,11 @@ function TournamentCard({ tournament }) {
 
 function SkeletonCard() {
   return (
-    <div className="animate-pulse rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
-      <div className="h-4 w-1/2 rounded bg-gray-200 dark:bg-gray-700" />
-      <div className="mt-3 h-3 w-2/3 rounded bg-gray-100 dark:bg-gray-700/80" />
+    <div className="animate-pulse rounded-2xl border bg-white p-5">
+      <div className="h-4 w-1/2 rounded bg-gray-200" />
+      <div className="mt-3 h-3 w-2/3 rounded bg-gray-100" />
       <div className="mt-6 flex justify-end">
-        <div className="h-7 w-20 rounded bg-gray-100 dark:bg-gray-700/80" />
+        <div className="h-7 w-20 rounded bg-gray-100" />
       </div>
     </div>
   );
@@ -306,32 +337,125 @@ function SkeletonCard() {
 
 function ErrorCard({ title, message }) {
   return (
-    <div className="rounded-2xl border border-red-200 bg-red-50 p-5 text-red-800 shadow-sm dark:border-red-900/40 dark:bg-red-950/40 dark:text-red-200">
+    <div className="rounded-2xl border border-red-200 bg-red-50 p-5 text-red-800 shadow-sm">
       <h3 className="text-sm font-semibold">{title}</h3>
       <p className="mt-1 text-sm opacity-90">{message}</p>
     </div>
   );
 }
 
-/** ----------------------------------------------------------------
- * CreateTournamentModal
- * Inserts: elimination_tournaments + owner into elimination_participants
- * ----------------------------------------------------------------*/
-function CreateTournamentModal({ currentUserId, onClose, onCreated }) {
+/* ------------------------------------------------------------
+   CreateTournamentModal
+   - Difficulty Filters copied from GamePage (competitions, seasons, min MV)
+   - Invite UI copied from MyLeaguesPage
+   - Round time (5..1440)
+   - On submit: create tournament, participants, notifications, first round
+------------------------------------------------------------ */
+function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   const dialogRef = useRef(null);
 
+  // Core fields
   const [name, setName] = useState("");
-  const [difficulty, setDifficulty] = useState("medium");
-  const [league, setLeague] = useState("");
-  const [seasons, setSeasons] = useState([]);
-  const [minAppearances, setMinAppearances] = useState(0);
-  const [roundTimeMinutes, setRoundTimeMinutes] = useState(5);
-  const [invitesRaw, setInvitesRaw] = useState("");
 
+  // Filters (GamePage mechanism)
+  const [loadingFilters, setLoadingFilters] = useState(true);
+  const [groupedCompetitions, setGroupedCompetitions] = useState({});
+  const [allSeasons, setAllSeasons] = useState([]);
+
+  const [selectedCompetitionIds, setSelectedCompetitionIds] = useState([]);
+  const [selectedSeasons, setSelectedSeasons] = useState([]);
+  const [minMarketValue, setMinMarketValue] = useState(0);
+
+  const [expandedCountries, setExpandedCountries] = useState({});
+  const [compCollapsed, setCompCollapsed] = useState(false);
+  const [seasonsCollapsed, setSeasonsCollapsed] = useState(false);
+  const [mvCollapsed, setMvCollapsed] = useState(false);
+
+  // Counts
+  const [poolCount, setPoolCount] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
+  const [loadingCounts, setLoadingCounts] = useState(false);
+
+  // Competition search (GamePage)
+  const [compSearch, setCompSearch] = useState("");
+  const [compSug, setCompSug] = useState([]);
+  const [compSugOpen, setCompSugOpen] = useState(false);
+  const [compSugIndex, setCompSugIndex] = useState(-1);
+  const compSearchRef = useRef(null);
+  const compSugBoxRef = useRef(null);
+
+  // Invites (MyLeaguesPage mechanism)
+  const [searchEmail, setSearchEmail] = useState("");
+  const [emailResults, setEmailResults] = useState([]);
+  const [invites, setInvites] = useState([]); // rows from users table
+
+  // Round time limit (minutes)
+  const [roundTimeMinutes, setRoundTimeMinutes] = useState(5);
+
+  // Submit
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [errors, setErrors] = useState({});
 
+  // Mount: load competitions & seasons like GamePage
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoadingFilters(true);
+
+        const compsRes = await getCompetitions();
+        if (!cancelled) {
+          const grouped = compsRes.groupedByCountry || {};
+          setGroupedCompetitions(grouped);
+          const initialCollapse = {};
+          Object.keys(grouped).forEach((c) => (initialCollapse[c] = false));
+          setExpandedCountries(initialCollapse);
+        }
+
+        const seasonsRes = await getSeasons();
+        if (!cancelled) setAllSeasons(normalizeSeasons(seasonsRes));
+      } finally {
+        if (!cancelled) setLoadingFilters(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Counts on filter change
+  useEffect(() => {
+    let cancelled = false;
+    if (loadingFilters) return;
+
+    (async () => {
+      try {
+        setLoadingCounts(true);
+        const payload = {
+          competitions: selectedCompetitionIds,
+          seasons: selectedSeasons,
+          minMarketValue: Number(minMarketValue) || 0,
+          userId: currentUser?.id,
+        };
+        const countsResult = await getCounts(payload);
+        const { poolCount: filteredCount, totalCount: dbTotal } = countsResult || {};
+        if (!cancelled) {
+          setPoolCount(filteredCount || 0);
+          setTotalCount(dbTotal || 0);
+        }
+      } catch {
+        if (!cancelled) {
+          setPoolCount(0);
+          setTotalCount(0);
+        }
+      } finally {
+        if (!cancelled) setLoadingCounts(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [selectedCompetitionIds, selectedSeasons, minMarketValue, currentUser?.id, loadingFilters]);
+
+  // Escape to close
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Escape") onClose?.();
@@ -340,39 +464,176 @@ function CreateTournamentModal({ currentUserId, onClose, onCreated }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // Focus trap start
   useEffect(() => {
     const prev = document.activeElement;
     dialogRef.current?.focus();
     return () => prev && prev.focus && prev.focus();
   }, []);
 
-  const toggleSeason = (value) => {
-    setSeasons((prev) =>
-      prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]
+  // Email search (exclude me)
+  useEffect(() => {
+    let active = true;
+    const t = setTimeout(async () => {
+      const q = (searchEmail || "").trim();
+      if (!q || q.length < 2) {
+        if (active) setEmailResults([]);
+        return;
+      }
+      const { data } = await supabase
+        .from("users")
+        .select("id, email, full_name")
+        .ilike("email", `%${q}%`)
+        .limit(10);
+      const filtered = (data || []).filter((u) => u.id !== currentUser?.id);
+      if (active) setEmailResults(filtered);
+    }, 250);
+    return () => {
+      active = false;
+      clearTimeout(t);
+    };
+  }, [searchEmail, currentUser?.id]);
+
+  // Competition suggestion logic (copied pattern)
+  useEffect(() => {
+    const q = (compSearch || "").trim().toLowerCase();
+    if (!q) {
+      setCompSug([]);
+      setCompSugOpen(false);
+      setCompSugIndex(-1);
+      return;
+    }
+    const suggestions = [];
+    Object.entries(groupedCompetitions || {}).forEach(([country, comps]) => {
+      (comps || []).forEach((c) => {
+        const name = c.competition_name || "";
+        const hit =
+          name.toLowerCase().includes(q) ||
+          (country || "").toLowerCase().includes(q);
+        if (hit) {
+          suggestions.push({
+            id: String(c.competition_id),
+            label: `${country} — ${name}`,
+            country,
+            name,
+            logo_url: c.logo_url || null,
+          });
+        }
+      });
+    });
+    setCompSug(suggestions.slice(0, 50));
+    setCompSugOpen(suggestions.length > 0);
+    setCompSugIndex(suggestions.length ? 0 : -1);
+  }, [compSearch, groupedCompetitions]);
+
+  useEffect(() => {
+    const onDocClick = (e) => {
+      if (!compSearchRef.current && !compSugBoxRef.current) return;
+      const inInput = compSearchRef.current?.contains(e.target);
+      const inBox = compSugBoxRef.current?.contains(e.target);
+      if (!inInput && !inBox) setCompSugOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
+
+  const handleCompSearchKeyDown = (e) => {
+    if (!compSugOpen || compSug.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setCompSugIndex((i) => (i + 1) % compSug.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setCompSugIndex((i) => (i - 1 + compSug.length) % compSug.length);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const sel = compSug[compSugIndex] || compSug[0];
+      if (sel) {
+        toggleCompetition(sel.id);
+        setCompSearch("");
+        setCompSug([]);
+        setCompSugOpen(false);
+      }
+    } else if (e.key === "Escape") {
+      setCompSugOpen(false);
+    }
+  };
+
+  /* ---------- filters UI helpers (GamePage parity) ---------- */
+  const flatCompetitions = useMemo(() => {
+    const out = [];
+    Object.values(groupedCompetitions).forEach((arr) =>
+      (arr || []).forEach((c) => out.push(c))
+    );
+    return out;
+  }, [groupedCompetitions]);
+
+  const compIdToLabel = useMemo(() => {
+    const map = {};
+    Object.entries(groupedCompetitions || {}).forEach(([country, comps]) => {
+      (comps || []).forEach((c) => {
+        map[String(c.competition_id)] = `${country} - ${c.competition_name}`;
+      });
+    });
+    return map;
+  }, [groupedCompetitions]);
+
+  const toggleCompetition = (id) => {
+    const sid = String(id);
+    setSelectedCompetitionIds((prev) =>
+      prev.includes(sid) ? prev.filter((x) => x !== sid) : [...prev, sid]
     );
   };
+  const clearCompetitions = () => setSelectedCompetitionIds([]);
+  const selectAllCompetitions = () =>
+    setSelectedCompetitionIds(flatCompetitions.map((c) => String(c.competition_id)));
 
-  const parseInvites = () => {
-    return invitesRaw
-      .split(/[\n,]+/g)
-      .map((s) => s.trim())
-      .filter(Boolean);
+  const selectTop10Competitions = () => {
+    const arr = [...flatCompetitions];
+    arr.sort(
+      (a, b) =>
+        Number(b.total_value_eur || 0) - Number(a.total_value_eur || 0)
+    );
+    setSelectedCompetitionIds(arr.slice(0, 10).map((c) => String(c.competition_id)));
   };
 
+  const clearSeasons = () => setSelectedSeasons([]);
+  const selectAllSeasons = () => setSelectedSeasons(allSeasons);
+  const handleLast5Seasons = () => setSelectedSeasons(allSeasons.slice(0, 5));
+
+  const toggleCountry = (country) =>
+    setExpandedCountries((prev) => ({ ...prev, [country]: !prev[country] }));
+
+  // Invites helpers
+  const addInvite = (u) => {
+    if (!u || u.id === currentUser?.id) return;
+    if (invites.find((x) => x.id === u.id)) return;
+    setInvites((prev) => [...prev, u]);
+    setSearchEmail("");
+    setEmailResults([]);
+  };
+  const removeInvite = (id) =>
+    setInvites((prev) => prev.filter((x) => x.id !== id));
+
+  /* ---------- validation ---------- */
   const validate = () => {
     const next = {};
     if (!name.trim()) next.name = "Please enter a tournament name.";
-    const secs = Math.floor(Number(roundTimeMinutes) * 60);
-    if (!Number.isFinite(secs) || secs < 30 || secs > 86400) {
-      next.roundTimeMinutes = "Round time must be between 0.5 and 1440 minutes.";
+    const mins = Math.floor(Number(roundTimeMinutes));
+    if (!Number.isFinite(mins) || mins < 5 || mins > 1440) {
+      next.roundTimeMinutes = "Round time must be between 5 and 1440 minutes.";
     }
-    if (!currentUserId) {
+    if (!currentUser?.id) {
       next.user = "You must be logged in to create a tournament.";
+    }
+    if ((selectedCompetitionIds || []).length === 0 && (selectedSeasons || []).length === 0 && !Number(minMarketValue)) {
+      // allow, but warn via counts 0
     }
     setErrors(next);
     return Object.keys(next).length === 0;
   };
 
+  /* ---------- submit ---------- */
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSubmitError("");
@@ -380,65 +641,116 @@ function CreateTournamentModal({ currentUserId, onClose, onCreated }) {
 
     setSubmitting(true);
     try {
-      const payload = {
-        owner_id: currentUserId,
-        name: name.trim(),
-        filters: {
-          difficulty,
-          league: league || null,
-          seasons,
-          min_appearances: Number(minAppearances) || 0,
-        },
-        round_time_limit_seconds: Math.floor(Number(roundTimeMinutes) * 60),
+      // Build filters exactly like GamePage payload
+      const filtersPayload = {
+        competitions: selectedCompetitionIds,
+        seasons: selectedSeasons,
+        minMarketValue: Number(minMarketValue) || 0,
       };
 
-      // 1) Insert tournament
+      // First: pick a player to guarantee a playable round
+      const randomPlayer = await getRandomPlayer(
+        { ...filtersPayload, userId: currentUser?.id },
+        currentUser?.id
+      );
+      if (!randomPlayer || !randomPlayer.id) {
+        throw new Error(
+          "No players found for the selected filters. Try broadening your selection."
+        );
+      }
+
+      // Create tournament
       const { data: tournament, error: tErr } = await supabase
         .from("elimination_tournaments")
-        .insert([payload])
+        .insert([
+          {
+            owner_id: currentUser.id,
+            name: name.trim(),
+            filters: filtersPayload,
+            round_time_limit_seconds: Math.floor(Number(roundTimeMinutes) * 60),
+            status: "live",
+          },
+        ])
         .select()
         .single();
 
       if (tErr) throw new Error(tErr.message || "Failed to create tournament.");
       if (!tournament?.id) throw new Error("Tournament creation returned no id.");
 
-      // 2) Ensure owner is a participant
-      const { error: pErr } = await supabase
-        .from("elimination_participants")
-        .insert([
-          {
-            tournament_id: tournament.id,
-            user_id: currentUserId,
-            state: "active",
-          },
-        ]);
-
-      if (pErr) {
-        // Not fatal, but good to log for debugging
-        // eslint-disable-next-line no-console
-        console.warn("[CreateTournament] participant insert warning:", pErr);
+      // Participants: owner + invites
+      const people = [
+        { id: currentUser.id, email: currentUser.email, full_name: currentUser.full_name || currentUser.user_metadata?.full_name || "You" },
+        ...invites,
+      ];
+      const partsPayload = people.map((p) => ({
+        tournament_id: tournament.id,
+        user_id: p.id,
+        state: "active",
+      }));
+      if (partsPayload.length) {
+        const { error: pErr } = await supabase
+          .from("elimination_participants")
+          .insert(partsPayload);
+        if (pErr) console.warn("[CreateTournament] participants insert warning:", pErr);
       }
 
+      // Notifications for invited users (not the owner)
+      const invitedHumans = invites.filter((i) => !!i.id && i.id !== currentUser.id);
+      if (invitedHumans.length) {
+        const payloads = invitedHumans.map((uRow) => ({
+          user_id: uRow.id,
+          type: "elimination_invite",
+          payload: {
+            tournament_id: tournament.id,
+            tournament_name: tournament.name,
+            round_time_limit_minutes: Math.floor(Number(roundTimeMinutes)),
+            creator_name:
+              currentUser.user_metadata?.full_name ||
+              currentUser.full_name ||
+              currentUser.email ||
+              "A user",
+            filters: filtersPayload,
+          },
+        }));
+        await supabase.from("notifications").insert(payloads);
+
+        // Let the navbar know to refresh axe dot immediately
+        window.dispatchEvent(new Event("elimination-notifications-new"));
+      }
+
+      // Create Round 1 immediately with the random player
+      const now = new Date();
+      const endsAt = new Date(now.getTime() + Math.floor(Number(roundTimeMinutes)) * 60 * 1000);
+      const { error: rErr } = await supabase.from("elimination_rounds").insert([
+        {
+          tournament_id: tournament.id,
+          round_number: 1,
+          status: "active",
+          mystery_player_id: randomPlayer.id,
+          started_at: now.toISOString(),
+          ends_at: endsAt.toISOString(),
+        },
+      ]);
+      if (rErr) console.warn("[CreateTournament] create round warning:", rErr);
+
+      // done → refresh list and close
       await onCreated?.();
       onClose?.();
     } catch (ex) {
-      setSubmitError(
-        ex instanceof Error ? ex.message : "Failed to create tournament."
-      );
+      setSubmitError(ex instanceof Error ? ex.message : "Failed to create tournament.");
     } finally {
       setSubmitting(false);
     }
   };
 
+  /* ---------- UI ---------- */
   return (
     <>
-      {/* Overlay */}
       <div
         className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm"
         onClick={onClose}
         aria-hidden="true"
       />
-      {/* Dialog */}
       <div
         role="dialog"
         aria-modal="true"
@@ -447,30 +759,27 @@ function CreateTournamentModal({ currentUserId, onClose, onCreated }) {
         ref={dialogRef}
         className="fixed inset-0 z-50 flex items-center justify-center p-4"
         onClick={(e) => {
-          // prevent closing when clicking inside the panel
           e.stopPropagation();
         }}
       >
-        <div className="w-full max-w-2xl rounded-2xl border border-gray-200 bg-white p-0 shadow-xl dark:border-gray-700 dark:bg-gray-800">
-          {/* Header */}
-          <div className="flex items-center justify-between border-b border-gray-200 p-4 dark:border-gray-700">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+        <div className="w-full max-w-3xl rounded-2xl border border-gray-200 bg-white p-0 shadow-xl">
+          <div className="flex items-center justify-between border-b border-gray-200 p-4">
+            <h2 className="text-lg font-semibold text-gray-900">
               Create Elimination Tournament
             </h2>
             <button
               type="button"
               onClick={onClose}
-              className="rounded-md px-2 py-1 text-sm text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+              className="rounded-md px-2 py-1 text-sm text-gray-600 hover:bg-gray-100"
             >
               Close
             </button>
           </div>
 
-          {/* Body */}
           <form onSubmit={handleSubmit} className="p-4 space-y-6">
             {/* Name */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">
+              <label className="block text-sm font-medium text-gray-700">
                 Tournament Name
               </label>
               <input
@@ -478,156 +787,430 @@ function CreateTournamentModal({ currentUserId, onClose, onCreated }) {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="e.g., Friday Night Knockout"
-                className="mt-1 w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:ring-2 focus:ring-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+                className="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:ring-2 focus:ring-green-700"
               />
               {errors.name && (
                 <p className="mt-1 text-xs text-red-600">{errors.name}</p>
               )}
             </div>
 
-            {/* Difficulty */}
-            <div>
-              <p className="mb-2 text-sm font-medium text-gray-700 dark:text-gray-200">
-                Difficulty
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {["easy", "medium", "hard", "expert"].map((lvl) => {
-                  const active = difficulty === lvl;
-                  return (
-                    <button
-                      key={lvl}
-                      type="button"
-                      onClick={() => setDifficulty(lvl)}
-                      className={[
-                        "rounded-full px-4 py-2 text-sm font-medium transition",
-                        active
-                          ? "bg-gray-900 text-white dark:bg-white dark:text-gray-900"
-                          : "bg-white text-gray-700 hover:bg-gray-100 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600",
-                      ].join(" ")}
-                    >
-                      {lvl[0].toUpperCase() + lvl.slice(1)}
-                    </button>
-                  );
-                })}
-              </div>
-              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                We’ll use this to bias the player selection for each round.
-              </p>
-            </div>
-
-            {/* Optional Filters (UI only for now) */}
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">
-                  League (optional)
-                </label>
-                <select
-                  value={league}
-                  onChange={(e) => setLeague(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:ring-2 focus:ring-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
-                >
-                  <option value="">Any</option>
-                  <option value="EPL">Premier League</option>
-                  <option value="LaLiga">LaLiga</option>
-                  <option value="SerieA">Serie A</option>
-                  <option value="Bundesliga">Bundesliga</option>
-                  <option value="Ligue1">Ligue 1</option>
-                </select>
-              </div>
-
-              <div>
-                <p className="block text-sm font-medium text-gray-700 dark:text-gray-200">
-                  Seasons (optional)
-                </p>
-                <div className="mt-1 grid grid-cols-3 gap-2">
-                  {["24/25", "23/24", "22/23", "21/22", "20/21", "19/20"].map(
-                    (s) => {
-                      const on = seasons.includes(s);
-                      return (
-                        <button
-                          key={s}
-                          type="button"
-                          onClick={() => toggleSeason(s)}
-                          className={[
-                            "rounded-lg px-2 py-1 text-xs font-medium transition",
-                            on
-                              ? "bg-gray-900 text-white dark:bg-white dark:text-gray-900"
-                              : "bg-white text-gray-700 hover:bg-gray-100 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600",
-                          ].join(" ")}
-                        >
-                          {s}
-                        </button>
-                      );
-                    }
-                  )}
+            {/* Difficulty Filters (same as GamePage) */}
+            <div className="rounded-xl shadow-sm border bg-green-50/60 p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-green-900 font-semibold">
+                    Difficulty Filters
+                  </span>
                 </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">
-                  Minimum Appearances (optional)
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  step={1}
-                  value={minAppearances}
-                  onChange={(e) => setMinAppearances(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:ring-2 focus:ring-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
-                />
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Helps avoid obscure one‑appearance players if desired.
-                </p>
-              </div>
+              {!loadingFilters && (
+                <div className="mt-4 space-y-6">
+                  {/* Competitions */}
+                  <Section
+                    title="Competitions"
+                    icon={<Star className="h-4 w-4 text-green-700" />}
+                    collapsed={compCollapsed}
+                    onToggle={() => setCompCollapsed((v) => !v)}
+                    actions={
+                      <>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            selectTop10Competitions();
+                          }}
+                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                        >
+                          <Star className="h-3 w-3" /> Top 10
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            selectAllCompetitions();
+                          }}
+                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                        >
+                          <CheckSquare className="h-3 w-3" /> Select All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            clearCompetitions();
+                          }}
+                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                          Clear All
+                        </button>
+                      </>
+                    }
+                  >
+                    {/* search */}
+                    <div className="mb-3 relative" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center gap-2 border rounded-md bg-white px-2 py-1">
+                        <Search className="h-4 w-4 text-gray-500" />
+                        <input
+                          ref={compSearchRef}
+                          type="text"
+                          value={compSearch}
+                          onChange={(e) => setCompSearch(e.target.value)}
+                          onFocus={() => setCompSugOpen(compSug.length > 0)}
+                          onKeyDown={handleCompSearchKeyDown}
+                          placeholder="Search country or competition…"
+                          className="w-full outline-none text-sm"
+                        />
+                      </div>
+                      {compSugOpen && compSug.length > 0 && (
+                        <div
+                          ref={compSugBoxRef}
+                          className="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-md border bg-white shadow"
+                        >
+                          {compSug.map((s, idx) => {
+                            const active = idx === compSugIndex;
+                            const checked = selectedCompetitionIds.includes(s.id);
+                            return (
+                              <button
+                                key={`${s.id}-${idx}`}
+                                type="button"
+                                onClick={() => {
+                                  toggleCompetition(s.id);
+                                  setCompSearch("");
+                                  setCompSug([]);
+                                  setCompSugOpen(false);
+                                }}
+                                className={classNames(
+                                  "w-full text-left px-2 py-1 flex items-center gap-2 text-sm",
+                                  active ? "bg-green-100" : "hover:bg-gray-50"
+                                )}
+                              >
+                                {s.logo_url && (
+                                  <img
+                                    src={s.logo_url}
+                                    alt={s.name}
+                                    className="w-4 h-4 object-contain"
+                                  />
+                                )}
+                                <span className="flex-1">{s.label}</span>
+                                {checked && (
+                                  <span className="text-green-700 text-xs font-semibold">
+                                    selected
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
 
-              {/* Round time limit */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">
-                  Round Time Limit (minutes)
-                </label>
-                <input
-                  type="number"
-                  min={0.5}
-                  max={1440}
-                  step={0.5}
-                  value={roundTimeMinutes}
-                  onChange={(e) => setRoundTimeMinutes(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:ring-2 focus:ring-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
-                />
-                {errors.roundTimeMinutes && (
-                  <p className="mt-1 text-xs text-red-600">
-                    {errors.roundTimeMinutes}
-                  </p>
-                )}
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Must be between 0.5 and 1440 minutes (30 seconds to 24 hours).
-                </p>
-              </div>
+                    <SelectedChips
+                      title="Chosen competitions"
+                      items={selectedCompetitionIds}
+                      onClear={clearCompetitions}
+                      getLabel={(id) => compIdToLabel[id] || `Competition ${id}`}
+                      onRemoveItem={(id) =>
+                        setSelectedCompetitionIds((prev) =>
+                          prev.filter((x) => x !== id)
+                        )
+                      }
+                      hoverClose
+                    />
+                    <div className="max-h-72 overflow-y-auto pr-2">
+                      {Object.entries(groupedCompetitions)
+                        .sort(([a], [b]) => a.localeCompare(b))
+                        .map(([country, comps]) => (
+                          <div key={country} className="mb-2">
+                            <button
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                toggleCountry(country);
+                              }}
+                              type="button"
+                              className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
+                            >
+                              <div className="flex items-center gap-2">
+                                {comps?.[0]?.flag_url && (
+                                  <img
+                                    src={comps[0].flag_url}
+                                    alt={country}
+                                    className="w-6 h-4 object-cover rounded"
+                                  />
+                                )}
+                                <span>{country}</span>
+                                <span className="text-xs text-gray-500">
+                                  ({comps.length})
+                                </span>
+                              </div>
+                              <span className="text-sm text-gray-600">
+                                {expandedCountries[country] ? "▲" : "▼"}
+                              </span>
+                            </button>
+
+                            {expandedCountries[country] && (
+                              <div className="ml-8 space-y-2 mt-2">
+                                {comps.map((c) => {
+                                  const cid = String(c.competition_id);
+                                  const checked =
+                                    selectedCompetitionIds.includes(cid);
+                                  return (
+                                    <label
+                                      key={cid}
+                                      className="flex items-center gap-2 cursor-pointer"
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={() => toggleCompetition(cid)}
+                                        className="rounded"
+                                      />
+                                      {c.logo_url && (
+                                        <img
+                                          src={c.logo_url}
+                                          alt={c.competition_name}
+                                          className="w-5 h-5 object-contain"
+                                        />
+                                      )}
+                                      <span className="text-sm">
+                                        {c.competition_name}
+                                      </span>
+                                      {c.tier && (
+                                        <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700">
+                                          Tier {c.tier}
+                                        </span>
+                                      )}
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                    </div>
+                  </Section>
+
+                  {/* Seasons */}
+                  <Section
+                    title="Seasons"
+                    icon={<CalendarClock className="h-4 w-4 text-green-700" />}
+                    collapsed={seasonsCollapsed}
+                    onToggle={() => setSeasonsCollapsed((v) => !v)}
+                    actions={
+                      <>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleLast5Seasons();
+                          }}
+                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                        >
+                          <CalendarClock className="h-3 w-3" /> Last 5
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            selectAllSeasons();
+                          }}
+                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                        >
+                          <CheckSquare className="h-3 w-3" /> Select All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            clearSeasons();
+                          }}
+                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                        >
+                          <Trash2 className="h-3 w-3" /> Clear All
+                        </button>
+                      </>
+                    }
+                  >
+                    <SelectedChips
+                      title="Chosen seasons"
+                      items={selectedSeasons}
+                      onClear={clearSeasons}
+                    />
+                    <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-2">
+                      {allSeasons.map((season) => (
+                        <button
+                          key={season}
+                          type="button"
+                          onClick={() =>
+                            setSelectedSeasons((prev) =>
+                              prev.includes(season)
+                                ? prev.filter((s) => s !== season)
+                                : [...prev, season]
+                            )
+                          }
+                          className={classNames(
+                            "px-2 py-1 text-sm rounded-md border",
+                            selectedSeasons.includes(season)
+                              ? "bg-green-100 border-green-500 text-green-700"
+                              : "bg-white hover:bg-gray-50"
+                          )}
+                        >
+                          {season}
+                        </button>
+                      ))}
+                    </div>
+                  </Section>
+
+                  {/* Minimum Market Value */}
+                  <Section
+                    title="Minimum Market Value (€)"
+                    icon={<Star className="h-4 w-4 text-green-700" />}
+                    collapsed={mvCollapsed}
+                    onToggle={() => setMvCollapsed((v) => !v)}
+                  >
+                    <div className="flex flex-col gap-3">
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="number"
+                          value={minMarketValue}
+                          onChange={(e) =>
+                            setMinMarketValue(parseInt(e.target.value) || 0)
+                          }
+                          min="0"
+                          step="100000"
+                          className="w-40 border rounded-md px-2 py-1"
+                        />
+                        <div className="text-sm text-gray-600">
+                          €{new Intl.NumberFormat("en-US", {
+                            maximumFractionDigits: 0,
+                          }).format(Number(minMarketValue || 0))}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <PresetButton onClick={() => setMinMarketValue(0)} title="Clear" active={minMarketValue === 0}>
+                          <Trash2 size={14} /> Clear
+                        </PresetButton>
+                        {[100000, 500000, 1000000, 5000000, 10000000, 25000000, 50000000].map(
+                          (v) => (
+                            <PresetButton
+                              key={v}
+                              onClick={() => setMinMarketValue(v)}
+                              active={minMarketValue === v}
+                            >
+                              <Star size={14} /> {v >= 1000000 ? `${v / 1000000}M €` : `${v / 1000}K €`}
+                            </PresetButton>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  </Section>
+
+                  {/* Counts summary */}
+                  <div className="bg-yellow-50 rounded-lg p-3">
+                    <div className="flex items-center justify-between text-sm">
+                      <div className="text-yellow-800 font-semibold">
+                        {loadingCounts ? "—" : (poolCount * 5).toLocaleString()}
+                      </div>
+                      <div className="text-yellow-700">Potential Points</div>
+                      <div className="text-yellow-800 font-semibold">
+                        {loadingCounts ? "—" : poolCount} / {loadingCounts ? "—" : totalCount}
+                      </div>
+                      <div className="text-yellow-700">Player Pool</div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Invites */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">
-                Invites (emails or usernames)
-              </label>
-              <textarea
-                rows={3}
-                value={invitesRaw}
-                onChange={(e) => setInvitesRaw(e.target.value)}
-                placeholder={`friend1@email.com, friend2@email.com
-or
-@username1
-@username2`}
-                className="mt-1 w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:ring-2 focus:ring-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
-              />
-              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                Separate by commas or new lines. We’ll resolve them later.
+              <label className="text-sm text-gray-700 font-medium">Add Participants by Email</label>
+              <div className="flex gap-2 mt-1">
+                <input
+                  className="flex-1 border rounded px-3 py-2"
+                  placeholder="Search email…"
+                  value={searchEmail}
+                  onChange={(e) => setSearchEmail(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded bg-gray-100 text-gray-700"
+                  disabled
+                >
+                  Search
+                </button>
+              </div>
+              {!!emailResults.length && (
+                <ul className="border rounded mt-2 max-h-40 overflow-auto">
+                  {emailResults.map((u) => (
+                    <li
+                      key={u.id}
+                      onClick={() => addInvite(u)}
+                      className="px-3 py-2 hover:bg-gray-50 cursor-pointer"
+                    >
+                      <div className="font-medium">{u.full_name || "Unknown"}</div>
+                      <div className="text-xs text-gray-500">{u.email}</div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {!!invites.length && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {invites.map((i) => (
+                    <span
+                      key={i.id}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-100 text-green-800 text-sm"
+                    >
+                      {i.full_name || i.email}
+                      <button
+                        onClick={() => removeInvite(i.id)}
+                        className="ml-1 text-green-900 hover:opacity-70"
+                        type="button"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <p className="mt-1 text-xs text-gray-500">
+                You are added automatically as a participant.
               </p>
+            </div>
+
+            {/* Round time limit */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700">
+                Round Time Limit (minutes)
+              </label>
+              <input
+                type="number"
+                min={5}
+                max={1440}
+                step={1}
+                value={roundTimeMinutes}
+                onChange={(e) => setRoundTimeMinutes(e.target.value)}
+                className="mt-1 w-40 rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none focus:ring-2 focus:ring-green-700"
+              />
+              {errors.roundTimeMinutes && (
+                <p className="mt-1 text-xs text-red-600">
+                  {errors.roundTimeMinutes}
+                </p>
+              )}
             </div>
 
             {/* Submit error */}
             {submitError ? (
-              <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-200">
+              <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
                 {submitError}
               </div>
             ) : null}
@@ -637,14 +1220,14 @@ or
               <button
                 type="button"
                 onClick={onClose}
-                className="rounded-xl border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
                 disabled={submitting}
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="rounded-xl bg-gray-900 px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-60 dark:bg-white dark:text-gray-900"
+                className="rounded-lg bg-green-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-green-800 disabled:opacity-60"
                 disabled={submitting}
               >
                 {submitting ? "Creating…" : "Create"}
@@ -655,4 +1238,117 @@ or
       </div>
     </>
   );
+}
+
+/* ------------------------------------------------------------
+   Small shared UI pieces from GamePage
+------------------------------------------------------------ */
+function Section({ title, icon, collapsed, onToggle, actions, children }) {
+  return (
+    <div className="rounded-lg border bg-white/60">
+      <div className="flex items-center justify-between px-3 py-2">
+        <button type="button" onClick={onToggle} className="inline-flex items-center gap-2">
+          {icon}
+          <span className="font-medium text-green-900">{title}</span>
+          <span className="ml-1 text-gray-600">{collapsed ? "▼" : "▲"}</span>
+        </button>
+        <div className="hidden sm:flex items-center gap-2 flex-wrap">{actions}</div>
+      </div>
+      {actions && (
+        <div className="sm:hidden px-3 pb-2">
+          <div className="flex flex-wrap gap-2">{actions}</div>
+        </div>
+      )}
+      {!collapsed && <div className="p-3 pt-0">{children}</div>}
+    </div>
+  );
+}
+
+function SelectedChips({ title, items, onClear, getLabel, onRemoveItem, hoverClose = false }) {
+  if (!items?.length) return null;
+  return (
+    <div className="mb-2">
+      {title && <div className="text-xs text-gray-600 mb-1">{title}</div>}
+      <div className="flex flex-wrap gap-2">
+        {items.map((t, index) => {
+          const label = getLabel ? getLabel(t) : String(t);
+          return (
+            <span
+              key={`${String(t)}-${index}`}
+              className={classNames(
+                "group relative inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800",
+                hoverClose && "pr-6"
+              )}
+            >
+              {label}
+              {hoverClose && onRemoveItem && (
+                <button
+                  type="button"
+                  onClick={() => onRemoveItem(t)}
+                  className="absolute right-0 top-0 bottom-0 hidden group-hover:flex items-center justify-center w-5 text-red-600 hover:text-red-700"
+                  title="Remove"
+                >
+                  ×
+                </button>
+              )}
+            </span>
+          );
+        })}
+        <button
+          type="button"
+          onClick={onClear}
+          className="text-xs text-gray-600 underline hover:text-gray-800"
+        >
+          Clear
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PresetButton({ onClick, children, title, active = false }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onClick();
+      }}
+      title={title}
+      className={classNames(
+        "inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md border transition-colors",
+        active
+          ? "bg-green-600 text-white border-green-700"
+          : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+/* ------------------------------------------------------------
+   Helpers copied from GamePage where needed
+------------------------------------------------------------ */
+function normalizeSeasons(payload) {
+  let raw = [];
+  if (Array.isArray(payload)) {
+    raw = payload;
+  } else if (payload && Array.isArray(payload.seasons)) {
+    raw = payload.seasons;
+  } else if (payload && Array.isArray(payload.data)) {
+    raw = payload.data;
+  } else if (payload && typeof payload === "object") {
+    const collected = [];
+    Object.values(payload).forEach((v) => {
+      if (Array.isArray(v)) collected.push(...v);
+      else if (typeof v === "string" || typeof v === "number") collected.push(v);
+    });
+    raw = collected.length ? collected : [];
+  }
+
+  const uniq = Array.from(new Set(raw.map(String)));
+  uniq.sort((a, b) => String(b).localeCompare(String(a)));
+  return uniq;
 }

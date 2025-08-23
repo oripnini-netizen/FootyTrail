@@ -18,6 +18,7 @@ import AboutPage from './pages/AboutPage';
 import ProfilePage from './pages/ProfilePage';
 import PostGamePage from './pages/PostGamePage';
 import EliminationTournamentsPage from './pages/EliminationTournamentsPage';
+import EliminationTournamentPage from './pages/EliminationTournamentPage'; // NEW
 
 // Import your layout component
 import Layout from './components/Layout';
@@ -85,6 +86,7 @@ const App = () => {
             <Route path="/live" element={<LiveGamePage />} />
             <Route path="/my-leagues" element={<MyLeaguesPage />} />
             <Route path="/elimination-tournaments" element={<EliminationTournamentsPage />} />
+            <Route path="/elimination-tournaments/:id" element={<EliminationTournamentPage />} /> {/* NEW */}
             <Route path="/leaderboard" element={<LeaderboardPage />} />
             <Route path="/about" element={<AboutPage />} />
             <Route path="/profile" element={<ProfilePage />} />
