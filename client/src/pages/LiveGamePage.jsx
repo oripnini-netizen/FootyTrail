@@ -497,7 +497,14 @@ export default function LiveGamePage() {
             isDaily: !!isDaily,
             is_elimination_game: true,
             playerName: gameData.name,            
-            playerData: { id: playerIdNumeric },
+            playerData: {                     // ⬅️ send FULL player_data (fixes NOT NULL)
+              id: playerIdNumeric,
+              name: gameData.name,
+              nationality: gameData.nationality,
+              position: gameData.position,
+              age: gameData.age,
+              photo: gameData.photo,
+            },
           },
         });
         if (error) {
