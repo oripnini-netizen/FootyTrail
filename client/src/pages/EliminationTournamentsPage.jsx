@@ -1,4 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState, useLayoutEffect } from "react";
+// src/pages/EliminationTournamentsPage.jsx
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useLayoutEffect,
+} from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../supabase";
 import { useAuth } from "../context/AuthContext";
@@ -39,6 +46,34 @@ export default function EliminationTournamentsPage() {
   const [loading, setLoading] = useState({ live: true, finished: true });
   const [error, setError] = useState({ live: "", finished: "" });
 
+  // For pretty filter chips on cards
+  const [groupedCompetitions, setGroupedCompetitions] = useState({});
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const compsRes = await getCompetitions();
+        if (!cancelled) {
+          setGroupedCompetitions(compsRes.groupedByCountry || {});
+        }
+      } catch {
+        /* ignore — we’ll just show raw ids if this fails */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const compIdToLabel = useMemo(() => {
+    const map = {};
+    Object.entries(groupedCompetitions || {}).forEach(([country, comps]) => {
+      (comps || []).forEach((c) => {
+        map[String(c.competition_id)] = `${country} - ${c.competition_name}`;
+      });
+    });
+    return map;
+  }, [groupedCompetitions]);
+
   const tabs = [
     { key: "live", label: "Live" },
     { key: "finished", label: "Finished" },
@@ -62,7 +97,9 @@ export default function EliminationTournamentsPage() {
     try {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
-        .select("id, name, status, created_at, round_time_limit_seconds, filters")
+        .select(
+          "id, name, status, created_at, round_time_limit_seconds, filters"
+        )
         .eq("status", "live")
         .order("created_at", { ascending: false });
       if (err) {
@@ -84,7 +121,9 @@ export default function EliminationTournamentsPage() {
     try {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
-        .select("id, name, status, created_at, round_time_limit_seconds, filters")
+        .select(
+          "id, name, status, created_at, round_time_limit_seconds, filters"
+        )
         .eq("status", "finished")
         .order("created_at", { ascending: false });
       if (err) {
@@ -122,8 +161,8 @@ export default function EliminationTournamentsPage() {
             </h1>
             <p className="mt-2 text-sm text-gray-700">
               Create and follow elimination tournaments with friends. Each round
-              uses the same mystery player for everyone. Lowest score(s) are eliminated
-              until a single winner remains.
+              uses the same mystery player for everyone. Lowest score(s) are
+              eliminated until a single winner remains.
             </p>
           </div>
 
@@ -149,7 +188,9 @@ export default function EliminationTournamentsPage() {
                 onClick={() => setActiveTab(t.key)}
                 className={classNames(
                   "px-4 py-1.5 rounded-full text-sm font-medium",
-                  isActive ? "bg-green-700 text-white" : "bg-white text-gray-700 border"
+                  isActive
+                    ? "bg-green-700 text-white"
+                    : "bg-white text-gray-700 border"
                 )}
               >
                 {t.label}
@@ -182,7 +223,11 @@ export default function EliminationTournamentsPage() {
               {!loading.live && !error.live && live.length > 0 && (
                 <>
                   {live.map((t) => (
-                    <TournamentCard key={t.id} tournament={t} />
+                    <TournamentCard
+                      key={t.id}
+                      tournament={t}
+                      compIdToLabel={compIdToLabel}
+                    />
                   ))}
                 </>
               )}
@@ -213,7 +258,11 @@ export default function EliminationTournamentsPage() {
               {!loading.finished && !error.finished && finished.length > 0 && (
                 <>
                   {finished.map((t) => (
-                    <TournamentCard key={t.id} tournament={t} />
+                    <TournamentCard
+                      key={t.id}
+                      tournament={t}
+                      compIdToLabel={compIdToLabel}
+                    />
                   ))}
                 </>
               )}
@@ -264,12 +313,115 @@ function PlaceholderCard({ title, subtitle, ctaLabel, onCtaClick }) {
   );
 }
 
-function TournamentCard({ tournament }) {
+function Countdown({ endsAt }) {
+  const [left, setLeft] = useState(() => format(endsAt));
+
+  useEffect(() => {
+    setLeft(format(endsAt));
+    if (!endsAt) return;
+    const id = setInterval(() => setLeft(format(endsAt)), 1000);
+    return () => clearInterval(id);
+  }, [endsAt]);
+
+  function format(endIso) {
+    if (!endIso) return "—";
+    const end = new Date(endIso).getTime();
+    const now = Date.now();
+    const ms = Math.max(0, end - now);
+    const s = Math.floor(ms / 1000);
+    const h = String(Math.floor(s / 3600)).padStart(2, "0");
+    const m = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+    const ss = String(s % 60).padStart(2, "0");
+    return `${h}:${m}:${ss}`;
+  }
+
+  return <span>{left}</span>;
+}
+
+function TournamentCard({ tournament, compIdToLabel }) {
   const navigate = useNavigate();
   const createdAt = new Date(tournament.created_at);
   const dateStr = createdAt.toLocaleString();
   const isLive = tournament.status === "live";
-  const timeLimitMin = Math.round((tournament.round_time_limit_seconds || 0) / 60);
+  const timeLimitMin = Math.round(
+    (tournament.round_time_limit_seconds || 0) / 60
+  );
+
+  const [participants, setParticipants] = useState([]);
+  const [activeRoundEndsAt, setActiveRoundEndsAt] = useState(null);
+
+  // Fetch participants + active round for countdown
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        // participants
+        const { data: partRows } = await supabase
+          .from("elimination_participants")
+          .select("user_id")
+          .eq("tournament_id", tournament.id);
+
+        const ids = (partRows || []).map((r) => r.user_id);
+        if (ids.length) {
+          const { data: usersRows } = await supabase
+            .from("users")
+            .select("id, full_name, email")
+            .in("id", ids);
+          if (!cancelled) setParticipants(usersRows || []);
+        } else if (!cancelled) {
+          setParticipants([]);
+        }
+      } catch {
+        if (!cancelled) setParticipants([]);
+      }
+
+      try {
+        // current active round
+        const { data: round } = await supabase
+          .from("elimination_rounds")
+          .select("id, status, ends_at, round_number")
+          .eq("tournament_id", tournament.id)
+          .in("status", ["active", "pending"])
+          .order("round_number", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (!cancelled) setActiveRoundEndsAt(round?.ends_at || null);
+      } catch {
+        if (!cancelled) setActiveRoundEndsAt(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [tournament.id]);
+
+  // Chip helpers for filters on the card
+  const filterChips = useMemo(() => {
+    const chips = [];
+    const f = tournament.filters || {};
+    const seasons = Array.isArray(f.seasons) ? f.seasons : [];
+    const comps = Array.isArray(f.competitions) ? f.competitions : [];
+    const mv = Number(f.minMarketValue || 0);
+
+    if (seasons.length) {
+      seasons.forEach((s) => chips.push({ key: `S-${s}`, label: String(s) }));
+    }
+    if (comps.length) {
+      comps.forEach((id) =>
+        chips.push({
+          key: `C-${id}`,
+          label: compIdToLabel?.[String(id)] || `League ${id}`,
+        })
+      );
+    }
+    if (mv > 0) {
+      chips.push({ key: "MV", label: `Min MV: €${fmtCurrency(mv)}` });
+    }
+    return chips;
+  }, [tournament.filters, compIdToLabel]);
 
   return (
     <div className="rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md">
@@ -288,17 +440,63 @@ function TournamentCard({ tournament }) {
       </div>
 
       <p className="mt-2 text-xs text-gray-500">Created: {dateStr}</p>
-      {tournament.filters ? (
-        <div className="mt-3 text-xs text-gray-700">
-          <div className="font-semibold mb-1">Filters</div>
-          <pre className="text-[11px] bg-gray-50 rounded p-2 overflow-x-auto">
-{JSON.stringify(tournament.filters, null, 2)}
-          </pre>
+
+      {/* Filters as chips */}
+      {filterChips.length > 0 && (
+        <div className="mt-3">
+          <div className="text-xs font-semibold mb-1 text-gray-700">
+            Filters
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {filterChips.map((c) => (
+              <span
+                key={c.key}
+                className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-800 ring-1 ring-inset ring-green-600/20"
+              >
+                {c.label}
+              </span>
+            ))}
+          </div>
         </div>
-      ) : null}
-      {timeLimitMin ? (
-        <p className="mt-2 text-xs text-gray-600">Round limit: {timeLimitMin} min</p>
-      ) : null}
+      )}
+
+      {/* Participants as chips */}
+      <div className="mt-3">
+        <div className="text-xs font-semibold mb-1 text-gray-700">
+          Participants
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {participants.length === 0 ? (
+            <span className="text-[11px] text-gray-500">—</span>
+          ) : (
+            participants.map((p) => (
+              <span
+                key={p.id}
+                className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-800 ring-1 ring-inset ring-gray-300"
+              >
+                {p.full_name || p.email}
+              </span>
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* Countdown */}
+      {isLive && (
+        <div className="mt-3">
+          <div className="text-xs text-gray-600">
+            Round ends in:{" "}
+            <span className="font-semibold">
+              <Countdown endsAt={activeRoundEndsAt} />
+            </span>
+          </div>
+          {timeLimitMin ? (
+            <div className="text-[11px] text-gray-500 mt-0.5">
+              Round limit: {timeLimitMin} min
+            </div>
+          ) : null}
+        </div>
+      )}
 
       <div className="mt-4 flex items-center justify-end gap-2">
         {isLive && (
@@ -419,7 +617,9 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
         if (!cancelled) setLoadingFilters(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Counts on filter change
@@ -437,7 +637,8 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
           userId: currentUser?.id,
         };
         const countsResult = await getCounts(payload);
-        const { poolCount: filteredCount, totalCount: dbTotal } = countsResult || {};
+        const { poolCount: filteredCount, totalCount: dbTotal } =
+          countsResult || {};
         if (!cancelled) {
           setPoolCount(filteredCount || 0);
           setTotalCount(dbTotal || 0);
@@ -452,8 +653,16 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
       }
     })();
 
-    return () => { cancelled = true; };
-  }, [selectedCompetitionIds, selectedSeasons, minMarketValue, currentUser?.id, loadingFilters]);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    selectedCompetitionIds,
+    selectedSeasons,
+    minMarketValue,
+    currentUser?.id,
+    loadingFilters,
+  ]);
 
   // Escape to close
   useEffect(() => {
@@ -586,15 +795,18 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   };
   const clearCompetitions = () => setSelectedCompetitionIds([]);
   const selectAllCompetitions = () =>
-    setSelectedCompetitionIds(flatCompetitions.map((c) => String(c.competition_id)));
+    setSelectedCompetitionIds(
+      flatCompetitions.map((c) => String(c.competition_id))
+    );
 
   const selectTop10Competitions = () => {
     const arr = [...flatCompetitions];
     arr.sort(
-      (a, b) =>
-        Number(b.total_value_eur || 0) - Number(a.total_value_eur || 0)
+      (a, b) => Number(b.total_value_eur || 0) - Number(a.total_value_eur || 0)
     );
-    setSelectedCompetitionIds(arr.slice(0, 10).map((c) => String(c.competition_id)));
+    setSelectedCompetitionIds(
+      arr.slice(0, 10).map((c) => String(c.competition_id))
+    );
   };
 
   const clearSeasons = () => setSelectedSeasons([]);
@@ -626,7 +838,11 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
     if (!currentUser?.id) {
       next.user = "You must be logged in to create a tournament.";
     }
-    if ((selectedCompetitionIds || []).length === 0 && (selectedSeasons || []).length === 0 && !Number(minMarketValue)) {
+    if (
+      (selectedCompetitionIds || []).length === 0 &&
+      (selectedSeasons || []).length === 0 &&
+      !Number(minMarketValue)
+    ) {
       // allow, but warn via counts 0
     }
     setErrors(next);
@@ -679,7 +895,14 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
 
       // Participants: owner + invites
       const people = [
-        { id: currentUser.id, email: currentUser.email, full_name: currentUser.full_name || currentUser.user_metadata?.full_name || "You" },
+        {
+          id: currentUser.id,
+          email: currentUser.email,
+          full_name:
+            currentUser.full_name ||
+            currentUser.user_metadata?.full_name ||
+            "You",
+        },
         ...invites,
       ];
       const partsPayload = people.map((p) => ({
@@ -691,11 +914,14 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
         const { error: pErr } = await supabase
           .from("elimination_participants")
           .insert(partsPayload);
-        if (pErr) console.warn("[CreateTournament] participants insert warning:", pErr);
+        if (pErr)
+          console.warn("[CreateTournament] participants insert warning:", pErr);
       }
 
       // Notifications for invited users (not the owner)
-      const invitedHumans = invites.filter((i) => !!i.id && i.id !== currentUser.id);
+      const invitedHumans = invites.filter(
+        (i) => !!i.id && i.id !== currentUser.id
+      );
       if (invitedHumans.length) {
         const payloads = invitedHumans.map((uRow) => ({
           user_id: uRow.id,
@@ -720,7 +946,9 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
 
       // Create Round 1 immediately with the random player
       const now = new Date();
-      const endsAt = new Date(now.getTime() + Math.floor(Number(roundTimeMinutes)) * 60 * 1000);
+      const endsAt = new Date(
+        now.getTime() + Math.floor(Number(roundTimeMinutes)) * 60 * 1000
+      );
       const { error: rErr } = await supabase.from("elimination_rounds").insert([
         {
           tournament_id: tournament.id,
@@ -737,7 +965,9 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
       await onCreated?.();
       onClose?.();
     } catch (ex) {
-      setSubmitError(ex instanceof Error ? ex.message : "Failed to create tournament.");
+      setSubmitError(
+        ex instanceof Error ? ex.message : "Failed to create tournament."
+      );
     } finally {
       setSubmitting(false);
     }
@@ -762,7 +992,8 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
           e.stopPropagation();
         }}
       >
-        <div className="w-full max-w-3xl rounded-2xl border border-gray-200 bg-white p-0 shadow-xl">
+        {/* >>> Fixed height container + internal scroll <<< */}
+        <div className="w-full max-w-3xl max-h-[85vh] flex flex-col rounded-2xl border border-gray-200 bg-white p-0 shadow-xl">
           <div className="flex items-center justify-between border-b border-gray-200 p-4">
             <h2 className="text-lg font-semibold text-gray-900">
               Create Elimination Tournament
@@ -776,447 +1007,456 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
             </button>
           </div>
 
-          <form onSubmit={handleSubmit} className="p-4 space-y-6">
-            {/* Name */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700">
-                Tournament Name
-              </label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g., Friday Night Knockout"
-                className="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:ring-2 focus:ring-green-700"
-              />
-              {errors.name && (
-                <p className="mt-1 text-xs text-red-600">{errors.name}</p>
-              )}
-            </div>
-
-            {/* Difficulty Filters (same as GamePage) */}
-            <div className="rounded-xl shadow-sm border bg-green-50/60 p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-green-900 font-semibold">
-                    Difficulty Filters
-                  </span>
-                </div>
+          {/* Make the form a column with a scrollable body and a fixed footer */}
+          <form onSubmit={handleSubmit} className="flex-1 min-h-0 flex flex-col">
+            {/* Scrollable content */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-6">
+              {/* Name */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700">
+                  Tournament Name
+                </label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g., Friday Night Knockout"
+                  className="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:ring-2 focus:ring-green-700"
+                />
+                {errors.name && (
+                  <p className="mt-1 text-xs text-red-600">{errors.name}</p>
+                )}
               </div>
 
-              {!loadingFilters && (
-                <div className="mt-4 space-y-6">
-                  {/* Competitions */}
-                  <Section
-                    title="Competitions"
-                    icon={<Star className="h-4 w-4 text-green-700" />}
-                    collapsed={compCollapsed}
-                    onToggle={() => setCompCollapsed((v) => !v)}
-                    actions={
-                      <>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            selectTop10Competitions();
-                          }}
-                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                        >
-                          <Star className="h-3 w-3" /> Top 10
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            selectAllCompetitions();
-                          }}
-                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                        >
-                          <CheckSquare className="h-3 w-3" /> Select All
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            clearCompetitions();
-                          }}
-                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                          Clear All
-                        </button>
-                      </>
-                    }
-                  >
-                    {/* search */}
-                    <div className="mb-3 relative" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex items-center gap-2 border rounded-md bg-white px-2 py-1">
-                        <Search className="h-4 w-4 text-gray-500" />
-                        <input
-                          ref={compSearchRef}
-                          type="text"
-                          value={compSearch}
-                          onChange={(e) => setCompSearch(e.target.value)}
-                          onFocus={() => setCompSugOpen(compSug.length > 0)}
-                          onKeyDown={handleCompSearchKeyDown}
-                          placeholder="Search country or competition…"
-                          className="w-full outline-none text-sm"
-                        />
-                      </div>
-                      {compSugOpen && compSug.length > 0 && (
-                        <div
-                          ref={compSugBoxRef}
-                          className="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-md border bg-white shadow"
-                        >
-                          {compSug.map((s, idx) => {
-                            const active = idx === compSugIndex;
-                            const checked = selectedCompetitionIds.includes(s.id);
-                            return (
-                              <button
-                                key={`${s.id}-${idx}`}
-                                type="button"
-                                onClick={() => {
-                                  toggleCompetition(s.id);
-                                  setCompSearch("");
-                                  setCompSug([]);
-                                  setCompSugOpen(false);
-                                }}
-                                className={classNames(
-                                  "w-full text-left px-2 py-1 flex items-center gap-2 text-sm",
-                                  active ? "bg-green-100" : "hover:bg-gray-50"
-                                )}
-                              >
-                                {s.logo_url && (
-                                  <img
-                                    src={s.logo_url}
-                                    alt={s.name}
-                                    className="w-4 h-4 object-contain"
-                                  />
-                                )}
-                                <span className="flex-1">{s.label}</span>
-                                {checked && (
-                                  <span className="text-green-700 text-xs font-semibold">
-                                    selected
-                                  </span>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-
-                    <SelectedChips
-                      title="Chosen competitions"
-                      items={selectedCompetitionIds}
-                      onClear={clearCompetitions}
-                      getLabel={(id) => compIdToLabel[id] || `Competition ${id}`}
-                      onRemoveItem={(id) =>
-                        setSelectedCompetitionIds((prev) =>
-                          prev.filter((x) => x !== id)
-                        )
-                      }
-                      hoverClose
-                    />
-                    <div className="max-h-72 overflow-y-auto pr-2">
-                      {Object.entries(groupedCompetitions)
-                        .sort(([a], [b]) => a.localeCompare(b))
-                        .map(([country, comps]) => (
-                          <div key={country} className="mb-2">
-                            <button
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                toggleCountry(country);
-                              }}
-                              type="button"
-                              className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
-                            >
-                              <div className="flex items-center gap-2">
-                                {comps?.[0]?.flag_url && (
-                                  <img
-                                    src={comps[0].flag_url}
-                                    alt={country}
-                                    className="w-6 h-4 object-cover rounded"
-                                  />
-                                )}
-                                <span>{country}</span>
-                                <span className="text-xs text-gray-500">
-                                  ({comps.length})
-                                </span>
-                              </div>
-                              <span className="text-sm text-gray-600">
-                                {expandedCountries[country] ? "▲" : "▼"}
-                              </span>
-                            </button>
-
-                            {expandedCountries[country] && (
-                              <div className="ml-8 space-y-2 mt-2">
-                                {comps.map((c) => {
-                                  const cid = String(c.competition_id);
-                                  const checked =
-                                    selectedCompetitionIds.includes(cid);
-                                  return (
-                                    <label
-                                      key={cid}
-                                      className="flex items-center gap-2 cursor-pointer"
-                                      onClick={(e) => e.stopPropagation()}
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        checked={checked}
-                                        onChange={() => toggleCompetition(cid)}
-                                        className="rounded"
-                                      />
-                                      {c.logo_url && (
-                                        <img
-                                          src={c.logo_url}
-                                          alt={c.competition_name}
-                                          className="w-5 h-5 object-contain"
-                                        />
-                                      )}
-                                      <span className="text-sm">
-                                        {c.competition_name}
-                                      </span>
-                                      {c.tier && (
-                                        <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700">
-                                          Tier {c.tier}
-                                        </span>
-                                      )}
-                                    </label>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                    </div>
-                  </Section>
-
-                  {/* Seasons */}
-                  <Section
-                    title="Seasons"
-                    icon={<CalendarClock className="h-4 w-4 text-green-700" />}
-                    collapsed={seasonsCollapsed}
-                    onToggle={() => setSeasonsCollapsed((v) => !v)}
-                    actions={
-                      <>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            handleLast5Seasons();
-                          }}
-                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                        >
-                          <CalendarClock className="h-3 w-3" /> Last 5
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            selectAllSeasons();
-                          }}
-                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                        >
-                          <CheckSquare className="h-3 w-3" /> Select All
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            clearSeasons();
-                          }}
-                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                        >
-                          <Trash2 className="h-3 w-3" /> Clear All
-                        </button>
-                      </>
-                    }
-                  >
-                    <SelectedChips
-                      title="Chosen seasons"
-                      items={selectedSeasons}
-                      onClear={clearSeasons}
-                    />
-                    <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-2">
-                      {allSeasons.map((season) => (
-                        <button
-                          key={season}
-                          type="button"
-                          onClick={() =>
-                            setSelectedSeasons((prev) =>
-                              prev.includes(season)
-                                ? prev.filter((s) => s !== season)
-                                : [...prev, season]
-                            )
-                          }
-                          className={classNames(
-                            "px-2 py-1 text-sm rounded-md border",
-                            selectedSeasons.includes(season)
-                              ? "bg-green-100 border-green-500 text-green-700"
-                              : "bg-white hover:bg-gray-50"
-                          )}
-                        >
-                          {season}
-                        </button>
-                      ))}
-                    </div>
-                  </Section>
-
-                  {/* Minimum Market Value */}
-                  <Section
-                    title="Minimum Market Value (€)"
-                    icon={<Star className="h-4 w-4 text-green-700" />}
-                    collapsed={mvCollapsed}
-                    onToggle={() => setMvCollapsed((v) => !v)}
-                  >
-                    <div className="flex flex-col gap-3">
-                      <div className="flex items-center gap-3">
-                        <input
-                          type="number"
-                          value={minMarketValue}
-                          onChange={(e) =>
-                            setMinMarketValue(parseInt(e.target.value) || 0)
-                          }
-                          min="0"
-                          step="100000"
-                          className="w-40 border rounded-md px-2 py-1"
-                        />
-                        <div className="text-sm text-gray-600">
-                          €{new Intl.NumberFormat("en-US", {
-                            maximumFractionDigits: 0,
-                          }).format(Number(minMarketValue || 0))}
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <PresetButton onClick={() => setMinMarketValue(0)} title="Clear" active={minMarketValue === 0}>
-                          <Trash2 size={14} /> Clear
-                        </PresetButton>
-                        {[100000, 500000, 1000000, 5000000, 10000000, 25000000, 50000000].map(
-                          (v) => (
-                            <PresetButton
-                              key={v}
-                              onClick={() => setMinMarketValue(v)}
-                              active={minMarketValue === v}
-                            >
-                              <Star size={14} /> {v >= 1000000 ? `${v / 1000000}M €` : `${v / 1000}K €`}
-                            </PresetButton>
-                          )
-                        )}
-                      </div>
-                    </div>
-                  </Section>
-
-                  {/* Counts summary */}
-                  <div className="bg-yellow-50 rounded-lg p-3">
-                    <div className="flex items-center justify-between text-sm">
-                      <div className="text-yellow-800 font-semibold">
-                        {loadingCounts ? "—" : (poolCount * 5).toLocaleString()}
-                      </div>
-                      <div className="text-yellow-700">Potential Points</div>
-                      <div className="text-yellow-800 font-semibold">
-                        {loadingCounts ? "—" : poolCount} / {loadingCounts ? "—" : totalCount}
-                      </div>
-                      <div className="text-yellow-700">Player Pool</div>
-                    </div>
+              {/* Difficulty Filters (same as GamePage) */}
+              <div className="rounded-xl shadow-sm border bg-green-50/60 p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-green-900 font-semibold">
+                      Difficulty Filters
+                    </span>
                   </div>
                 </div>
-              )}
-            </div>
 
-            {/* Invites */}
-            <div>
-              <label className="text-sm text-gray-700 font-medium">Add Participants by Email</label>
-              <div className="flex gap-2 mt-1">
-                <input
-                  className="flex-1 border rounded px-3 py-2"
-                  placeholder="Search email…"
-                  value={searchEmail}
-                  onChange={(e) => setSearchEmail(e.target.value)}
-                />
-                <button
-                  type="button"
-                  className="px-3 py-2 rounded bg-gray-100 text-gray-700"
-                  disabled
-                >
-                  Search
-                </button>
-              </div>
-              {!!emailResults.length && (
-                <ul className="border rounded mt-2 max-h-40 overflow-auto">
-                  {emailResults.map((u) => (
-                    <li
-                      key={u.id}
-                      onClick={() => addInvite(u)}
-                      className="px-3 py-2 hover:bg-gray-50 cursor-pointer"
+                {!loadingFilters && (
+                  <div className="mt-4 space-y-6">
+                    {/* Competitions */}
+                    <Section
+                      title="Competitions"
+                      icon={<Star className="h-4 w-4 text-green-700" />}
+                      collapsed={compCollapsed}
+                      onToggle={() => setCompCollapsed((v) => !v)}
+                      actions={
+                        <>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              selectTop10Competitions();
+                            }}
+                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                          >
+                            <Star className="h-3 w-3" /> Top 10
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              selectAllCompetitions();
+                            }}
+                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                          >
+                            <CheckSquare className="h-3 w-3" /> Select All
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              clearCompetitions();
+                            }}
+                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            Clear All
+                          </button>
+                        </>
+                      }
                     >
-                      <div className="font-medium">{u.full_name || "Unknown"}</div>
-                      <div className="text-xs text-gray-500">{u.email}</div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {!!invites.length && (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {invites.map((i) => (
-                    <span
-                      key={i.id}
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-100 text-green-800 text-sm"
-                    >
-                      {i.full_name || i.email}
-                      <button
-                        onClick={() => removeInvite(i.id)}
-                        className="ml-1 text-green-900 hover:opacity-70"
-                        type="button"
+                      {/* search */}
+                      <div
+                        className="mb-3 relative"
+                        onClick={(e) => e.stopPropagation()}
                       >
-                        ×
+                        <div className="flex items-center gap-2 border rounded-md bg-white px-2 py-1">
+                          <Search className="h-4 w-4 text-gray-500" />
+                          <input
+                            ref={compSearchRef}
+                            type="text"
+                            value={compSearch}
+                            onChange={(e) => setCompSearch(e.target.value)}
+                            onFocus={() => setCompSugOpen(compSug.length > 0)}
+                            onKeyDown={handleCompSearchKeyDown}
+                            placeholder="Search country or competition…"
+                            className="w-full outline-none text-sm"
+                          />
+                        </div>
+                        {compSugOpen && compSug.length > 0 && (
+                          <div
+                            ref={compSugBoxRef}
+                            className="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-md border bg-white shadow"
+                          >
+                            {compSug.map((s, idx) => {
+                              const active = idx === compSugIndex;
+                              const checked =
+                                selectedCompetitionIds.includes(s.id);
+                              return (
+                                <button
+                                  key={`${s.id}-${idx}`}
+                                  type="button"
+                                  onClick={() => {
+                                    toggleCompetition(s.id);
+                                    setCompSearch("");
+                                    setCompSug([]);
+                                    setCompSugOpen(false);
+                                  }}
+                                  className={classNames(
+                                    "w-full text-left px-2 py-1 flex items-center gap-2 text-sm",
+                                    active ? "bg-green-100" : "hover:bg-gray-50"
+                                  )}
+                                >
+                                  {s.logo_url && (
+                                    <img
+                                      src={s.logo_url}
+                                      alt={s.name}
+                                      className="w-4 h-4 object-contain"
+                                    />
+                                  )}
+                                  <span className="flex-1">{s.label}</span>
+                                  {checked && (
+                                    <span className="text-green-700 text-xs font-semibold">
+                                      selected
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      <SelectedChips
+                        title="Chosen competitions"
+                        items={selectedCompetitionIds}
+                        onClear={clearCompetitions}
+                        getLabel={(id) =>
+                          compIdToLabel[id] || `Competition ${id}`
+                        }
+                        onRemoveItem={(id) =>
+                          setSelectedCompetitionIds((prev) =>
+                            prev.filter((x) => x !== id)
+                          )
+                        }
+                        hoverClose
+                      />
+                      <div className="max-h-72 overflow-y-auto pr-2">
+                        {Object.entries(groupedCompetitions)
+                          .sort(([a], [b]) => a.localeCompare(b))
+                          .map(([country, comps]) => (
+                            <div key={country} className="mb-2">
+                              <button
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  toggleCountry(country);
+                                }}
+                                type="button"
+                                className="w-full flex items-center justify-between p-2 hover:bg-green-50 rounded"
+                              >
+                                <div className="flex items-center gap-2">
+                                  {comps?.[0]?.flag_url && (
+                                    <img
+                                      src={comps[0].flag_url}
+                                      alt={country}
+                                      className="w-6 h-4 object-cover rounded"
+                                    />
+                                  )}
+                                  <span>{country}</span>
+                                  <span className="text-xs text-gray-500">
+                                    ({comps.length})
+                                  </span>
+                                </div>
+                                <span className="text-sm text-gray-600">
+                                  {expandedCountries[country] ? "▲" : "▼"}
+                                </span>
+                              </button>
+
+                              {expandedCountries[country] && (
+                                <div className="ml-8 space-y-2 mt-2">
+                                  {comps.map((c) => {
+                                    const cid = String(c.competition_id);
+                                    const checked =
+                                      selectedCompetitionIds.includes(cid);
+                                    return (
+                                      <label
+                                        key={cid}
+                                        className="flex items-center gap-2 cursor-pointer"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          checked={checked}
+                                          onChange={() =>
+                                            toggleCompetition(cid)
+                                          }
+                                          className="rounded"
+                                        />
+                                        {c.logo_url && (
+                                          <img
+                                            src={c.logo_url}
+                                            alt={c.competition_name}
+                                            className="w-5 h-5 object-contain"
+                                          />
+                                        )}
+                                        <span className="text-sm">
+                                          {c.competition_name}
+                                        </span>
+                                        {c.tier && (
+                                          <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700">
+                                            Tier {c.tier}
+                                          </span>
+                                        )}
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                      </div>
+                    </Section>
+
+                    {/* Seasons */}
+                    <Section
+                      title="Seasons"
+                      icon={<CalendarClock className="h-4 w-4 text-green-700" />}
+                      collapsed={seasonsCollapsed}
+                      onToggle={() => setSeasonsCollapsed((v) => !v)}
+                      actions={
+                        <>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              handleLast5Seasons();
+                            }}
+                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                          >
+                            <CalendarClock className="h-3 w-3" /> Last 5
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              selectAllSeasons();
+                            }}
+                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                          >
+                            <CheckSquare className="h-3 w-3" /> Select All
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              clearSeasons();
+                            }}
+                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            Clear All
+                          </button>
+                        </>
+                      }
+                    >
+                      <SelectedChips
+                        items={selectedSeasons}
+                        onClear={clearSeasons}
+                        onRemoveItem={(season) =>
+                          setSelectedSeasons((prev) =>
+                            prev.filter((x) => x !== season)
+                          )
+                        }
+                        hoverClose
+                      />
+                      <div className="max-h-60 overflow-y-auto pr-2">
+                        {allSeasons.map((s) => {
+                          const checked = selectedSeasons.includes(s);
+                          return (
+                            <label
+                              key={s}
+                              className="flex items-center gap-2 cursor-pointer"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {
+                                  setSelectedSeasons((prev) =>
+                                    prev.includes(s)
+                                      ? prev.filter((x) => x !== s)
+                                      : [...prev, s]
+                                  );
+                                }}
+                                className="rounded"
+                              />
+                              <span className="text-sm">{s}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </Section>
+
+                    {/* Minimum Market Value */}
+                    <Section
+                      title="Minimum Market Value (€)"
+                      icon={<Star className="h-4 w-4 text-green-700" />}
+                      collapsed={mvCollapsed}
+                      onToggle={() => setMvCollapsed((v) => !v)}
+                      actions={
+                        <>
+                          {[0, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000]
+                            .concat([25_000_000, 50_000_000])
+                            .map((v) => (
+                              <PresetButton
+                                key={v}
+                                onClick={() => setMinMarketValue(v)}
+                                active={minMarketValue === v}
+                              >
+                                <Star size={14} />{" "}
+                                {v >= 1_000_000
+                                  ? `${v / 1_000_000}M €`
+                                  : `${v / 1_000}K €`}
+                              </PresetButton>
+                            ))}
+                        </>
+                      }
+                    >
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min={0}
+                          step={100000}
+                          value={minMarketValue}
+                          onChange={(e) =>
+                            setMinMarketValue(Math.max(0, Number(e.target.value)))
+                          }
+                          className="w-44 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-700"
+                        />
+                      </div>
+                      <div className="mt-3 text-xs text-gray-600">
+                        {loadingCounts
+                          ? "Calculating player pool…"
+                          : `Player pool: ${poolCount} of ${totalCount} (${(
+                              poolCount * 5
+                            ).toLocaleString()} potential points)`}
+                      </div>
+                    </Section>
+                  </div>
+                )}
+              </div>
+
+              {/* Invites */}
+              <div className="rounded-xl shadow-sm border bg-white p-4">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Invite users (by email)
+                </label>
+
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={searchEmail}
+                    onChange={(e) => setSearchEmail(e.target.value)}
+                    placeholder="Type an email to search…"
+                    className="flex-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-700"
+                  />
+                </div>
+
+                {/* search results */}
+                {emailResults.length > 0 && (
+                  <div className="mt-2 border rounded-md">
+                    {emailResults.map((u) => (
+                      <button
+                        key={u.id}
+                        type="button"
+                        onClick={() => addInvite(u)}
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
+                      >
+                        {u.full_name ? `${u.full_name} — ${u.email}` : u.email}
                       </button>
-                    </span>
-                  ))}
+                    ))}
+                  </div>
+                )}
+
+                {/* Selected invites as chips */}
+                {invites.length > 0 && (
+                  <div className="mt-3">
+                    <div className="text-xs text-gray-600 mb-1">Invited</div>
+                    <div className="flex flex-wrap gap-2">
+                      {invites.map((u) => (
+                        <span
+                          key={u.id}
+                          className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-800"
+                        >
+                          {u.full_name || u.email}
+                          <button
+                            type="button"
+                            className="ml-1 text-gray-500 hover:text-red-600"
+                            title="Remove"
+                            onClick={() => removeInvite(u.id)}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Round time */}
+              <div className="rounded-xl shadow-sm border bg-white p-4">
+                <label className="block text-sm font-semibold text-gray-700">
+                  Round Time Limit (minutes)
+                </label>
+                <input
+                  type="number"
+                  min={5}
+                  max={1440}
+                  step={5}
+                  value={roundTimeMinutes}
+                  onChange={(e) => setRoundTimeMinutes(e.target.value)}
+                  className="mt-1 w-44 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-700"
+                />
+                {errors.roundTimeMinutes && (
+                  <p className="mt-1 text-xs text-red-600">
+                    {errors.roundTimeMinutes}
+                  </p>
+                )}
+              </div>
+
+              {submitError && (
+                <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-800">
+                  {submitError}
                 </div>
               )}
-              <p className="mt-1 text-xs text-gray-500">
-                You are added automatically as a participant.
-              </p>
             </div>
 
-            {/* Round time limit */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700">
-                Round Time Limit (minutes)
-              </label>
-              <input
-                type="number"
-                min={5}
-                max={1440}
-                step={1}
-                value={roundTimeMinutes}
-                onChange={(e) => setRoundTimeMinutes(e.target.value)}
-                className="mt-1 w-40 rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none focus:ring-2 focus:ring-green-700"
-              />
-              {errors.roundTimeMinutes && (
-                <p className="mt-1 text-xs text-red-600">
-                  {errors.roundTimeMinutes}
-                </p>
-              )}
-            </div>
-
-            {/* Submit error */}
-            {submitError ? (
-              <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
-                {submitError}
-              </div>
-            ) : null}
-
-            {/* Actions */}
-            <div className="flex items-center justify-end gap-2">
+            {/* Fixed footer */}
+            <div className="border-t p-4 flex items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={onClose}
@@ -1241,18 +1481,24 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
 }
 
 /* ------------------------------------------------------------
-   Small shared UI pieces from GamePage
+   Small shared UI pieces copied/trimmed from GamePage
 ------------------------------------------------------------ */
 function Section({ title, icon, collapsed, onToggle, actions, children }) {
   return (
     <div className="rounded-lg border bg-white/60">
       <div className="flex items-center justify-between px-3 py-2">
-        <button type="button" onClick={onToggle} className="inline-flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="inline-flex items-center gap-2"
+        >
           {icon}
           <span className="font-medium text-green-900">{title}</span>
           <span className="ml-1 text-gray-600">{collapsed ? "▼" : "▲"}</span>
         </button>
-        <div className="hidden sm:flex items-center gap-2 flex-wrap">{actions}</div>
+        <div className="hidden sm:flex items-center gap-2 flex-wrap">
+          {actions}
+        </div>
       </div>
       {actions && (
         <div className="sm:hidden px-3 pb-2">
@@ -1264,7 +1510,14 @@ function Section({ title, icon, collapsed, onToggle, actions, children }) {
   );
 }
 
-function SelectedChips({ title, items, onClear, getLabel, onRemoveItem, hoverClose = false }) {
+function SelectedChips({
+  title,
+  items,
+  onClear,
+  getLabel,
+  onRemoveItem,
+  hoverClose = false,
+}) {
   if (!items?.length) return null;
   return (
     <div className="mb-2">
@@ -1342,8 +1595,9 @@ function normalizeSeasons(payload) {
   } else if (payload && typeof payload === "object") {
     const collected = [];
     Object.values(payload).forEach((v) => {
-      if (Array.isArray(v)) collected.push(...v);
-      else if (typeof v === "string" || typeof v === "number") collected.push(v);
+      if (Array.isArray(v)) collected.push(v);
+      else if (typeof v === "string" || typeof v === "number")
+        collected.push(v);
     });
     raw = collected.length ? collected : [];
   }
@@ -1351,4 +1605,12 @@ function normalizeSeasons(payload) {
   const uniq = Array.from(new Set(raw.map(String)));
   uniq.sort((a, b) => String(b).localeCompare(String(a)));
   return uniq;
+}
+
+function fmtCurrency(n) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "EUR",
+    maximumFractionDigits: 0,
+  }).format(Number(n || 0));
 }
