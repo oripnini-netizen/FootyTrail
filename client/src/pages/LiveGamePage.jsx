@@ -388,26 +388,8 @@ export default function LiveGamePage() {
   // NEW: helper to write elimination entry and try to advance the tournament
   const writeElimEntryAndAdvance = async (won, pts) => {
     if (!elimination?.roundId || !elimination?.tournamentId || !user?.id) return;
-    try {
-      // Insert the round entry (game_record_id can be NULL)
-      const { error: insErr } = await supabase
-        .from('elimination_round_entries')
-        .insert([
-          {
-            round_id: elimination.roundId,
-            user_id: user.id,
-            points_earned: won ? Math.max(0, Number(pts) || 0) : 0,
-            // finished_at defaults to now() on the DB
-          },
-        ]);
-      if (insErr) {
-        console.error('[elim] insert elimination_round_entries error:', insErr);
-      }
-    } catch (e) {
-      console.error('[elim] insert elimination_round_entries exception:', e);
-    }
-
-    // Try to advance the tournament (policy-safe RPC)
+    // The entry is already written by the atomic RPC (play_elimination_round).
+    // Here we only (idempotently) try to advance the tournament.
     try {
       const { error: rpcErr } = await supabase.rpc('advance_elimination_tournament', {
         p_tournament_id: elimination.tournamentId,
@@ -499,6 +481,30 @@ export default function LiveGamePage() {
         // NOTE: elimination context intentionally not sent here to avoid impacting existing backend;
         // front-end passes it to PostGame via navigation.state only.
       };
+
+      // If this is an elimination round, use the atomic RPC that writes both the game and the round entry
+      if (elimination?.roundId && elimination?.tournamentId && user?.id) {
+        const { data, error } = await supabase.rpc('play_elimination_round', {
+          p_round_id: elimination.roundId,
+          p_user_id: user.id,
+          p_game: {
+            won: gameStats.won,
+            points: gameStats.points,
+            potentialPoints: gameStats.potentialPoints,
+            timeTaken: gameStats.timeTaken,
+            guessesAttempted: gameStats.guessesAttempted,
+            hintsUsed: gameStats.hintsUsed,
+            isDaily: !!isDaily,
+            is_elimination_game: true,
+            playerData: { id: playerIdNumeric },
+          },
+        });
+        if (error) {
+          console.error('[play_elimination_round] error:', error);
+          return null;
+        }
+        return true;
+      }
 
       const body = {
         userId: user?.id || null,

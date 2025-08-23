@@ -11,7 +11,7 @@ export default function Layout({ children }) {
 
   return (
     <div className="min-h-screen bg-green-50/30">
-      <Navbar />
+      {shouldShowNavbar && <Navbar />}
       {/* Add a small top margin to content */}
       <div className="mt-4">
         {children}
