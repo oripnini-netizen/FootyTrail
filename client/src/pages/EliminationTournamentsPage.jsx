@@ -93,7 +93,7 @@ export default function EliminationTournamentsPage() {
 
   const handleOpenCreate = () => setShowCreateModal(true);
 
-  // Reload both lists (used on mount and after create)
+  // Reload both lists (used on mount and after create or advance)
   const reloadLists = async () => {
     if (!user?.id) {
       setLive([]);
@@ -110,7 +110,7 @@ export default function EliminationTournamentsPage() {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
         .select(
-          "id, name, status, created_at, round_time_limit_seconds, filters"
+          "id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id"
         )
         .eq("status", "live")
         .order("created_at", { ascending: false });
@@ -238,6 +238,7 @@ export default function EliminationTournamentsPage() {
                       key={t.id}
                       tournament={t}
                       compIdToLabel={compIdToLabel}
+                      onAdvanced={reloadLists}
                     />
                   ))}
                 </>
@@ -273,6 +274,7 @@ export default function EliminationTournamentsPage() {
                       key={t.id}
                       tournament={t}
                       compIdToLabel={compIdToLabel}
+                      onAdvanced={reloadLists}
                     />
                   ))}
                 </>
@@ -349,7 +351,7 @@ function Countdown({ endsAt }) {
   return <span>{left}</span>;
 }
 
-function TournamentCard({ tournament, compIdToLabel }) {
+function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
   const navigate = useNavigate();
   const createdAt = new Date(tournament.created_at);
   const dateStr = createdAt.toLocaleString();
@@ -359,9 +361,10 @@ function TournamentCard({ tournament, compIdToLabel }) {
   );
 
   const [participants, setParticipants] = useState([]);
-  const [activeRoundEndsAt, setActiveRoundEndsAt] = useState(null);
+  const [activeRound, setActiveRound] = useState(null); // {id, ends_at, round_number, player_id}
+  const [playerMeta, setPlayerMeta] = useState(null); // row from players_in_seasons for active player
 
-  // Fetch participants + active round for countdown
+  // Fetch participants + active round for countdown AND player_id
   useEffect(() => {
     let cancelled = false;
 
@@ -388,19 +391,19 @@ function TournamentCard({ tournament, compIdToLabel }) {
       }
 
       try {
-        // current active round
+        // current active round (needs player_id now)
         const { data: round } = await supabase
           .from("elimination_rounds")
-          .select("id, status, ends_at, round_number")
+          .select("id, ends_at, round_number, player_id")
           .eq("tournament_id", tournament.id)
-          .in("status", ["active", "pending"])
+          .is("closed_at", null)
           .order("round_number", { ascending: false })
           .limit(1)
           .maybeSingle();
 
-        if (!cancelled) setActiveRoundEndsAt(round?.ends_at || null);
+        if (!cancelled) setActiveRound(round || null);
       } catch {
-        if (!cancelled) setActiveRoundEndsAt(null);
+        if (!cancelled) setActiveRound(null);
       }
     })();
 
@@ -408,6 +411,115 @@ function TournamentCard({ tournament, compIdToLabel }) {
       cancelled = true;
     };
   }, [tournament.id]);
+
+  // When activeRound.player_id changes, fetch player meta from players_in_seasons
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!activeRound?.player_id) {
+        if (alive) setPlayerMeta(null);
+        return;
+      }
+      // We just need one row for the player; any season suffices for bio/photo
+      const { data, error } = await supabase
+        .from("players_in_seasons")
+        .select(
+          "player_id, player_name, player_position, player_dob_age, player_nationality, player_photo"
+        )
+        .eq("player_id", activeRound.player_id)
+        .limit(1)
+        .maybeSingle();
+
+      if (!alive) return;
+      if (error) {
+        setPlayerMeta(null);
+      } else {
+        setPlayerMeta(data || null);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [activeRound?.player_id]);
+
+  // Auto-advance: when time passes and every 30s as safety
+  useEffect(() => {
+    if (!isLive) return;
+
+    let timeoutId = null;
+    let intervalId = null;
+
+    const scheduleTimeout = () => {
+      if (!activeRound?.ends_at) return;
+      const ends = new Date(activeRound.ends_at).getTime();
+      const now = Date.now();
+      const ms = ends - now;
+      if (ms <= 0) {
+        // already past, advance now
+        advanceNow();
+      } else {
+        timeoutId = setTimeout(advanceNow, ms + 250); // small buffer
+      }
+    };
+
+    // Safety polling every 30s (in case someone finished early)
+    intervalId = setInterval(() => {
+      advanceNow(true); // silent on noop
+    }, 30000);
+
+    scheduleTimeout();
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (intervalId) clearInterval(intervalId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLive, activeRound?.id, activeRound?.ends_at]);
+
+  const advanceNow = async (silent = false) => {
+    try {
+      const { data, error } = await supabase.rpc(
+        "advance_elimination_tournament",
+        { p_tournament_id: tournament.id }
+      );
+      if (error) {
+        if (!silent) {
+          // eslint-disable-next-line no-console
+          console.error("advance RPC error", error);
+        }
+        return;
+      }
+      const action = data?.action;
+      if (action && action !== "noop") {
+        // tournament advanced (either finished or new round) → tell parent to refresh
+        onAdvanced?.();
+      } else {
+        // even if noop, refetch active round to keep countdown honest
+        await refreshActiveRound();
+      }
+    } catch (e) {
+      if (!silent) {
+        // eslint-disable-next-line no-console
+        console.error("advance exception", e);
+      }
+    }
+  };
+
+  const refreshActiveRound = async () => {
+    try {
+      const { data: round } = await supabase
+        .from("elimination_rounds")
+        .select("id, ends_at, round_number, player_id")
+        .eq("tournament_id", tournament.id)
+        .is("closed_at", null)
+        .order("round_number", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      setActiveRound(round || null);
+    } catch {
+      // ignore
+    }
+  };
 
   // Build filter chips grouped under headings
   const { compChips, seasonChips, mvChip } = useMemo(() => {
@@ -430,6 +542,34 @@ function TournamentCard({ tournament, compIdToLabel }) {
     return { compChips, seasonChips, mvChip };
   }, [tournament.filters, compIdToLabel]);
 
+  const handlePlayRound = async () => {
+    // Ensure we have active round and player meta
+    if (!activeRound?.id || !activeRound?.round_number || !playerMeta) return;
+
+    const playerPayload = {
+      id: Number(playerMeta.player_id),
+      name: playerMeta.player_name || "",
+      age: playerMeta.player_dob_age || "", // raw age/dob text
+      nationality: playerMeta.player_nationality || "",
+      position: playerMeta.player_position || "",
+      photo: playerMeta.player_photo || "",
+    };
+
+    const elimination = {
+      tournamentId: tournament.id,
+      tournamentName: tournament.name,
+      roundId: activeRound.id,
+      roundNumber: activeRound.round_number,
+    };
+
+    navigate("/live", {
+      state: {
+        player: playerPayload,
+        elimination,
+      },
+    });
+  };
+
   return (
     <div className="rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md">
       <div className="flex items-start justify-between gap-3">
@@ -447,6 +587,13 @@ function TournamentCard({ tournament, compIdToLabel }) {
       </div>
 
       <p className="mt-2 text-xs text-gray-500">Created: {dateStr}</p>
+
+      {/* Winner (finished) */}
+      {!isLive && tournament.winner_user_id && (
+        <div className="mt-2 text-xs font-medium text-green-800">
+          Winner: <WinnerName userId={tournament.winner_user_id} />
+        </div>
+      )}
 
       {/* Difficulty Filters as grouped chips */}
       <div className="mt-3">
@@ -531,20 +678,45 @@ function TournamentCard({ tournament, compIdToLabel }) {
         </div>
       </div>
 
-      {/* Countdown */}
+      {/* Current round & countdown */}
       {isLive && (
-        <div className="mt-3">
+        <div className="mt-3 space-y-1.5">
           <div className="text-xs text-gray-600">
-            Round ends in:{" "}
+            Round {activeRound?.round_number ?? "—"} ends in:{" "}
             <span className="font-semibold">
-              <Countdown endsAt={activeRoundEndsAt} />
+              <Countdown endsAt={activeRound?.ends_at || null} />
             </span>
           </div>
           {timeLimitMin ? (
-            <div className="text-[11px] text-gray-500 mt-0.5">
+            <div className="text-[11px] text-gray-500">
               Round limit: {timeLimitMin} min
             </div>
           ) : null}
+
+          {/* Small player preview (optional) */}
+          {playerMeta && (
+            <div className="mt-2 flex items-center gap-2">
+              {playerMeta.player_photo ? (
+                <img
+                  src={playerMeta.player_photo}
+                  alt={playerMeta.player_name || "Player"}
+                  className="h-8 w-8 rounded object-cover"
+                />
+              ) : (
+                <div className="h-8 w-8 rounded bg-gray-200" />
+              )}
+              <div className="text-xs text-gray-700">
+                <div className="font-medium">
+                  Current Round Player (hidden in-game)
+                </div>
+                <div className="text-[11px] text-gray-500">
+                  {playerMeta.player_name || "—"} •{" "}
+                  {playerMeta.player_position || "?"} •{" "}
+                  {playerMeta.player_nationality || "?"}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -552,11 +724,14 @@ function TournamentCard({ tournament, compIdToLabel }) {
         {isLive && (
           <button
             type="button"
-            className="rounded-lg border border-green-600 px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-50"
-            onClick={() => navigate("/live")}
-            title="Play 1st Round"
+            className="rounded-lg border border-green-600 px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-50 disabled:opacity-60"
+            onClick={handlePlayRound}
+            title={
+              activeRound?.round_number === 1 ? "Play 1st Round" : "Play Round"
+            }
+            disabled={!activeRound?.id || !playerMeta}
           >
-            Play 1st Round
+            {activeRound?.round_number === 1 ? "Play 1st Round" : "Play Round"}
           </button>
         )}
         <button
@@ -569,6 +744,27 @@ function TournamentCard({ tournament, compIdToLabel }) {
       </div>
     </div>
   );
+}
+
+function WinnerName({ userId }) {
+  const [name, setName] = useState("");
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      if (!userId) return;
+      const { data } = await supabase
+        .from("users")
+        .select("id, full_name, email")
+        .eq("id", userId)
+        .limit(1)
+        .maybeSingle();
+      if (active) setName(data?.full_name || data?.email || "—");
+    })();
+    return () => {
+      active = false;
+    };
+  }, [userId]);
+  return <>{name || "—"}</>;
 }
 
 function SkeletonCard() {
@@ -983,7 +1179,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
         window.dispatchEvent(new Event("elimination-notifications-new"));
       }
 
-      // Create Round 1 immediately with the random player
+      // Create Round 1 immediately with the random player (schema-correct)
       const now = new Date();
       const endsAt = new Date(
         now.getTime() + Math.floor(Number(roundTimeMinutes)) * 60 * 1000
@@ -992,10 +1188,10 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
         {
           tournament_id: tournament.id,
           round_number: 1,
-          status: "active",
-          mystery_player_id: randomPlayer.id,
+          player_id: randomPlayer.id,
           started_at: now.toISOString(),
           ends_at: endsAt.toISOString(),
+          // closed_at null by default
         },
       ]);
 
@@ -1542,7 +1738,7 @@ function DifficultyFilters(props) {
                                 {c.competition_name}
                               </span>
                               {c.tier && (
-                                <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700">
+                                <span className="ml-2 text:[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700">
                                   Tier {c.tier}
                                 </span>
                               )}

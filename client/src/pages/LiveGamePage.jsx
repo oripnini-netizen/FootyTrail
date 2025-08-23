@@ -72,6 +72,14 @@ export default function LiveGamePage() {
       }
     : null;
 
+  // ⬇️ NEW: optional elimination tournament context (non-breaking)
+  const elimination = location.state?.elimination || null; // { tournamentId, tournamentName, roundId, roundNumber }
+  const roundTitle = elimination
+    ? `${elimination.tournamentName || 'Elimination Tournament'} — Round ${elimination.roundNumber ?? 1}`
+    : isDaily
+      ? 'Daily Challenge'
+      : 'Regular Round';
+
   // Filters passed only for PostGame
   const filters = location.state?.filters || { potentialPoints: 0 };
 
@@ -87,8 +95,8 @@ export default function LiveGamePage() {
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
 
   // Floating timer visibility (mobile)
-  const [showFloatingTimer, setShowFloatingTimer] = useState(false);
   const timeCardRef = useRef(null);
+  const [showFloatingTimer, setShowFloatingTimer] = useState(false);
 
   // refs for auto-scrolling the highlighted suggestion into view
   const listRef = useRef(null);
@@ -193,6 +201,8 @@ export default function LiveGamePage() {
                   endedRef.current = true;
                   (async () => {
                     await saveGameRecord(false);
+                    // NEW: elimination entry + advance for timeout
+                    await writeElimEntryAndAdvance(false, 0);
                     const outroLine = await generateOutro(
                       false,
                       0,
@@ -208,6 +218,8 @@ export default function LiveGamePage() {
                         isDaily,
                         potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
                         outroLine: outroLine || null,
+                        // ⬇️ pass through elimination context if present
+                        elimination,
                       },
                       replace: true,
                     });
@@ -373,6 +385,41 @@ export default function LiveGamePage() {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // NEW: helper to write elimination entry and try to advance the tournament
+  const writeElimEntryAndAdvance = async (won, pts) => {
+    if (!elimination?.roundId || !elimination?.tournamentId || !user?.id) return;
+    try {
+      // Insert the round entry (game_record_id can be NULL)
+      const { error: insErr } = await supabase
+        .from('elimination_round_entries')
+        .insert([
+          {
+            round_id: elimination.roundId,
+            user_id: user.id,
+            points_earned: won ? Math.max(0, Number(pts) || 0) : 0,
+            // finished_at defaults to now() on the DB
+          },
+        ]);
+      if (insErr) {
+        console.error('[elim] insert elimination_round_entries error:', insErr);
+      }
+    } catch (e) {
+      console.error('[elim] insert elimination_round_entries exception:', e);
+    }
+
+    // Try to advance the tournament (policy-safe RPC)
+    try {
+      const { error: rpcErr } = await supabase.rpc('advance_elimination_tournament', {
+        p_tournament_id: elimination.tournamentId,
+      });
+      if (rpcErr) {
+        console.error('[elim] advance_elimination_tournament RPC error:', rpcErr);
+      }
+    } catch (e) {
+      console.error('[elim] advance_elimination_tournament RPC exception:', e);
+    }
+  };
+
   // Anti-cheat / tab leave → loss  (visibilitychange + window blur)
   useEffect(() => {
     const lose = () => {
@@ -381,6 +428,7 @@ export default function LiveGamePage() {
       clearInterval(timerRef.current);
       (async () => {
         await saveGameRecord(false);
+        await writeElimEntryAndAdvance(false, 0); // NEW
         const outroLine = await generateOutro(
           false,
           0,
@@ -396,6 +444,7 @@ export default function LiveGamePage() {
             isDaily,
             potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
             outroLine: outroLine || null,
+            elimination, // pass through if present
           },
           replace: true,
         });
@@ -446,6 +495,8 @@ export default function LiveGamePage() {
         guessesAttempted: 3 - guessesLeft + (won ? 1 : 0),
         hintsUsed: Object.values(usedHints).filter(Boolean).length,
         isDaily: !!isDaily,
+        // NOTE: elimination context intentionally not sent here to avoid impacting existing backend;
+        // front-end passes it to PostGame via navigation.state only.
       };
 
       const body = {
@@ -532,6 +583,8 @@ export default function LiveGamePage() {
       endedRef.current = true;
       clearInterval(timerRef.current);
       await saveGameRecord(true);
+      // NEW: write elimination entry + advance
+      await writeElimEntryAndAdvance(true, points);
 
       const elapsed = INITIAL_TIME - timeSec;
       const guessesUsed = 3 - guessesLeft + 1;
@@ -559,6 +612,7 @@ export default function LiveGamePage() {
           isDaily,
           potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
           outroLine: outroLine || null,
+          elimination, // pass through if present
         },
         replace: true,
       });
@@ -573,6 +627,8 @@ export default function LiveGamePage() {
       endedRef.current = true;
       clearInterval(timerRef.current);
       await saveGameRecord(false);
+      // NEW: write elimination entry + advance
+      await writeElimEntryAndAdvance(false, 0);
 
       const elapsed = INITIAL_TIME - timeSec;
       const outroLine = await generateOutro(false, 0, 3, elapsed);
@@ -598,6 +654,7 @@ export default function LiveGamePage() {
           isDaily,
           potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
           outroLine: outroLine || null,
+          elimination, // pass through if present
         },
         replace: true,
       });
@@ -640,11 +697,9 @@ export default function LiveGamePage() {
           <div className="flex items-center gap-3">
             <Trophy className="h-5 w-5 text-purple-600" />
             <div className="text-sm">
-              {isDaily ? (
-                <span className="font-semibold text-purple-700">Daily Challenge</span>
-              ) : (
-                <span className="text-gray-600">Regular Round</span>
-              )}
+              <span className={elimination ? 'font-semibold text-purple-700' : isDaily ? 'font-semibold text-purple-700' : 'text-gray-600'}>
+                {roundTitle}
+              </span>
               <div className="text-sm">
                 <span className="text-gray-900 text-base">
                   Potential: <span className="font-bold">{gameData.potentialPoints}</span>
@@ -689,11 +744,9 @@ export default function LiveGamePage() {
           <div className="flex items-center gap-3 justify-start md:order-1 mt-3 md:mt-0">
             <Trophy className="h-5 w-5 text-purple-600" />
             <div className="text-sm">
-              {isDaily ? (
-                <span className="font-semibold text-purple-700">Daily Challenge</span>
-              ) : (
-                <span className="text-gray-600">Regular Round</span>
-              )}
+              <span className={elimination ? 'font-semibold text-purple-700' : isDaily ? 'font-semibold text-purple-700' : 'text-gray-600'}>
+                {roundTitle}
+              </span>
               <div className="text-sm">
                 <span className="text-gray-900 text-base">
                   Potential: <span className="font-bold">{gameData.potentialPoints}</span>
@@ -816,6 +869,7 @@ export default function LiveGamePage() {
                   clearInterval(timerRef.current);
                   (async () => {
                     await saveGameRecord(false);
+                    await writeElimEntryAndAdvance(false, 0); // NEW
                     const outroLine = await generateOutro(
                       false,
                       0,
@@ -836,6 +890,7 @@ export default function LiveGamePage() {
                         isDaily,
                         potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
                         outroLine: outroLine || null,
+                        elimination, // pass through if present
                       },
                       replace: true,
                     });
