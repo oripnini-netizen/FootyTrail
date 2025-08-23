@@ -74,6 +74,8 @@ export default function PostGamePage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { didWin, player, stats, filters, isDaily } = location.state || {};
+  const elimination = location.state?.elimination || null;
+  const isElimination = !!elimination;
   const { user } = useAuth();
 
   const prevPotentialPoints =
@@ -551,6 +553,25 @@ export default function PostGamePage() {
   // Compute guesses used (fix: prefer history length when present; never negative)
   const guessesUsed = computeGuessesUsed(stats);
 
+  // Elimination banner line (overrides display only)
+  const eliminationBanner = (() => {
+    if (!isElimination) return '';
+    const pts = Number(stats?.pointsEarned ?? 0);
+    const sassy = [
+      `Let's see if ${pts} point${pts === 1 ? '' : 's'} is enough to keep you alive...`,
+      `Will ${pts} be your golden ticket to the next round — or your doom?`,
+      `Time to find out if ${pts} points means glory… or a very public elimination.`,
+    ];
+    return sassy[pts % sassy.length];
+  })();
+
+  const bannerText = isElimination
+    ? eliminationBanner
+    : (outroLine ||
+        (didWin
+          ? 'Great job! You guessed it!'
+          : `Not quite! The player was ${player?.name}`));
+
   return (
     <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
       <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
@@ -574,10 +595,7 @@ export default function PostGamePage() {
                 didWin ? 'text-green-700' : 'text-red-700'
               }`}
             >
-              {outroLine ||
-                (didWin
-                  ? 'Great job! You guessed it!'
-                  : `Not quite! The player was ${player?.name}`)}
+              {bannerText}
             </h2>
           </div>
 
@@ -645,46 +663,68 @@ export default function PostGamePage() {
           {/* Actions (hidden during image capture) */}
           <div ref={actionsRef} className="flex gap-3">
             {!isDaily && (
-              <>
-                <button
-                  onClick={() => {
-                    clearPostGameCache();
-                    navigate('/game');
-                  }}
-                  className="flex-none bg-gray-100 hover:bg-gray-200 p-2 rounded-lg"
-                  title="Back to Game Setup"
-                >
-                  <ArrowLeft className="h-5 w-5 text-gray-700" />
-                </button>
-                <button
-                  onClick={onShare}
-                  className="flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-3 rounded-lg flex items-center gap-2"
-                  title="Share to WhatsApp"
-                >
-                  <Share2 className="h-4 w-4" />
-                  Share
-                </button>
-                <button
-                  onClick={playAgainWithSameFilters}
-                  disabled={loading || gamesLeft <= 0}
-                  className={`flex-1 ${
-                    gamesLeft <= 0
-                      ? 'bg-gray-300 cursor-not-allowed'
-                      : 'bg-green-600 hover:bg-green-700'
-                  } text-white py-2 rounded-lg font-medium flex items-center justify-center`}
-                >
-                  {loading ? (
-                    'Loading...'
-                  ) : (
-                    <>
-                      Play Again (Same Filters){' '}
-                      <span className="ml-1 text-sm">
-                        {gamesLeft !== null ? `(${gamesLeft} left)` : ''}
-                      </span>
-                    </>
-                  )}
-                </button>
-              </>
+              isElimination ? (
+                <>
+                  <button
+                    onClick={onShare}
+                    className="flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-3 rounded-lg flex items-center gap-2"
+                    title="Share to WhatsApp"
+                  >
+                    <Share2 className="h-4 w-4" />
+                    Share
+                  </button>
+                  <button
+                    onClick={() => {
+                      clearPostGameCache();
+                      navigate('/elimination');
+                    }}
+                    className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg font-medium"
+                  >
+                    Back to Elimination
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => {
+                      clearPostGameCache();
+                      navigate('/game');
+                    }}
+                    className="flex-none bg-gray-100 hover:bg-gray-200 p-2 rounded-lg"
+                    title="Back to Game Setup"
+                  >
+                    <ArrowLeft className="h-5 w-5 text-gray-700" />
+                  </button>
+                  <button
+                    onClick={onShare}
+                    className="flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-3 rounded-lg flex items-center gap-2"
+                    title="Share to WhatsApp"
+                  >
+                    <Share2 className="h-4 w-4" />
+                    Share
+                  </button>
+                  <button
+                    onClick={playAgainWithSameFilters}
+                    disabled={loading || gamesLeft <= 0}
+                    className={`flex-1 ${
+                      gamesLeft <= 0
+                        ? 'bg-gray-300 cursor-not-allowed'
+                        : 'bg-green-600 hover:bg-green-700'
+                    } text-white py-2 rounded-lg font-medium flex items-center justify-center`}
+                  >
+                    {loading ? (
+                      'Loading...'
+                    ) : (
+                      <>
+                        Play Again (Same Filters){' '}
+                        <span className="ml-1 text-sm">
+                          {gamesLeft !== null ? `(${gamesLeft} left)` : ''}
+                        </span>
+                      </>
+                    )}
+                  </button>
+                </>
+              )
             )}
 
             {isDaily && (

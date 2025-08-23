@@ -397,7 +397,7 @@ function RoundPlayer({ playerId }) {
   );
 }
 
-function TournamentCard({ tournament, compIdToLabel }) {
+function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const userId = user?.id || null;
@@ -413,7 +413,7 @@ function TournamentCard({ tournament, compIdToLabel }) {
   const [rounds, setRounds] = useState([]); // [{id, round_number, started_at, ends_at, closed_at, player_id}]
   const [entriesByRound, setEntriesByRound] = useState({}); // { round_id : [{user_id, points_earned}] }
 
-  // Fetch participants + all rounds
+  // Fetch participants + all rounds (+ fill in any missing users from entries)
   useEffect(() => {
     let cancelled = false;
 
@@ -425,16 +425,16 @@ function TournamentCard({ tournament, compIdToLabel }) {
           .select("user_id, state")
           .eq("tournament_id", tournament.id);
 
-        const ids = (partRows || []).map((r) => r.user_id);
+        const idsFromParticipants = (partRows || []).map((r) => r.user_id);
+
         let userRows = [];
-        if (ids.length) {
+        if (idsFromParticipants.length) {
           const { data: usersRows } = await supabase
             .from("users")
             .select("id, full_name, email")
-            .in("id", ids);
+            .in("id", idsFromParticipants);
           userRows = usersRows || [];
         }
-        if (!cancelled) setParticipants(userRows);
 
         // rounds
         const { data: roundRows } = await supabase
@@ -443,18 +443,39 @@ function TournamentCard({ tournament, compIdToLabel }) {
           .eq("tournament_id", tournament.id)
           .order("round_number", { ascending: true });
 
-        if (!cancelled) setRounds(Array.isArray(roundRows) ? roundRows : []);
-
-        // entries per round (batched)
+        const roundsArr = Array.isArray(roundRows) ? roundRows : [];
         const entriesMap = {};
-        for (const r of roundRows || []) {
+
+        // entries per round (batched) + collect any extra user_ids
+        const extraUserIds = new Set();
+        for (const r of roundsArr) {
           const { data: ent } = await supabase
             .from("elimination_round_entries")
             .select("user_id, points_earned, finished_at")
             .eq("round_id", r.id);
-          entriesMap[r.id] = Array.isArray(ent) ? ent : [];
+          const e = Array.isArray(ent) ? ent : [];
+          entriesMap[r.id] = e;
+          for (const row of e) {
+            if (!idsFromParticipants.includes(row.user_id)) {
+              extraUserIds.add(row.user_id);
+            }
+          }
         }
-        if (!cancelled) setEntriesByRound(entriesMap);
+
+        // fetch any missing users referenced by entries (avoids GUID fallback)
+        if (extraUserIds.size) {
+          const { data: extraUsers } = await supabase
+            .from("users")
+            .select("id, full_name, email")
+            .in("id", Array.from(extraUserIds));
+          userRows = [...userRows, ...(extraUsers || [])];
+        }
+
+        if (!cancelled) {
+          setParticipants(userRows);
+          setRounds(roundsArr);
+          setEntriesByRound(entriesMap);
+        }
       } catch {
         if (!cancelled) {
           setParticipants([]);
@@ -527,7 +548,7 @@ function TournamentCard({ tournament, compIdToLabel }) {
         nationality: meta.player_nationality || "",
         position: meta.player_position || "",
         photo: meta.player_photo || "",
-        potentialPoints: 10000, // default; PostGame recalculates based on hints/time
+        potentialPoints: 10000,
         elimination: {
           tournamentId: tournament.id,
           tournamentName: tournament.name,
@@ -537,6 +558,73 @@ function TournamentCard({ tournament, compIdToLabel }) {
       },
     });
   };
+
+  const [/* internal: used by auto-finalizer */] = useState(null);
+
+  // Auto-finalization: when a round's time is up or all participants have played,
+  // call the finalize_round RPC to close the round and eliminate users. If more than
+  // one user remains, automatically create the next round by passing a new player id.
+  const finalizingRef = useRef(new Set());
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!Array.isArray(rounds) || rounds.length === 0) return;
+      if (!Array.isArray(participants) || participants.length === 0) return;
+
+      for (const r of rounds) {
+        const entries = entriesByRound[r.id] || [];
+        const everyonePlayed = entries.length >= participants.length;
+        const now = Date.now();
+        const timeUp = r.ends_at ? new Date(r.ends_at).getTime() <= now : false;
+        const shouldFinalize = !r.closed_at && (everyonePlayed || timeUp);
+
+        if (!shouldFinalize) continue;
+        if (finalizingRef.current.has(r.id)) continue;
+
+        finalizingRef.current.add(r.id);
+        try {
+          // 1) finalize (close + eliminate)
+          const { data: summary, error } = await supabase.rpc('finalize_round', {
+            p_round_id: r.id,
+            p_force: false,
+          });
+          if (error) throw error;
+
+          // 2) If tournament is not finished and we don't already have a later round,
+          // create the next round with a new random player.
+          const tournamentFinished = summary && summary.tournament_finished === true;
+          const laterRoundExists = rounds.some((x) => x.round_number > r.round_number);
+
+          if (!tournamentFinished && !laterRoundExists) {
+            const nextPlayer = await getRandomPlayer(
+              { ...(tournament.filters || {}), userId },
+              userId
+            );
+            if (nextPlayer?.id) {
+              const { error: err2 } = await supabase.rpc('finalize_round', {
+                p_round_id: r.id,
+                p_next_player_id: nextPlayer.id,
+                p_force: true,
+              });
+              if (err2) throw err2;
+            }
+          }
+
+          // reload lists/cards
+          if (onAdvanced) await onAdvanced();
+        } catch (e) {
+          // Silently ignore; UI will reflect actual DB state on next poll/refresh
+          console.error('[elim] auto-finalize error', e);
+        } finally {
+          finalizingRef.current.delete(r.id);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rounds, entriesByRound, participants, tournament.id, userId, onAdvanced]);
 
   return (
     <div className="rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md">
@@ -652,10 +740,18 @@ function TournamentCard({ tournament, compIdToLabel }) {
           <div className="text-sm text-gray-500">No rounds yet.</div>
         ) : (
           rounds.map((r) => {
-            const isActive = !r.closed_at;
             const entries = entriesFor(r.id);
             const playedUserIds = new Set(entries.map((e) => e.user_id));
             const notPlayed = participants.filter((p) => !playedUserIds.has(p.id));
+
+            // DERIVED active state to fix "still active" issues
+            const now = Date.now();
+            const endsAt = r.ends_at ? new Date(r.ends_at).getTime() : null;
+            const derivedActive =
+              !r.closed_at &&
+              (!!endsAt ? endsAt > now : true) &&
+              entries.length < participants.length;
+
             const mePlayed = userId ? playedUserIds.has(userId) : false;
 
             return (
@@ -665,17 +761,17 @@ function TournamentCard({ tournament, compIdToLabel }) {
                   <div
                     className={classNames(
                       "text-xs px-2 py-0.5 rounded-full",
-                      isActive
+                      derivedActive
                         ? "bg-emerald-100 text-emerald-700"
                         : "bg-gray-200 text-gray-700"
                     )}
                   >
-                    {isActive ? "Active" : "Finished"}
+                    {derivedActive ? "Active" : "Finished"}
                   </div>
                 </div>
 
                 <div className="mt-1 text-xs text-gray-600">
-                  {isActive ? (
+                  {derivedActive ? (
                     <>
                       Ends in:{" "}
                       <span className="font-semibold">
@@ -687,13 +783,17 @@ function TournamentCard({ tournament, compIdToLabel }) {
                     <>
                       Started: {r.started_at ? new Date(r.started_at).toLocaleString() : "—"}
                       {" • "}
-                      Ended: {r.closed_at ? new Date(r.closed_at).toLocaleString() : "—"}
+                      Ended: {r.closed_at
+                        ? new Date(r.closed_at).toLocaleString()
+                        : r.ends_at
+                        ? new Date(r.ends_at).toLocaleString()
+                        : "—"}
                     </>
                   )}
                 </div>
 
                 {/* Player details: ONLY show after the round is finished */}
-                {!isActive && r.player_id ? (
+                {!derivedActive && r.player_id ? (
                   <div className="mt-3">
                     <div className="text-xs font-semibold text-gray-700 mb-1">
                       Round Player
@@ -734,12 +834,14 @@ function TournamentCard({ tournament, compIdToLabel }) {
                     )}
                   </div>
 
-                  {/* Yet to play */}
-                  {isActive && notPlayed.length > 0 && (
-                    <div>
-                      <div className="text-xs font-semibold text-gray-700 mb-1">
-                        Yet to play ({notPlayed.length})
-                      </div>
+                  {/* Yet to play — always shown so all participants appear */}
+                  <div>
+                    <div className="text-xs font-semibold text-gray-700 mb-1">
+                      Yet to play ({notPlayed.length})
+                    </div>
+                    {notPlayed.length === 0 ? (
+                      <div className="text-xs text-gray-500">—</div>
+                    ) : (
                       <div className="flex flex-wrap gap-1.5">
                         {notPlayed.map((p) => (
                           <span
@@ -750,12 +852,12 @@ function TournamentCard({ tournament, compIdToLabel }) {
                           </span>
                         ))}
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
 
                 {/* Actions */}
-                {isLive && isActive && (
+                {isLive && derivedActive && (
                   <div className="mt-3 flex items-center justify-end">
                     <button
                       type="button"
@@ -821,10 +923,7 @@ function ErrorCard({ title, message }) {
 
 /* ------------------------------------------------------------
    CreateTournamentModal
-   - Difficulty Filters copied from GamePage (competitions, seasons, min MV)
-   - Invite UI copied from MyLeaguesPage
-   - Round time (5..1440)
-   - On submit: create tournament, participants, notifications, first round
+   (unchanged aside from previous fixes)
 ------------------------------------------------------------ */
 function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   const dialogRef = useRef(null);
