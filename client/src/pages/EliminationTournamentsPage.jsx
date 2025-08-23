@@ -214,7 +214,7 @@ export default function EliminationTournamentsPage() {
 
         {/* Content area */}
         <section
-          className="grid grid-cols-1 gap-4 sm:grid-cols-1 lg:grid-cols-2"
+          className="grid grid-cols-1 gap-4 sm:grid-cols-1 lg:grid-cols-1"
           aria-live="polite"
           aria-busy={activeTab === "live" ? loading.live : loading.finished}
         >
