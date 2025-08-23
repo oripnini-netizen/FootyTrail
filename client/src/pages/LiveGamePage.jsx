@@ -83,6 +83,9 @@ export default function LiveGamePage() {
   const [suggestions, setSuggestions] = useState([]);
   const [highlightIndex, setHighlightIndex] = useState(-1);
 
+  // NEW: loading flag for suggestions
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+
   // refs for auto-scrolling the highlighted suggestion into view
   const listRef = useRef(null);
   const itemRefs = useRef([]);
@@ -247,11 +250,17 @@ export default function LiveGamePage() {
       // Always coerce to string before trimming
       const raw = typeof guess === 'string' ? guess : String(guess ?? '');
       const q = raw.trim();
+
       if (!q) {
-        if (active) setSuggestions([]);
+        if (active) {
+          setSuggestions([]);
+          setIsLoadingSuggestions(false); // nothing to load
+        }
         return;
       }
+
       try {
+        if (active) setIsLoadingSuggestions(true);
         const res = await suggestNames(q, 50); // ask for more than 5
         if (!active) return;
 
@@ -295,6 +304,8 @@ export default function LiveGamePage() {
       } catch (e) {
         console.error('[suggestNames] failed:', e);
         if (active) setSuggestions([]);
+      } finally {
+        if (active) setIsLoadingSuggestions(false);
       }
     }, 200);
     return () => {
@@ -625,7 +636,7 @@ export default function LiveGamePage() {
             </div>
           </div>
 
-          {/* Left: Round type + Potential */}
+        {/* Left: Round type + Potential */}
           <div className="flex items-center gap-3 justify-start md:order-1 mt-3 md:mt-0">
             <Trophy className="h-5 w-5 text-purple-600" />
             <div className="text-sm">
@@ -683,30 +694,64 @@ export default function LiveGamePage() {
             }}
             className="space-y-4"
           >
-            <input
-              type="text"
-              value={guess}
-              onChange={(e) => {
-                setGuess(typeof e.target.value === 'string' ? e.target.value : String(e.target.value ?? ''));
-                setHighlightIndex(-1);
-              }}
-              onKeyDown={(e) => {
-                if (!suggestions.length) return;
-                if (e.key === 'ArrowDown') {
-                  e.preventDefault();
-                  setHighlightIndex((i) => (i + 1) % suggestions.length);
-                } else if (e.key === 'ArrowUp') {
-                  e.preventDefault();
-                  setHighlightIndex((i) => (i - 1 + suggestions.length) % suggestions.length);
-                } else if (e.key === 'Escape') {
-                  setSuggestions([]);
+            {/* INPUT + LOADING SPINNER */}
+            <div className="relative">
+              <input
+                type="text"
+                value={guess}
+                onChange={(e) => {
+                  setGuess(typeof e.target.value === 'string' ? e.target.value : String(e.target.value ?? ''));
                   setHighlightIndex(-1);
-                }
-              }}
-              placeholder="Type a player's name"
-              className="w-full px-4 py-3 rounded border"
-              autoFocus
-            />
+                }}
+                onKeyDown={(e) => {
+                  if (!suggestions.length) return;
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setHighlightIndex((i) => (i + 1) % suggestions.length);
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setHighlightIndex((i) => (i - 1 + suggestions.length) % suggestions.length);
+                  } else if (e.key === 'Escape') {
+                    setSuggestions([]);
+                    setHighlightIndex(-1);
+                  }
+                }}
+                placeholder="Type a player's name"
+                className="w-full px-4 pr-10 py-3 rounded border"
+                autoFocus
+                aria-busy={isLoadingSuggestions}
+                aria-describedby="name-suggest-loading"
+              />
+              {isLoadingSuggestions && (
+                <div
+                  id="name-suggest-loading"
+                  className="absolute inset-y-0 right-3 flex items-center"
+                  aria-hidden="true"
+                >
+                  {/* Simple Tailwind/inline SVG spinner */}
+                  <svg
+                    className="h-5 w-5 animate-spin text-gray-400"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                    />
+                  </svg>
+                </div>
+              )}
+            </div>
+
             <div className="flex gap-3">
               <button
                 type="submit"
