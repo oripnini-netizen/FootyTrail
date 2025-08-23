@@ -570,18 +570,63 @@ export default function LiveGamePage() {
         ⚠️ Don’t leave this page — leaving or switching windows will count as a loss.
       </div>
 
-      {/* Points Card */}
-      <div className="rounded-xl bg-white shadow p-6">
+      {/* MOBILE: split points info into 3 stacked cards */}
+      <div className="md:hidden space-y-3">
+        {/* 1) Game type & Potential points */}
+        <div className="rounded-xl bg-white shadow p-6">
+          <div className="flex items-center gap-3">
+            <Trophy className="h-5 w-5 text-purple-600" />
+            <div className="text-sm">
+              {isDaily ? (
+                <span className="font-semibold text-purple-700">Daily Challenge</span>
+              ) : (
+                <span className="text-gray-600">Regular Round</span>
+              )}
+              <div className="text-sm">
+                <span className="text-gray-900 text-base">
+                  Potential: <span className="font-bold">{gameData.potentialPoints}</span>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Sticky container keeps time/guesses and live points visible while scrolling */}
+        <div className="sticky top-2 z-30 space-y-3">
+          {/* 2) Time left & Guesses left */}
+          <div className="rounded-xl bg-white shadow p-6">
+            <div className="flex items-center justify-between">
+              <div className={classNames('flex items-center gap-3 text-2xl font-semibold', timeColorClass)}>
+                <AlarmClock className="h-6 w-6" />
+                {formatTime(timeSec)}
+              </div>
+              <div className="text-sm text-gray-600">
+                Guesses left: <span className="font-semibold">{guessesLeft}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* 3) Live points (Current points) */}
+          <div className="rounded-xl bg-white shadow p-6">
+            <div className="text-2xl font-extrabold text-amber-600 text-center">
+              Current points: <span>{points}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* DESKTOP: keep original single points card */}
+      <div className="hidden md:block rounded-xl bg-white shadow p-6">
         <div className="grid md:grid-cols-3 items-center">
-          {/* Center: Current points (gold) — FIRST on mobile */}
-          <div className="flex items-center justify-center order-1 md:order-2">
+          {/* Center: Current points (gold) */}
+          <div className="flex items-center justify-center md:order-2">
             <div className="text-2xl font-extrabold text-amber-600">
               Current points: <span>{points}</span>
             </div>
           </div>
 
-          {/* Left: Round type + Potential — SECOND on mobile */}
-          <div className="flex items-center gap-3 justify-start order-2 md:order-1 mt-3 md:mt-0">
+          {/* Left: Round type + Potential */}
+          <div className="flex items-center gap-3 justify-start md:order-1 mt-3 md:mt-0">
             <Trophy className="h-5 w-5 text-purple-600" />
             <div className="text-sm">
               {isDaily ? (
@@ -597,8 +642,8 @@ export default function LiveGamePage() {
             </div>
           </div>
 
-          {/* Right: timer + guesses — THIRD on mobile */}
-          <div className="flex flex-col items-end gap-1 order-3 md:order-3 mt-3 md:mt-0">
+          {/* Right: timer + guesses */}
+          <div className="flex flex-col items-end gap-1 md:order-3 mt-3 md:mt-0">
             <div className={classNames('flex items-center gap-3 text-2xl font-semibold', timeColorClass)}>
               <AlarmClock className="h-6 w-6" />
               {formatTime(timeSec)}

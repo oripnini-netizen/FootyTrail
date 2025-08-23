@@ -119,7 +119,7 @@ export default function AdminPage() {
   const [coverageCountryOpen, setCoverageCountryOpen] = useState({});
   const [coverageCompOpen, setCoverageCompOpen] = useState({}); // key: `${country}|${compId}`
 
-  // ---- NEW: competitions search / autocomplete ----
+  // ---- competitions search / autocomplete ----
   const [compSearch, setCompSearch] = useState('');
   const [showSuggest, setShowSuggest] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0); // keyboard highlight
@@ -127,11 +127,12 @@ export default function AdminPage() {
   const listRef = useRef(null);
   const itemRefs = useRef([]);
 
-  // ---- NEW: Usage stats card state ----
+  // ---- Usage stats card state ----
   const [usageCollapsed, setUsageCollapsed] = useState(false);
   const [usageLoading, setUsageLoading] = useState(true);
   const [usageError, setUsageError] = useState('');
   const [usersData, setUsersData] = useState([]); // raw rows from public.users
+  const [gameRecords, setGameRecords] = useState([]); // <-- NEW: raw rows from games_records
 
   // Close suggestions on outside click
   useEffect(() => {
@@ -409,31 +410,40 @@ export default function AdminPage() {
     setDailyChallenges(challenges || []);
   };
 
-  // ---- Load usage stats from public.users ----
+  // ---- Load usage stats: users and games_records (points_earned) ----
   useEffect(() => {
     (async () => {
       if (!isAdmin) return;
       setUsageLoading(true);
       setUsageError('');
       try {
-        // Only from public.users as requested. Selecting common fields; some may not exist in every setup.
-        const { data, error } = await supabase
+        // Users base data
+        const { data: users, error: usersErr } = await supabase
           .from('users')
-          .select('id, email, full_name, created_at, games_played, total_points, has_completed_onboarding, last_checked_notifications_date');
+          .select('id, email, full_name, created_at, has_completed_onboarding, last_checked_notifications_date');
 
-        if (error) throw error;
-        setUsersData(Array.isArray(data) ? data : []);
+        if (usersErr) throw usersErr;
+        setUsersData(Array.isArray(users) ? users : []);
+
+        // Per-game data used for usage aggregation
+        const { data: gr, error: grErr } = await supabase
+          .from('games_records')
+          .select('user_id, points_earned');
+
+        if (grErr) throw grErr;
+        setGameRecords(Array.isArray(gr) ? gr : []);
       } catch (e) {
         console.error('usage stats error:', e.message);
         setUsageError(e.message || 'Failed to load usage stats');
         setUsersData([]);
+        setGameRecords([]);
       } finally {
         setUsageLoading(false);
       }
     })();
   }, [isAdmin]);
 
-  // ---- Derive usage metrics ----
+  // ---- Derive usage metrics (aggregate from games_records.points_earned) ----
   const usage = useMemo(() => {
     const rows = usersData || [];
     const totalUsers = rows.length;
@@ -449,7 +459,19 @@ export default function AdminPage() {
       return d && d >= sevenDaysAgo;
     }).length;
 
-    const totalGames = rows.reduce((acc, r) => acc + (Number(r?.games_played || 0)), 0);
+    // Aggregate per-user from games_records
+    const perUser = new Map(); // user_id -> { games, points }
+    (gameRecords || []).forEach((gr) => {
+      const uid = gr?.user_id;
+      if (!uid) return;
+      const pts = Number(gr?.points_earned || 0) || 0;
+      const entry = perUser.get(uid) || { games: 0, points: 0 };
+      entry.games += 1;
+      entry.points += pts;
+      perUser.set(uid, entry);
+    });
+
+    const totalGames = (gameRecords || []).length;
     const avgGames = totalUsers ? totalGames / totalUsers : 0;
 
     // New users per day (last 14 days) – requires created_at
@@ -471,20 +493,23 @@ export default function AdminPage() {
       newUsersSeries = Object.entries(byDay).map(([date, value]) => ({ date, value }));
     }
 
-    // Top users by games_played
+    // Top users by total points (from games_records.points_earned)
     const topUsers = [...rows]
-      .sort((a, b) => Number(b?.games_played || 0) - Number(a?.games_played || 0))
-      .slice(0, 10)
-      .map((r) => ({
-        name: r?.full_name || r?.email || r?.id,
-        games: Number(r?.games_played || 0),
-        points: Number(r?.total_points || 0),
-      }));
+      .map((r) => {
+        const agg = perUser.get(r?.id) || { games: 0, points: 0 };
+        return {
+          name: r?.full_name || r?.email || r?.id,
+          games: agg.games,
+          points: agg.points,
+        };
+      })
+      .sort((a, b) => b.points - a.points)
+      .slice(0, 10);
 
-    // Buckets distribution for games_played
+    // Buckets distribution for games played (from aggregation)
     const buckets = { '0': 0, '1-5': 0, '6-20': 0, '21+': 0 };
     rows.forEach((r) => {
-      const g = Number(r?.games_played || 0);
+      const g = (perUser.get(r?.id)?.games) || 0;
       if (g === 0) buckets['0'] += 1;
       else if (g <= 5) buckets['1-5'] += 1;
       else if (g <= 20) buckets['6-20'] += 1;
@@ -504,7 +529,7 @@ export default function AdminPage() {
       topUsers,
       buckets,
     };
-  }, [usersData]);
+  }, [usersData, gameRecords]);
 
   if (loading) return <div className="p-8 text-center">Loading…</div>;
   if (!isAdmin) return <div className="p-8 text-center text-red-600">Access denied. Admins only.</div>;
@@ -513,7 +538,7 @@ export default function AdminPage() {
     <div className="max-w-3xl mx-auto px-4 py-8">
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.35 }}>
 
-        {/* ---------- NEW: App Usage Statistics Card ---------- */}
+        {/* ---------- App Usage Statistics Card ---------- */}
         <div className="rounded-xl shadow-lg border bg-white/70 mb-8">
           <div className="flex items-center justify-between px-4 py-3">
             <button
@@ -612,7 +637,7 @@ export default function AdminPage() {
                     </div>
                   </div>
 
-                  {/* Top users by games */}
+                  {/* Top users by games (table shows Games & Total Points) */}
                   <div className="rounded-lg border bg-white overflow-x-auto">
                     <table className="min-w-full text-sm">
                       <thead className="bg-green-100">
@@ -688,7 +713,7 @@ export default function AdminPage() {
                   </>
                 }
               >
-                {/* NEW: search bar + suggestions */}
+                {/* search bar + suggestions */}
                 <div ref={searchBoxRef} className="mb-3 relative">
                   <div className="flex items-center gap-2">
                     <div className="relative flex-1">
