@@ -132,7 +132,7 @@ export default function AdminPage() {
   const [usageLoading, setUsageLoading] = useState(true);
   const [usageError, setUsageError] = useState('');
   const [usersData, setUsersData] = useState([]); // raw rows from public.users
-  const [gameRecords, setGameRecords] = useState([]); // <-- NEW: raw rows from games_records
+  const [gameRecords, setGameRecords] = useState([]); // raw rows from games_records
 
   // Close suggestions on outside click
   useEffect(() => {
@@ -410,7 +410,7 @@ export default function AdminPage() {
     setDailyChallenges(challenges || []);
   };
 
-  // ---- Load usage stats: users and games_records (points_earned) ----
+  // ---- Load usage stats: users and games_records (points_earned + created_at for activity) ----
   useEffect(() => {
     (async () => {
       if (!isAdmin) return;
@@ -428,7 +428,7 @@ export default function AdminPage() {
         // Per-game data used for usage aggregation
         const { data: gr, error: grErr } = await supabase
           .from('games_records')
-          .select('user_id, points_earned');
+          .select('user_id, points_earned, created_at'); // <-- include created_at to compute 7d actives
 
         if (grErr) throw grErr;
         setGameRecords(Array.isArray(gr) ? gr : []);
@@ -454,10 +454,13 @@ export default function AdminPage() {
     const sevenDaysAgo = new Date(now);
     sevenDaysAgo.setDate(now.getDate() - 7);
 
-    const active7d = rows.filter((r) => {
-      const d = r?.last_checked_notifications_date ? new Date(r.last_checked_notifications_date) : null;
-      return d && d >= sevenDaysAgo;
-    }).length;
+    // Active users (7d) = distinct users with a games_records entry in last 7 days
+    const activeUserIds = new Set(
+      (gameRecords || [])
+        .filter((gr) => gr?.created_at && new Date(gr.created_at) >= sevenDaysAgo)
+        .map((gr) => gr.user_id)
+    );
+    const active7d = activeUserIds.size;
 
     // Aggregate per-user from games_records
     const perUser = new Map(); // user_id -> { games, points }

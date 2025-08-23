@@ -83,8 +83,12 @@ export default function LiveGamePage() {
   const [suggestions, setSuggestions] = useState([]);
   const [highlightIndex, setHighlightIndex] = useState(-1);
 
-  // NEW: loading flag for suggestions
+  // Loading flag for suggestions
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+
+  // Floating timer visibility (mobile)
+  const [showFloatingTimer, setShowFloatingTimer] = useState(false);
+  const timeCardRef = useRef(null);
 
   // refs for auto-scrolling the highlighted suggestion into view
   const listRef = useRef(null);
@@ -467,6 +471,37 @@ export default function LiveGamePage() {
   const timeColorClass =
     timeSec <= 30 ? 'text-red-600' : timeSec <= 60 ? 'text-yellow-600' : 'text-gray-900';
 
+  // MOBILE: Observe when the on-page time card scrolls out of view → show floating timer
+  useEffect(() => {
+    let observer;
+    const setup = () => {
+      // Disable floating timer on desktop
+      if (window.matchMedia('(min-width: 768px)').matches) {
+        setShowFloatingTimer(false);
+        if (observer) observer.disconnect();
+        return;
+      }
+      if (!timeCardRef.current) return;
+      if (observer) observer.disconnect();
+
+      observer = new IntersectionObserver(
+        ([entry]) => {
+          // When the original time card is NOT visible, show the floating bar
+          setShowFloatingTimer(!entry.isIntersecting);
+        },
+        { root: null, threshold: 0 }
+      );
+      observer.observe(timeCardRef.current);
+    };
+
+    setup();
+    window.addEventListener('resize', setup);
+    return () => {
+      window.removeEventListener('resize', setup);
+      if (observer) observer.disconnect();
+    };
+  }, []);
+
   // Loading and missing
   if (!location.state || !location.state.id) {
     return (
@@ -581,6 +616,23 @@ export default function LiveGamePage() {
         ⚠️ Don’t leave this page — leaving or switching windows will count as a loss.
       </div>
 
+      {/* MOBILE floating timer (appears once the original card is off-screen) */}
+      {showFloatingTimer && (
+        <div className="md:hidden fixed top-16 left-0 right-0 z-40 px-3">
+          <div className="rounded-xl bg-white shadow-md border p-3">
+            <div className="flex items-center justify-between">
+              <div className={classNames('flex items-center gap-2 text-xl font-semibold', timeColorClass)}>
+                <AlarmClock className="h-5 w-5" />
+                {formatTime(timeSec)}
+              </div>
+              <div className="text-xs text-gray-600">
+                Guesses left: <span className="font-semibold">{guessesLeft}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MOBILE: split points info into 3 stacked cards */}
       <div className="md:hidden space-y-3">
         {/* 1) Game type & Potential points */}
@@ -602,26 +654,23 @@ export default function LiveGamePage() {
           </div>
         </div>
 
-        {/* Sticky container keeps time/guesses and live points visible while scrolling */}
-        <div className="sticky top-2 z-30 space-y-3">
-          {/* 2) Time left & Guesses left */}
-          <div className="rounded-xl bg-white shadow p-6">
-            <div className="flex items-center justify-between">
-              <div className={classNames('flex items-center gap-3 text-2xl font-semibold', timeColorClass)}>
-                <AlarmClock className="h-6 w-6" />
-                {formatTime(timeSec)}
-              </div>
-              <div className="text-sm text-gray-600">
-                Guesses left: <span className="font-semibold">{guessesLeft}</span>
-              </div>
+        {/* 2) Time left & Guesses left (anchor for floating timer observer) */}
+        <div className="rounded-xl bg-white shadow p-6" ref={timeCardRef}>
+          <div className="flex items-center justify-between">
+            <div className={classNames('flex items-center gap-3 text-2xl font-semibold', timeColorClass)}>
+              <AlarmClock className="h-6 w-6" />
+              {formatTime(timeSec)}
+            </div>
+            <div className="text-sm text-gray-600">
+              Guesses left: <span className="font-semibold">{guessesLeft}</span>
             </div>
           </div>
+        </div>
 
-          {/* 3) Live points (Current points) */}
-          <div className="rounded-xl bg-white shadow p-6">
-            <div className="text-2xl font-extrabold text-amber-600 text-center">
-              Current points: <span>{points}</span>
-            </div>
+        {/* 3) Live points (Current points) */}
+        <div className="rounded-xl bg-white shadow p-6">
+          <div className="text-2xl font-extrabold text-amber-600 text-center">
+            Current points: <span>{points}</span>
           </div>
         </div>
       </div>
@@ -636,7 +685,7 @@ export default function LiveGamePage() {
             </div>
           </div>
 
-        {/* Left: Round type + Potential */}
+          {/* Left: Round type + Potential */}
           <div className="flex items-center gap-3 justify-start md:order-1 mt-3 md:mt-0">
             <Trophy className="h-5 w-5 text-purple-600" />
             <div className="text-sm">
