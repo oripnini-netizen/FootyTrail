@@ -498,7 +498,7 @@ export default function LiveGamePage() {
             is_elimination_game: true,
             playerName: gameData.name,            
             playerData: {                     // ⬅️ send FULL player_data (fixes NOT NULL)
-              id: playerIdNumeric,
+              id: gameData.id,
               name: gameData.name,
               nationality: gameData.nationality,
               position: gameData.position,
