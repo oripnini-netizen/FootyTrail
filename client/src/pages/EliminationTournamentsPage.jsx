@@ -259,7 +259,7 @@ export default function EliminationTournamentsPage() {
                 onClick={handleOpenCreate}
                 className="rounded-lg bg-green-700 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-green-800"
               >
-                Create Tournament
+                + Create New Elimination Challenge
               </button>
             </div>
           )}
@@ -321,14 +321,7 @@ export default function EliminationTournamentsPage() {
                   ))}
                 </>
               )}
-              {!loading.live && !error.live && live.length === 0 && (
-                <PlaceholderCard
-                  title="No live tournaments"
-                  subtitle="Start an elimination tournament to see it here in real time."
-                  ctaLabel="Create Tournament"
-                  onCtaClick={handleOpenCreate}
-                />
-              )}
+              {/* REMOVED: the "No live tournaments" placeholder card */}
             </>
           ) : (
             <>
