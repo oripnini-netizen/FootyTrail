@@ -19,6 +19,7 @@ import {
   Trash2,
   CalendarClock,
   Axe,
+  Bell, // NEW: for notifications banner icon
 } from "lucide-react";
 
 /* ------------------------------------------------------------
@@ -58,6 +59,9 @@ export default function EliminationTournamentsPage() {
   const [finished, setFinished] = useState([]);
   const [loading, setLoading] = useState({ live: true, finished: true });
   const [error, setError] = useState({ live: "", finished: "" });
+
+  // Notifications banner (NEW) — load unread on first visit, mark as read, show once
+  const [notifBanner, setNotifBanner] = useState([]);
 
   // For pretty filter chips on cards
   const [groupedCompetitions, setGroupedCompetitions] = useState({});
@@ -162,6 +166,49 @@ export default function EliminationTournamentsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
+  // Load unread elimination notifications ON FIRST VISIT, then mark as read (NEW)
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+
+    async function loadAndMark() {
+      // 1) load unread elimination invites
+      const { data: unread } = await supabase
+        .from('notifications')
+        .select('id, payload, created_at')
+        .eq('user_id', user.id)
+        .eq('type', 'elimination_invite')
+        .is('read_at', null)
+        .order('created_at', { ascending: false });
+
+      if (!cancelled && unread?.length) {
+        // keep a copy for the banner before marking as read
+        setNotifBanner(
+          unread.map((n) => ({
+            id: n.id,
+            created_at: n.created_at,
+            ...n.payload,
+          }))
+        );
+
+        // 2) mark as read
+        const ids = unread.map((n) => n.id);
+        await supabase
+          .from('notifications')
+          .update({ read_at: new Date().toISOString() })
+          .in('id', ids);
+
+        // 3) notify navbar to clear the red dot immediately
+        window.dispatchEvent(new Event('elimination-notifications-read'));
+      }
+    }
+    loadAndMark();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
   return (
     <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
       <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
@@ -179,6 +226,32 @@ export default function EliminationTournamentsPage() {
             uses the same mystery player for everyone. Lowest score(s) are
             eliminated until a single winner remains.
           </p>
+
+          {/* Notifications banner (NEW) */}
+          {notifBanner.length > 0 && (
+            <div className="mt-6 rounded-xl border bg-amber-50 px-4 py-3 shadow-sm text-left">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 h-8 w-8 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center">
+                  <Bell className="h-5 w-5" />
+                </div>
+                <div className="flex-1">
+                  <div className="font-semibold text-amber-900 mb-1">Notifications</div>
+                  <ul className="space-y-1">
+                    {notifBanner.map((n) => (
+                      <li key={n.id} className="text-sm text-amber-900">
+                        You were added to <span className="font-medium">{n.tournament_name}</span> by{" "}
+                        <span className="font-medium">{n.creator_name}</span>
+                        {typeof n.round_time_limit_minutes === 'number' ? (
+                          <> — round time limit <span className="font-medium">{n.round_time_limit_minutes} min</span></>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
+
           {activeTab === "live" && (
             <div className="mt-4 flex justify-center">
               <button
@@ -584,9 +657,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
 
   const [/* internal: used by auto-finalizer */] = useState(null);
 
-  // Auto-finalization: when a round's time is up or all participants have played,
-  // call the finalize_round RPC to close the round and eliminate users. If more than
-  // one user remains, automatically create the next round by passing a new player id.
+  // Auto-finalization (unchanged)
   const finalizingRef = useRef(new Set());
 
   useEffect(() => {
@@ -610,7 +681,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
 
         finalizingRef.current.add(r.id);
         try {
-          // 1) finalize (close + eliminate)
+          // 1) finalize
           const { data: summary, error } = await supabase.rpc('finalize_round', {
             p_round_id: r.id,
             p_next_player_id: null,
@@ -618,8 +689,6 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
           });
           if (error) throw error;
 
-          // 2) If tournament is not finished and we don't already have a later round,
-          // create the next round with a new random player.
           const tournamentFinished = summary && summary.tournament_finished === true;
           const laterRoundExists = rounds.some((x) => x.round_number > r.round_number);
 
@@ -638,10 +707,8 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
             }
           }
 
-          // reload lists/cards
           if (onAdvanced) await onAdvanced();
         } catch (e) {
-          // Silently ignore; UI will reflect actual DB state on next poll/refresh
           console.error('[elim] auto-finalize error', e);
         } finally {
           finalizingRef.current.delete(r.id);
@@ -815,7 +882,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
                   entries.map((e) => [e.user_id, e])
                 );
 
-                // DERIVED active state to fix "still active" issues
+                // DERIVED active state
                 const now = Date.now();
                 const endsAt = r.ends_at ? new Date(r.ends_at).getTime() : null;
                 const derivedActive =
@@ -957,7 +1024,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
                       )}
                     </div>
 
-                    {/* Actions (CHANGED: centered, bigger, and hidden if already played) */}
+                    {/* Actions (centered, bigger, and hidden if already played) */}
                     {isLive && derivedActive && !mePlayed && (
                       <div className="mt-4 flex items-center justify-center">
                         <button
@@ -1026,7 +1093,8 @@ function ErrorCard({ title, message }) {
 
 /* ------------------------------------------------------------
    CreateTournamentModal
-   (changed: default filters collapsed; chips summary shown ABOVE sections)
+   (changed previously; unchanged here except it already dispatches
+   'elimination-notifications-new' after inserting notifications)
 ------------------------------------------------------------ */
 function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   const dialogRef = useRef(null);
@@ -1413,7 +1481,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
         window.dispatchEvent(new Event("elimination-notifications-new"));
       }
 
-      // Create Round 1 immediately with the random player (schema-correct)
+      // Create Round 1 immediately
       const now = new Date();
       const endsAt = new Date(
         now.getTime() + Math.floor(Number(roundTimeMinutes)) * 60 * 1000
@@ -1425,7 +1493,6 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
           player_id: randomPlayer.id,
           started_at: now.toISOString(),
           ends_at: endsAt.toISOString(),
-          // closed_at null by default
         },
       ]);
 
@@ -1828,7 +1895,7 @@ function DifficultyFilters(props) {
         </div>
       </div>
 
-      {/* Selected filters chips row (ABOVE sections, visible when collapsed) */}
+      {/* Selected filters chips row */}
       <div className="mt-3">
         <SelectedChipsRow
           selectedCompetitionIds={selectedCompetitionIds}
