@@ -607,6 +607,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
           // 1) finalize (close + eliminate)
           const { data: summary, error } = await supabase.rpc('finalize_round', {
             p_round_id: r.id,
+            p_next_player_id: null,
             p_force: false,
           });
           if (error) throw error;
