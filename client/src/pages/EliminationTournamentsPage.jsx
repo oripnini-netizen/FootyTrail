@@ -20,6 +20,9 @@ import {
   CalendarClock,
   Axe,
   Bell, // NEW: for notifications banner icon
+  Trophy,
+  Sparkles,
+  Crown,
 } from "lucide-react";
 
 /* ------------------------------------------------------------
@@ -469,6 +472,279 @@ function RoundPlayer({ playerId }) {
   );
 }
 
+/* ---------------- Winner Celebration (NEW) ---------------- */
+function WinnerCelebrationCard({
+  tournament,
+  winnerUser,
+  participants,
+  rounds,
+  entriesByRound,
+}) {
+  // Stats
+  const roundsCount = Array.isArray(rounds) ? rounds.length : 0;
+  const totalEntries = Object.values(entriesByRound || {}).reduce(
+    (sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0),
+    0
+  );
+  const totalParticipants = participants.length || 0;
+
+  // Duration
+  let startedAt = null;
+  let endedAt = null;
+  if (roundsCount > 0) {
+    const sorted = [...rounds].sort((a, b) => (a.round_number || 0) - (b.round_number || 0));
+    startedAt = sorted[0]?.started_at ? new Date(sorted[0].started_at) : null;
+    const last = sorted[sorted.length - 1];
+    endedAt = last?.closed_at
+      ? new Date(last.closed_at)
+      : last?.ends_at
+      ? new Date(last.ends_at)
+      : null;
+  }
+  const durationMs =
+    startedAt && endedAt ? Math.max(0, endedAt.getTime() - startedAt.getTime()) : 0;
+  const durationStr = formatDuration(durationMs);
+
+  // Ranking (winner first, others by last round survived, then last-round points desc)
+  const ranking = useMemo(() => {
+    // simulate eliminations from active set per round (like card uses)
+    const allIds = new Set(participants.map((p) => p.id));
+    const orderedRounds = [...(rounds || [])].sort(
+      (a, b) => (a.round_number || 0) - (b.round_number || 0)
+    );
+
+    const eliminationLog = []; // [{user_id, atRound, points}]
+    let active = new Set(allIds);
+
+    for (const r of orderedRounds) {
+      const entries = (entriesByRound?.[r.id] || []).filter((e) => active.has(e.user_id));
+      const pts = new Map(entries.map((e) => [e.user_id, Number(e.points_earned ?? 0)]));
+
+      const played = [];
+      const notPlayed = [];
+      for (const uid of active) {
+        if (pts.has(uid)) played.push(uid);
+        else notPlayed.push(uid);
+      }
+
+      const eliminated = new Set();
+      // DNFs eliminated
+      for (const uid of notPlayed) eliminated.add(uid);
+
+      if (played.length > 0) {
+        let minPts = Infinity;
+        for (const uid of played) minPts = Math.min(minPts, pts.get(uid));
+        for (const uid of played) if (pts.get(uid) === minPts) eliminated.add(uid);
+      }
+
+      for (const uid of eliminated) {
+        eliminationLog.push({
+          user_id: uid,
+          atRound: r.round_number,
+          points: pts.has(uid) ? pts.get(uid) : -Infinity, // DNFs lowest
+        });
+        active.delete(uid);
+      }
+    }
+
+    // Remaining active should be the winner
+    const winnerId = tournament.winner_user_id || [...active][0] || null;
+
+    // Build data map
+    const byId = new Map();
+    for (const p of participants) {
+      byId.set(p.id, {
+        user: p,
+        winner: p.id === winnerId,
+        lastRound: 0,
+        lastPoints: -Infinity,
+      });
+    }
+    for (const log of eliminationLog) {
+      const row = byId.get(log.user_id);
+      if (row) {
+        row.lastRound = log.atRound || 0;
+        row.lastPoints = log.points;
+      }
+    }
+    if (winnerId && byId.has(winnerId)) {
+      // winner survived all rounds
+      byId.get(winnerId).lastRound = roundsCount;
+      // winner's last round points (if exists)
+      const lastRound = orderedRounds[orderedRounds.length - 1];
+      const wEntry = (entriesByRound?.[lastRound?.id] || []).find(
+        (e) => e.user_id === winnerId
+      );
+      byId.get(winnerId).lastPoints =
+        typeof wEntry?.points_earned === "number" ? wEntry.points_earned : -Infinity;
+    }
+
+    const rows = Array.from(byId.values());
+    rows.sort((a, b) => {
+      if (a.winner && !b.winner) return -1;
+      if (!a.winner && b.winner) return 1;
+      // non-winners: highest lastRound first, then points desc
+      if (!a.winner && !b.winner) {
+        if (b.lastRound !== a.lastRound) return b.lastRound - a.lastRound;
+        return (b.lastPoints ?? -Infinity) - (a.lastPoints ?? -Infinity);
+      }
+      return 0;
+    });
+
+    return rows;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [participants, rounds, entriesByRound, tournament.winner_user_id, roundsCount]);
+
+  return (
+    <div className="relative overflow-hidden rounded-2xl border bg-gradient-to-br from-amber-50 via-yellow-50 to-white p-5 shadow-md">
+      {/* Confetti (lightweight CSS) */}
+      <ConfettiBurst />
+
+      <div className="flex items-start gap-4">
+        <div className="relative">
+          <StarAvatar photoUrl={winnerUser?.profile_photo_url} name={winnerUser?.full_name || winnerUser?.email || "Winner"} />
+        </div>
+        <div className="flex-1">
+          <div className="flex items-center gap-2">
+            <Crown className="h-5 w-5 text-amber-500" />
+            <h3 className="text-xl font-extrabold text-amber-700">
+              {praiseLine(winnerUser?.full_name || winnerUser?.email || "The Champion")}
+            </h3>
+          </div>
+          <p className="mt-1 text-sm text-amber-900">
+            <span className="font-semibold">{tournament.name}</span> has concluded. Bask in the glory!
+          </p>
+
+          {/* Stats */}
+          <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <StatPill label="Rounds" value={roundsCount || 0} />
+            <StatPill label="Duration" value={durationStr || "—"} />
+            <StatPill label="Participants" value={totalParticipants || 0} />
+            <StatPill label="Total Plays" value={totalEntries || 0} />
+          </div>
+
+          {/* Ranking (other users) */}
+          {Array.isArray(ranking) && ranking.length > 1 && (
+            <div className="mt-4">
+              <div className="text-xs font-semibold text-gray-700 mb-1 flex items-center gap-1">
+                <Trophy className="h-4 w-4 text-amber-600" /> Final Standings
+              </div>
+              <ol className="space-y-1">
+                {ranking.map((row, idx) => {
+                  const u = row.user;
+                  const me = winnerUser && u.id === winnerUser.id;
+                  return (
+                    <li
+                      key={`${u.id}-${idx}`}
+                      className={classNames(
+                        "flex items-center justify-between rounded-md border bg-white px-2 py-1 text-sm",
+                        me ? "ring-2 ring-amber-300" : ""
+                      )}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className={classNames(
+                          "inline-flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold",
+                          idx === 0 ? "bg-amber-500 text-white" : "bg-gray-200 text-gray-800"
+                        )}>
+                          {idx + 1}
+                        </span>
+                        <span className={classNames("truncate", me ? "font-semibold text-amber-700" : "text-gray-800")}>
+                          {u.full_name || u.email}
+                        </span>
+                      </div>
+                      {!me && (
+                        <span className="text-xs text-gray-600">
+                          Eliminated R{row.lastRound || 0}
+                          {Number.isFinite(row.lastPoints) && row.lastPoints !== -Infinity
+                            ? ` • ${row.lastPoints} pts`
+                            : ""}
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ol>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function praiseLine(name) {
+  const lines = [
+    `${name} stands alone at the summit!`,
+    `${name} conquered every round!`,
+    `${name} is the last one standing!`,
+    `${name} rules this challenge!`,
+  ];
+  return lines[Math.floor(Math.random() * lines.length)];
+}
+
+function StatPill({ label, value }) {
+  return (
+    <div className="rounded-lg border bg-white px-3 py-2">
+      <div className="text-[11px] text-gray-500">{label}</div>
+      <div className="text-sm font-semibold text-gray-800">{value}</div>
+    </div>
+  );
+}
+
+function StarAvatar({ photoUrl, name }) {
+  return (
+    <div className="relative">
+      <div className="h-20 w-20 rounded-full bg-gradient-to-br from-amber-200 to-yellow-300 p-[3px] shadow">
+        <div className="h-full w-full rounded-full bg-white flex items-center justify-center overflow-hidden">
+          {photoUrl ? (
+            <img src={photoUrl} alt={name} className="h-full w-full object-cover" />
+          ) : (
+            <span className="text-2xl font-bold text-amber-600">
+              {(name || "?").slice(0, 1).toUpperCase()}
+            </span>
+          )}
+        </div>
+      </div>
+      <Sparkles className="absolute -top-2 -right-2 h-6 w-6 text-amber-500" />
+    </div>
+  );
+}
+
+function ConfettiBurst() {
+  // Pure CSS lightweight confetti (no deps)
+  const pieces = new Array(24).fill(0);
+  return (
+    <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-24 overflow-visible">
+      <div className="relative h-24">
+        {pieces.map((_, i) => (
+          <span
+            key={i}
+            className="absolute inline-block h-2 w-1.5 rounded-sm bg-amber-400 animate-fall"
+            style={{
+              left: `${(i / pieces.length) * 100}%`,
+              animationDelay: `${(i % 6) * 0.12}s`,
+              transform: `rotate(${(i * 37) % 360}deg)`,
+            }}
+          />
+        ))}
+      </div>
+      {/* Confetti keyframes */}
+      <style>{`
+        @keyframes confetti-fall {
+          0% { transform: translateY(-16px) rotate(0deg); opacity: 0; }
+          15% { opacity: 1; }
+          100% { transform: translateY(140px) rotate(360deg); opacity: 0; }
+        }
+        .animate-fall {
+          animation: confetti-fall 1.8s ease-in-out forwards;
+        }
+      `}</style>
+    </div>
+  );
+}
+
+/* ---------------- end Winner Celebration (NEW) ------------- */
+
 function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -484,7 +760,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
     (tournament.round_time_limit_seconds || 0) / 60
   );
 
-  const [participants, setParticipants] = useState([]); // [{id, full_name, email, state}]
+  const [participants, setParticipants] = useState([]); // [{id, full_name, email, profile_photo_url, state}]
   const [rounds, setRounds] = useState([]); // [{id, round_number, started_at, ends_at, closed_at, player_id}]
   const [entriesByRound, setEntriesByRound] = useState({}); // { round_id : [{user_id, points_earned}] }
 
@@ -514,7 +790,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
         if (idsFromParticipants.length) {
           const { data: usersRows } = await supabase
             .from("users")
-            .select("id, full_name, email")
+            .select("id, full_name, email, profile_photo_url")
             .in("id", idsFromParticipants);
           userRows = usersRows || [];
         }
@@ -549,7 +825,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
         if (extraUserIds.size) {
           const { data: extraUsers } = await supabase
             .from("users")
-            .select("id, full_name, email")
+            .select("id, full_name, email, profile_photo_url")
             .in("id", Array.from(extraUserIds));
           userRows = [...userRows, ...(extraUsers || [])];
         }
@@ -795,6 +1071,33 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
     };
   }, [rounds, entriesByRound, participants, tournament.id, userId, onAdvanced]);
 
+  // Pull the winner user row (from participantsMap or fetch fallback)
+  const [winnerUser, setWinnerUser] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!tournament.winner_user_id || isLive) {
+        setWinnerUser(null);
+        return;
+      }
+      const local = participantsMap.get(tournament.winner_user_id);
+      if (local) {
+        if (alive) setWinnerUser(local);
+        return;
+      }
+      const { data } = await supabase
+        .from("users")
+        .select("id, full_name, email, profile_photo_url")
+        .eq("id", tournament.winner_user_id)
+        .limit(1)
+        .maybeSingle();
+      if (alive) setWinnerUser(data || null);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [tournament.winner_user_id, isLive, participantsMap]);
+
   return (
     <div className="rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md">
       {/* Card header with collapse toggle */}
@@ -832,6 +1135,20 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
           Winner: <WinnerName userId={tournament.winner_user_id} />
         </div>
       )}
+
+      {/* -------- Winner Celebration (NEW) -------- */}
+      {!isLive && tournament.winner_user_id && (
+        <div className="mt-4">
+          <WinnerCelebrationCard
+            tournament={tournament}
+            winnerUser={winnerUser}
+            participants={participants}
+            rounds={rounds}
+            entriesByRound={entriesByRound}
+          />
+        </div>
+      )}
+      {/* -------- End Winner Celebration ----------- */}
 
       {/* Collapsible body */}
       {!cardCollapsed && (
@@ -2011,7 +2328,7 @@ function DifficultyFilters(props) {
         </div>
       </div>
 
-      {!loadingFilters && (
+         {!loadingFilters && (
         <div className="mt-4 space-y-6">
           {/* Competitions */}
           <Section
