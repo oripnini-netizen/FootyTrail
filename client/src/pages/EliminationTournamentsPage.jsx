@@ -227,7 +227,7 @@ export default function EliminationTournamentsPage() {
             <Axe className="h-8 w-8 text-green-800" aria-hidden="true" />
             <span>Elimination Challenges</span>
           </h1>
-          <p className="mt-2 text-sm text-gray-700">
+        <p className="mt-2 text-sm text-gray-700">
             Create and follow elimination challenges with friends. Each round
             uses the same mystery player for everyone. Lowest score(s) are
             eliminated until a single winner remains.
@@ -310,24 +310,15 @@ export default function EliminationTournamentsPage() {
             <ErrorCard title="Couldn't load finished tournaments" message={error.finished} />
           ) : (
             <>
-              {finished.length === 0 ? (
-                <PlaceholderCard
-                  title="No finished tournaments"
-                  subtitle="Completed tournaments and winners will appear here."
-                  ctaLabel="View Rules"
-                  onCtaClick={() => {}}
+              {finished.map((t) => (
+                <TournamentCard
+                  key={t.id}
+                  tournament={t}
+                  compIdToLabel={compIdToLabel}
+                  onAdvanced={reloadLists}
+                  defaultCollapsed={t.id === mostRecentFinishedId ? false : true}
                 />
-              ) : (
-                finished.map((t, idx) => (
-                  <TournamentCard
-                    key={t.id}
-                    tournament={t}
-                    compIdToLabel={compIdToLabel}
-                    onAdvanced={reloadLists}
-                    defaultCollapsed={t.id === mostRecentFinishedId ? false : true}
-                  />
-                ))
-              )}
+              ))}
             </>
           )}
         </section>
@@ -347,26 +338,6 @@ export default function EliminationTournamentsPage() {
 /* ------------------------------------------------------------
    Cards & helpers
 ------------------------------------------------------------ */
-function PlaceholderCard({ title, subtitle, ctaLabel, onCtaClick }) {
-  return (
-    <div className="flex flex-col justify-between rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md">
-      <div>
-        <h3 className="text.base font-semibold text-gray-900">{title}</h3>
-        <p className="mt-1 text-sm text-gray-600">{subtitle}</p>
-      </div>
-      <div className="mt-4">
-        <button
-          type="button"
-          onClick={onCtaClick}
-          className="w-full rounded-lg bg-green-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-green-800"
-        >
-          {ctaLabel}
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function Countdown({ endsAt }) {
   const [left, setLeft] = useState(() => format(endsAt));
 
@@ -447,6 +418,7 @@ function ConfettiRain({ count = 80, durationMs = 4000 }) {
     const arr = [];
     for (let i = 0; i < count; i++) {
       const left = Math.random() * 100; // vw%
+      the_delay_block: { /* keep structure */ }
       const delay = Math.random() * 0.8; // s
       const scale = 0.6 + Math.random() * 0.8;
       const rotate = Math.floor(Math.random() * 360);
@@ -2313,7 +2285,7 @@ function DifficultyFilters(props) {
                     e.stopPropagation();
                     selectAllCompetitions();
                   }}
-                  className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                  className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg.white hover:bg-gray-50"
                 >
                   <CheckSquare className="h-3 w-3" /> Select All
                 </button>
