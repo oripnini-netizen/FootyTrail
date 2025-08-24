@@ -1392,18 +1392,18 @@ function UserStatsModal({ user, onClose }) {
     async function load() {
       setLoading(true);
       try {
-        // recent 20
+        // recent 20 (include elimination flag)
         const { data: games } = await supabase
           .from('games_records')
           .select(
-            'id, player_name, won, points_earned, time_taken_seconds, guesses_attempted, created_at, is_daily_challenge'
+            'id, player_name, won, points_earned, time_taken_seconds, guesses_attempted, created_at, is_daily_challenge, is_elimination_game'
           )
           .eq('user_id', user.id)
           .order('created_at', { ascending: false })
           .limit(20);
         if (!cancelled) setRecent(games || []);
 
-        // all games for totals
+        // all games for totals (unchanged)
         const { data: allGames } = await supabase
           .from('games_records')
           .select('won, points_earned, time_taken_seconds')
@@ -1506,7 +1506,9 @@ function UserStatsModal({ user, onClose }) {
                       <div>
                         <div
                           className={`font-medium ${
-                            g.is_daily_challenge ? 'text-yellow-600 font-semibold' : ''
+                            g.is_daily_challenge
+                              ? 'text-yellow-600 font-semibold'
+                              : (g.is_elimination_game ? 'text-purple-600 font-semibold' : '')
                           }`}
                         >
                           {maskedName}
@@ -1527,6 +1529,7 @@ function UserStatsModal({ user, onClose }) {
                           {g.guesses_attempted}{' '}
                           {g.guesses_attempted === 1 ? 'guess' : 'guesses'}
                           {g.is_daily_challenge && ' • Daily'}
+                          {g.is_elimination_game && ' • Elimination'}
                         </div>
                       </div>
                     </div>
