@@ -388,7 +388,7 @@ function PlaceholderCard({ title, subtitle, ctaLabel, onCtaClick }) {
   return (
     <div className="flex flex-col justify-between rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md">
       <div>
-        <h3 className="text-base font-semibold text-gray-900">{title}</h3>
+        <h3 className="text.base font-semibold text-gray-900">{title}</h3>
         <p className="mt-1 text-sm text-gray-600">{subtitle}</p>
       </div>
       <div className="mt-4">
@@ -657,7 +657,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
 
   const [/* internal: used by auto-finalizer */] = useState(null);
 
-  // Auto-finalization (unchanged)
+  // Auto-finalization (UPDATED: include next round's player in the same finalize call)
   const finalizingRef = useRef(new Set());
 
   useEffect(() => {
@@ -681,31 +681,27 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
 
         finalizingRef.current.add(r.id);
         try {
-          // 1) finalize
-          const { data: summary, error } = await supabase.rpc('finalize_round', {
-            p_round_id: r.id,
-            p_next_player_id: null,
-            p_force: false,
-          });
-          if (error) throw error;
-
-          const tournamentFinished = summary && summary.tournament_finished === true;
           const laterRoundExists = rounds.some((x) => x.round_number > r.round_number);
 
-          if (!tournamentFinished && !laterRoundExists) {
+          // Pre-pick the next player ONLY if a later round doesn't already exist
+          let nextPlayerId = null;
+          if (!laterRoundExists) {
             const nextPlayer = await getRandomPlayer(
               { ...(tournament.filters || {}), userId },
               userId
             );
-            if (nextPlayer?.id) {
-              const { error: err2 } = await supabase.rpc('finalize_round', {
-                p_round_id: r.id,
-                p_next_player_id: nextPlayer.id,
-                p_force: true,
-              });
-              if (err2) throw err2;
-            }
+            if (nextPlayer?.id) nextPlayerId = nextPlayer.id;
           }
+
+          // Single finalize call: pass next player along; server will:
+          // - eliminate lowest scorer(s)
+          // - either finish (if one left) OR create the next round using next_player_id
+          const { data: summary, error } = await supabase.rpc('finalize_round', {
+            p_round_id: r.id,
+            p_next_player_id: nextPlayerId,
+            p_force: Boolean(nextPlayerId),
+          });
+          if (error) throw error;
 
           if (onAdvanced) await onAdvanced();
         } catch (e) {
@@ -1073,7 +1069,7 @@ function WinnerName({ userId }) {
 function SkeletonCard() {
   return (
     <div className="animate-pulse rounded-2xl border bg-white p-5">
-      <div className="h-4 w-1/2 rounded bg-gray-200" />
+      <div className="h-4 w-1/2 rounded bg-gray-2 00" />
       <div className="mt-3 h-3 w-2/3 rounded bg-gray-100" />
       <div className="mt-6 flex justify-end">
         <div className="h-7 w-20 rounded bg-gray-100" />
@@ -1093,8 +1089,9 @@ function ErrorCard({ title, message }) {
 
 /* ------------------------------------------------------------
    CreateTournamentModal
-   (changed previously; unchanged here except it already dispatches
-   'elimination-notifications-new' after inserting notifications)
+   (changed previously; UPDATED here:
+     1) block creation with only one participant (must invite >= 1)
+     2) no other changes to behavior/UI except showing an error under Invites)
 ------------------------------------------------------------ */
 function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   const dialogRef = useRef(null);
@@ -1386,6 +1383,10 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
     if (!currentUser?.id) {
       next.user = "You must be logged in to create a tournament.";
     }
+    // NEW: must invite at least one other participant (min 2 total)
+    if ((invites || []).length < 1) {
+      next.invites = "Invite at least one other user (minimum 2 participants).";
+    }
     setErrors(next);
     return Object.keys(next).length === 0;
   };
@@ -1555,7 +1556,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="e.g., Friday Night Knockout"
-                  className="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:ring-2 focus:ring-green-700"
+                  className="mt-1 w-full rounded-md border border-gray-300 bg.white px-3 py-2 text-sm text-gray-900 outline-none focus:ring-2 focus:ring-green-700"
                 />
                 {errors.name && (
                   <p className="mt-1 text-xs text-red-600">{errors.name}</p>
@@ -1658,6 +1659,11 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                       ))}
                     </div>
                   </div>
+                )}
+
+                {/* NEW: validation message when not enough participants */}
+                {errors.invites && (
+                  <p className="mt-2 text-xs text-red-600">{errors.invites}</p>
                 )}
               </div>
 
@@ -1789,7 +1795,7 @@ function SelectedChipsRow({
         {selectedSeasons?.map((s) => (
           <span
             key={`season-${s}`}
-            className="inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800"
+            className="inline-flex items.center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800"
           >
             {String(s)}
             {onRemoveSeason && (
