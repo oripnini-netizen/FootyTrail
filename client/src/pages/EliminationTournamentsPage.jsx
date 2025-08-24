@@ -63,7 +63,6 @@ function fmtDuration(ms) {
 ------------------------------------------------------------ */
 export default function EliminationTournamentsPage() {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState("live");
   const [showCreateModal, setShowCreateModal] = useState(false);
 
   const [live, setLive] = useState([]);
@@ -101,11 +100,6 @@ export default function EliminationTournamentsPage() {
     });
     return map;
   }, [groupedCompetitions]);
-
-  const tabs = [
-    { key: "live", label: "Live" },
-    { key: "finished", label: "Finished" },
-  ];
 
   const handleOpenCreate = () => setShowCreateModal(true);
 
@@ -220,6 +214,9 @@ export default function EliminationTournamentsPage() {
     };
   }, [user?.id]);
 
+  // Identify the most recent finished tournament (created_at desc)
+  const mostRecentFinishedId = finished?.[0]?.id || null;
+
   return (
     <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
       <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
@@ -228,10 +225,8 @@ export default function EliminationTournamentsPage() {
         <header className="mb-4 sm:mb-6 text-center">
           <h1 className="flex items-center justify-center gap-3 text-4xl font-extrabold text-green-800">
             <Axe className="h-8 w-8 text-green-800" aria-hidden="true" />
-            {/* CHANGED: Title to "Elimination Challenges" */}
             <span>Elimination Challenges</span>
           </h1>
-          {/* CHANGED: sentence uses "challenges" */}
           <p className="mt-2 text-sm text-gray-700">
             Create and follow elimination challenges with friends. Each round
             uses the same mystery player for everyone. Lowest score(s) are
@@ -263,111 +258,75 @@ export default function EliminationTournamentsPage() {
             </div>
           )}
 
-          {activeTab === "live" && (
-            <div className="mt-4 flex justify-center">
-              <button
-                type="button"
-                onClick={handleOpenCreate}
-                className="rounded-lg bg-green-700 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-green-800"
-              >
-                + Create New Elimination Challenge
-              </button>
-            </div>
-          )}
+          {/* Create button stays available (was previously Live-tab only) */}
+          <div className="mt-4 flex justify-center">
+            <button
+              type="button"
+              onClick={handleOpenCreate}
+              className="rounded-lg bg-green-700 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-green-800"
+            >
+              + Create New Elimination Challenge
+            </button>
+          </div>
         </header>
 
-        {/* Tabs (CHANGED: show counts) */}
-        <div className="flex items-center justify-center gap-2 bg-white/70 rounded-full px-2 py-1 w-fit mx-auto my-5 shadow-sm">
-          {tabs.map((t) => {
-            const isActive = activeTab === t.key;
-            const count = t.key === "live" ? live.length : finished.length;
-            return (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => setActiveTab(t.key)}
-                className={classNames(
-                  "px-4 py-1.5 rounded-full text-sm font-medium",
-                  isActive
-                    ? "bg-green-700 text-white"
-                    : "bg-white text-gray-700 border"
-                )}
-              >
-                {t.label} ({count})
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Content area */}
+        {/* Combined content: Live (expanded) then Finished (collapsed except most recent) */}
         <section
           className="grid grid-cols-1 gap-4 sm:grid-cols-1 lg:grid-cols-1"
           aria-live="polite"
-          aria-busy={activeTab === "live" ? loading.live : loading.finished}
+          aria-busy={loading.live || loading.finished}
         >
-          {activeTab === "live" ? (
+          {/* Live */}
+          {loading.live ? (
             <>
-              {loading.live && (
-                <>
-                  <SkeletonCard />
-                  <SkeletonCard />
-                  <SkeletonCard />
-                </>
-              )}
-              {!loading.live && error.live && (
-                <ErrorCard
-                  title="Couldn't load live tournaments"
-                  message={error.live}
-                />
-              )}
-              {!loading.live && !error.live && live.length > 0 && (
-                <>
-                  {live.map((t) => (
-                    <TournamentCard
-                      key={t.id}
-                      tournament={t}
-                      compIdToLabel={compIdToLabel}
-                      onAdvanced={reloadLists}
-                    />
-                  ))}
-                </>
-              )}
-              {/* REMOVED: the "No live tournaments" placeholder card */}
+              <SkeletonCard />
+              <SkeletonCard />
+              <SkeletonCard />
             </>
+          ) : error.live ? (
+            <ErrorCard title="Couldn't load live tournaments" message={error.live} />
           ) : (
             <>
-              {loading.finished && (
-                <>
-                  <SkeletonCard />
-                  <SkeletonCard />
-                  <SkeletonCard />
-                </>
-              )}
-              {!loading.finished && error.finished && (
-                <ErrorCard
-                  title="Couldn't load finished tournaments"
-                  message={error.finished}
+              {live.map((t) => (
+                <TournamentCard
+                  key={t.id}
+                  tournament={t}
+                  compIdToLabel={compIdToLabel}
+                  onAdvanced={reloadLists}
+                  defaultCollapsed={false} // LIVE → expanded by default
                 />
-              )}
-              {!loading.finished && !error.finished && finished.length > 0 && (
-                <>
-                  {finished.map((t) => (
-                    <TournamentCard
-                      key={t.id}
-                      tournament={t}
-                      compIdToLabel={compIdToLabel}
-                      onAdvanced={reloadLists}
-                    />
-                  ))}
-                </>
-              )}
-              {!loading.finished && !error.finished && finished.length === 0 && (
+              ))}
+            </>
+          )}
+
+          {/* Finished */}
+          {loading.finished ? (
+            <>
+              <SkeletonCard />
+              <SkeletonCard />
+              <SkeletonCard />
+            </>
+          ) : error.finished ? (
+            <ErrorCard title="Couldn't load finished tournaments" message={error.finished} />
+          ) : (
+            <>
+              {finished.length === 0 ? (
                 <PlaceholderCard
                   title="No finished tournaments"
                   subtitle="Completed tournaments and winners will appear here."
                   ctaLabel="View Rules"
                   onCtaClick={() => {}}
                 />
+              ) : (
+                finished.map((t, idx) => (
+                  <TournamentCard
+                    key={t.id}
+                    tournament={t}
+                    compIdToLabel={compIdToLabel}
+                    onAdvanced={reloadLists}
+                    defaultCollapsed={t.id === mostRecentFinishedId ? false : true}
+                  />
+                ))
               )}
             </>
           )}
@@ -641,7 +600,7 @@ function WinnerCelebrationCard({
 /* ------------------------------------------------------------
    Tournament Card
 ------------------------------------------------------------ */
-function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
+function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapsed = false }) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const userId = user?.id || null;
@@ -660,8 +619,8 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
   const [rounds, setRounds] = useState([]); // [{id, round_number, started_at, ends_at, closed_at, player_id}]
   const [entriesByRound, setEntriesByRound] = useState({}); // { round_id : [{user_id, points_earned}] }
 
-  // NEW: card-level collapse (defaults to OPEN)
-  const [cardCollapsed, setCardCollapsed] = useState(false);
+  // NEW: card-level collapse (default uses incoming prop)
+  const [cardCollapsed, setCardCollapsed] = useState(Boolean(defaultCollapsed));
   // NEW: filters section collapse (defaults to COLLAPSED)
   const [filtersCollapsed, setFiltersCollapsed] = useState(true);
 
@@ -1520,6 +1479,9 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   // Competition search (GamePage)
   const [compSearch, setCompSearch] = useState("");
   const [compSug, setCompSug] = useState([]);
+  the_comp_sug_block: {
+    // no-op block retained
+  }
   const [compSugOpen, setCompSugOpen] = useState(false);
   const [compSugIndex, setCompSugIndex] = useState(-1);
   const compSearchRef = useRef(null);
