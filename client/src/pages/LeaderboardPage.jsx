@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabase';
 import { Trophy, Clock, Award, X } from 'lucide-react';
 
-// CHANGE #1: order tabs as Today, Week, Month, All Time
+// order tabs as Today, Week, Month, All Time
 const tabs = ['Today', 'Week', 'Month', 'All Time'];
 const metrics = ['Total Points', 'Points/Game'];
 
@@ -26,7 +26,7 @@ const isToday = (isoOrDate) => {
 };
 
 export default function LeaderboardPage() {
-  // CHANGE #1: default tab is Today
+  // default tab is Today
   const [tab, setTab] = useState('Today');
   const [metric, setMetric] = useState('Total Points');
   const [loading, setLoading] = useState(true);
@@ -44,7 +44,7 @@ export default function LeaderboardPage() {
       try {
         setLoading(true);
 
-        // Daily champs (today)
+        // Daily champs (today) — unaffected by elimination filter because it's strictly daily challenge winners
         const todayStart = new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
         const { data: daily } = await supabase
           .from('games_records')
@@ -75,7 +75,7 @@ export default function LeaderboardPage() {
           setDailyChampions([]);
         }
 
-        // Leaderboard
+        // Leaderboard (EXCLUDING elimination games)
         const now = new Date();
         const start = PERIOD_TO_START(now, tab);
         const startIso = start ? start.toISOString() : null;
@@ -88,8 +88,11 @@ export default function LeaderboardPage() {
         for (const u of (users || [])) {
           let q = supabase.from('games_records')
             .select('won, points_earned, time_taken_seconds, created_at')
-            .eq('user_id', u.id);
+            .eq('user_id', u.id)
+            .eq('is_elimination_game', false); // <<< CHANGE: exclude elimination games
+
           if (startIso) q = q.gte('created_at', startIso);
+
           const { data: games } = await q;
           if (!games || games.length === 0) continue;
 
@@ -132,21 +135,22 @@ export default function LeaderboardPage() {
     setUserStats({ totalPoints: 0, games: 0, avgTime: 0, successRate: 0 });
     setLoadingUser(true);
     try {
-      // Recent 20 for the list
+      // Recent 20 for the list — INCLUDE elimination games, but show a badge
       const { data: games } = await supabase
         .from('games_records')
-        .select('id, player_name, won, points_earned, time_taken_seconds, guesses_attempted, hints_used, created_at, is_daily_challenge')
+        .select('id, player_name, won, points_earned, time_taken_seconds, guesses_attempted, hints_used, created_at, is_daily_challenge, is_elimination_game') // <<< CHANGE: select is_elimination_game
         .eq('user_id', player.userId)
         .order('created_at', { ascending: false })
         .limit(20);
 
       setUserGames(games || []);
 
-      // ALL games (for stats)
+      // ALL games for stats — EXCLUDE elimination games
       const { data: allGames } = await supabase
         .from('games_records')
         .select('won, points_earned, time_taken_seconds')
-        .eq('user_id', player.userId);
+        .eq('user_id', player.userId)
+        .eq('is_elimination_game', false); // <<< CHANGE: exclude elimination games
 
       const total = allGames?.length || 0;
       const pts = (allGames || []).reduce((s, g) => s + (g.points_earned || 0), 0);
@@ -373,7 +377,7 @@ export default function LeaderboardPage() {
               </button>
             </div>
 
-            {/* Stats are ALL-TIME */}
+            {/* Stats are ALL-TIME, EXCLUDING elimination games */}
             <div className="grid grid-cols-2 gap-3 p-4 md:grid-cols-4">
               <div className="rounded border p-3 text-center">
                 <div className="text-xs text-gray-500">Total Points</div>
@@ -404,7 +408,7 @@ export default function LeaderboardPage() {
               ) : (
                 <div className="space-y-3">
                   {userGames.map(g => {
-                    // CHANGE #2: mask today's daily challenge player name
+                    // mask today's daily challenge player name
                     const maskedName =
                       g.is_daily_challenge && isToday(g.created_at)
                         ? 'Daily Challenge Player'
@@ -426,6 +430,7 @@ export default function LeaderboardPage() {
                             <div className="text-xs text-gray-500">
                               {g.guesses_attempted} {g.guesses_attempted === 1 ? 'guess' : 'guesses'}
                               {g.is_daily_challenge && ' • Daily'}
+                              {g.is_elimination_game && ' • Elimination' /* <<< CHANGE: show elimination tag */}
                             </div>
                           </div>
                         </div>
