@@ -207,7 +207,7 @@ export default function ProfilePage() {
         setLoading(true);
         const { data: games, error: recentErr } = await supabase
           .from('games_records')
-          .select('id, player_name, won, points_earned, time_taken_seconds, guesses_attempted, hints_used, created_at, is_daily_challenge')
+          .select('id, player_name, won, points_earned, time_taken_seconds, guesses_attempted, hints_used, created_at, is_daily_challenge, is_elimination_game') // ← added is_elimination_game
           .eq('user_id', user.id)
           .order('created_at', { ascending: false })
           .limit(20);
@@ -568,8 +568,14 @@ export default function ProfilePage() {
                       >
                         <div className="flex justify-between items-center">
                           <div>
-                            {/* Golden name for daily challenge */}
-                            <div className={`font-medium ${game.is_daily_challenge ? 'text-yellow-600 font-semibold' : ''}`}>
+                            {/* Golden name for daily challenge; Purple for elimination */}
+                            <div
+                              className={classNames(
+                                'font-medium',
+                                game.is_daily_challenge ? 'text-yellow-600 font-semibold'
+                                  : (game.is_elimination_game ? 'text-purple-600 font-semibold' : '')
+                              )}
+                            >
                               {game.player_name || "Unknown Player"}
                             </div>
                             <div className="text-sm text-gray-500">
@@ -583,6 +589,7 @@ export default function ProfilePage() {
                             <div className="text-xs text-gray-500">
                               {game.guesses_attempted} {game.guesses_attempted === 1 ? 'guess' : 'guesses'}
                               {game.is_daily_challenge && ' • Daily Challenge'}
+                              {game.is_elimination_game && ' • Elimination'}
                             </div>
                           </div>
                         </div>
