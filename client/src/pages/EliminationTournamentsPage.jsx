@@ -608,9 +608,17 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
     return { compChips, seasonChips, mvChip };
   }, [tournament.filters, compIdToLabel]);
 
+  // --- MY STATE: determine if I'm eliminated (used to block play) ---
+  const myParticipant = userId ? participantsMap.get(userId) : null;
+  const iAmEliminated =
+    ((myParticipant?.state || "").toLowerCase() === "eliminated");
+
   // Play handler — sends a FLATTENED player payload (fixes empty player crash)
   const handlePlayRound = async (round) => {
     if (!round?.id || !round?.round_number || !round?.player_id) return;
+
+    // HARD GUARD: do not allow eliminated players to enter
+    if (iAmEliminated) return;
 
     // Guard: don't allow play if already played
     const already = entriesFor(round.id).some((e) => e.user_id === userId);
@@ -650,7 +658,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
 
   const [/* internal: used by auto-finalizer */] = useState(null);
 
-  // Auto-finalization (UPDATED: include next round's player in the same finalize call)
+  // Auto-finalization (UPDATED: ensure next player is NEW & count only ACTIVE participants)
   const finalizingRef = useRef(new Set());
 
   useEffect(() => {
@@ -659,9 +667,21 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
       if (!Array.isArray(rounds) || rounds.length === 0) return;
       if (!Array.isArray(participants) || participants.length === 0) return;
 
+      // Set of players already used in this tournament (for uniqueness)
+      const usedPlayerIds = new Set(
+        (rounds || [])
+          .map((x) => x?.player_id)
+          .filter((v) => v !== null && v !== undefined)
+      );
+
+      // Count only ACTIVE participants for "everyone played"
+      const activeCount = participants.filter(
+        (p) => (p.state || "").toLowerCase() === "active"
+      ).length || participants.length;
+
       for (const r of rounds) {
         const entries = entriesByRound[r.id] || [];
-        const everyonePlayed = entries.length >= participants.length;
+        const everyonePlayed = entries.length >= activeCount;
         const now = Date.now();
         the_timeup_check: {
           // no-op block retained to avoid any functional changes
@@ -679,17 +699,30 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
           // Pre-pick the next player ONLY if a later round doesn't already exist
           let nextPlayerId = null;
           if (!laterRoundExists) {
-            const nextPlayer = await getRandomPlayer(
-              { ...(tournament.filters || {}), userId },
-              userId
-            );
-            if (nextPlayer?.id) nextPlayerId = nextPlayer.id;
+            // Try up to N attempts to get a fresh player (front-end uniqueness)
+            const maxAttempts = 24;
+            for (let i = 0; i < maxAttempts; i++) {
+              const candidate = await getRandomPlayer(
+                {
+                  ...(tournament.filters || {}),
+                  userId,
+                  // If your getRandomPlayer ignores this field, loop still prevents duplicates.
+                  excludePlayerIds: Array.from(usedPlayerIds),
+                },
+                userId
+              );
+              const candId = candidate?.id || null;
+              if (candId && !usedPlayerIds.has(candId)) {
+                nextPlayerId = candId;
+                break;
+              }
+            }
           }
 
           // Single finalize call: pass next player along; server will:
           // - eliminate lowest scorer(s)
           // - either finish (if one left) OR create the next round using next_player_id
-          const { data: summary, error } = await supabase.rpc('finalize_round', {
+          const { error } = await supabase.rpc('finalize_round', {
             p_round_id: r.id,
             p_next_player_id: nextPlayerId,
             p_force: Boolean(nextPlayerId),
@@ -871,13 +904,18 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
                   entries.map((e) => [e.user_id, e])
                 );
 
-                // DERIVED active state
+                // DERIVED active state:
+                // Use only ACTIVE participants count for this round still being open
+                const activeCount = participants.filter(
+                  (p) => (p.state || "").toLowerCase() === "active"
+                ).length || participants.length;
+
                 const now = Date.now();
                 const endsAt = r.ends_at ? new Date(r.ends_at).getTime() : null;
                 const derivedActive =
                   !r.closed_at &&
                   (!!endsAt ? endsAt > now : true) &&
-                  entries.length < participants.length;
+                  entries.length < activeCount;
 
                 const mePlayed = userId
                   ? entryByUser.has(userId)
@@ -1013,8 +1051,8 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
                       )}
                     </div>
 
-                    {/* Actions (centered, bigger, and hidden if already played) */}
-                    {isLive && derivedActive && !mePlayed && (
+                    {/* Actions (centered, bigger, and hidden if already played or eliminated) */}
+                    {isLive && derivedActive && !iAmEliminated && !mePlayed && (
                       <div className="mt-4 flex items-center justify-center">
                         <button
                           type="button"
@@ -1716,7 +1754,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
 /* ----------------- Difficulty Filters section (reused) ----------------- */
 function Section({ title, icon, collapsed, onToggle, actions, children }) {
   return (
-    <div className="rounded-lg border bg-white/60">
+    <div className="rounded-lg border bg.white/60">
       <div className="flex items-center justify-between px-3 py-2">
         <button
           type="button"
