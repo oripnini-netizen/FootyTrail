@@ -1,5 +1,6 @@
 // src/pages/EliminationTournamentsPage.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../supabase";
 import { useAuth } from "../context/AuthContext";
 
@@ -19,9 +20,6 @@ import {
   CalendarClock,
   Axe,
 } from "lucide-react";
-
-// NEW: use the external card component you created
-import EliminationTournamentCard from "../components/EliminationTournamentCard";
 
 /* ------------------------------------------------------------
    Small util(s)
@@ -237,26 +235,14 @@ export default function EliminationTournamentsPage() {
               )}
               {!loading.live && !error.live && live.length > 0 && (
                 <>
-                  {live.map((t) => {
-                    // Normalize filters to protect the external card (avoids .map on undefined)
-                    const safeTournament = {
-                      ...t,
-                      filters: {
-                        competitions: [],
-                        seasons: [],
-                        minMarketValue: 0,
-                        ...(t.filters || {}),
-                      },
-                    };
-                    return (
-                      <EliminationTournamentCard
-                        key={t.id}
-                        tournament={safeTournament}
-                        compIdToLabel={compIdToLabel}
-                        onAdvanced={reloadLists}
-                      />
-                    );
-                  })}
+                  {live.map((t) => (
+                    <TournamentCard
+                      key={t.id}
+                      tournament={t}
+                      compIdToLabel={compIdToLabel}
+                      onAdvanced={reloadLists}
+                    />
+                  ))}
                 </>
               )}
               {!loading.live && !error.live && live.length === 0 && (
@@ -285,25 +271,14 @@ export default function EliminationTournamentsPage() {
               )}
               {!loading.finished && !error.finished && finished.length > 0 && (
                 <>
-                  {finished.map((t) => {
-                    const safeTournament = {
-                      ...t,
-                      filters: {
-                        competitions: [],
-                        seasons: [],
-                        minMarketValue: 0,
-                        ...(t.filters || {}),
-                      },
-                    };
-                    return (
-                      <EliminationTournamentCard
-                        key={t.id}
-                        tournament={safeTournament}
-                        compIdToLabel={compIdToLabel}
-                        onAdvanced={reloadLists}
-                      />
-                    );
-                  })}
+                  {finished.map((t) => (
+                    <TournamentCard
+                      key={t.id}
+                      tournament={t}
+                      compIdToLabel={compIdToLabel}
+                      onAdvanced={reloadLists}
+                    />
+                  ))}
                 </>
               )}
               {!loading.finished && !error.finished && finished.length === 0 && (
@@ -353,6 +328,618 @@ function PlaceholderCard({ title, subtitle, ctaLabel, onCtaClick }) {
   );
 }
 
+function Countdown({ endsAt }) {
+  const [left, setLeft] = useState(() => format(endsAt));
+
+  useEffect(() => {
+    setLeft(format(endsAt));
+    if (!endsAt) return;
+    const id = setInterval(() => setLeft(format(endsAt)), 1000);
+    return () => clearInterval(id);
+  }, [endsAt]);
+
+  function format(endIso) {
+    if (!endIso) return "—";
+    const end = new Date(endIso).getTime();
+    const now = Date.now();
+    const ms = Math.max(0, end - now);
+    const s = Math.floor(ms / 1000);
+    const h = String(Math.floor(s / 3600)).padStart(2, "0");
+    const m = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+    const ss = String(s % 60).padStart(2, "0");
+    return `${h}:${m}:${ss}`;
+  }
+
+  return <span>{left}</span>;
+}
+
+/** Fetches player meta only when needed (for finished rounds) */
+function RoundPlayer({ playerId }) {
+  const [meta, setMeta] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!playerId) return;
+      const { data, error } = await supabase
+        .from("players_in_seasons")
+        .select(
+          "player_id, player_name, player_position, player_dob_age, player_nationality, player_photo"
+        )
+        .eq("player_id", playerId)
+        .limit(1)
+        .maybeSingle();
+      if (!alive) return;
+      setMeta(error ? null : data || null);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [playerId]);
+
+  if (!meta) return <div className="text-sm text-gray-500">Player details unavailable.</div>;
+
+  return (
+    <div className="flex items-center gap-3">
+      {meta.player_photo ? (
+        <img
+          src={meta.player_photo}
+          alt={meta.player_name || "Player"}
+          className="h-10 w-10 rounded object-cover"
+        />
+      ) : (
+        <div className="h-10 w-10 rounded bg-gray-200" />
+      )}
+      <div className="text-sm text-gray-700">
+        <div className="font-medium">{meta.player_name || "—"}</div>
+        <div className="text-xs text-gray-500">
+          {(meta.player_position || "?") + " • " + (meta.player_nationality || "?")}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const userId = user?.id || null;
+
+  const createdAt = new Date(tournament.created_at);
+  const dateStr = createdAt.toLocaleString();
+  const isLive = tournament.status === "live";
+  const timeLimitMin = Math.round(
+    (tournament.round_time_limit_seconds || 0) / 60
+  );
+
+  const [participants, setParticipants] = useState([]); // [{id, full_name, email}]
+  const [rounds, setRounds] = useState([]); // [{id, round_number, started_at, ends_at, closed_at, player_id}]
+  const [entriesByRound, setEntriesByRound] = useState({}); // { round_id : [{user_id, points_earned}] }
+
+  // NEW: card-level collapse (defaults to OPEN)
+  const [cardCollapsed, setCardCollapsed] = useState(false);
+  // NEW: filters section collapse (defaults to COLLAPSED)
+  const [filtersCollapsed, setFiltersCollapsed] = useState(true);
+
+  // Fetch participants + all rounds (+ fill in any missing users from entries)
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        // participants
+        const { data: partRows } = await supabase
+          .from("elimination_participants")
+          .select("user_id, state")
+          .eq("tournament_id", tournament.id);
+
+        const idsFromParticipants = (partRows || []).map((r) => r.user_id);
+
+        let userRows = [];
+        if (idsFromParticipants.length) {
+          const { data: usersRows } = await supabase
+            .from("users")
+            .select("id, full_name, email")
+            .in("id", idsFromParticipants);
+          userRows = usersRows || [];
+        }
+
+        // rounds
+        const { data: roundRows } = await supabase
+          .from("elimination_rounds")
+          .select("id, round_number, started_at, ends_at, closed_at, player_id")
+          .eq("tournament_id", tournament.id)
+          .order("round_number", { ascending: true });
+
+        const roundsArr = Array.isArray(roundRows) ? roundRows : [];
+        const entriesMap = {};
+
+        // entries per round (batched) + collect any extra user_ids
+        const extraUserIds = new Set();
+        for (const r of roundsArr) {
+          const { data: ent } = await supabase
+            .from("elimination_round_entries")
+            .select("user_id, points_earned, finished_at")
+            .eq("round_id", r.id);
+          const e = Array.isArray(ent) ? ent : [];
+          entriesMap[r.id] = e;
+          for (const row of e) {
+            if (!idsFromParticipants.includes(row.user_id)) {
+              extraUserIds.add(row.user_id);
+            }
+          }
+        }
+
+        // fetch any missing users referenced by entries (avoids GUID fallback)
+        if (extraUserIds.size) {
+          const { data: extraUsers } = await supabase
+            .from("users")
+            .select("id, full_name, email")
+            .in("id", Array.from(extraUserIds));
+          userRows = [...userRows, ...(extraUsers || [])];
+        }
+
+        if (!cancelled) {
+          setParticipants(userRows);
+          setRounds(roundsArr);
+          setEntriesByRound(entriesMap);
+        }
+      } catch {
+        if (!cancelled) {
+          setParticipants([]);
+          setRounds([]);
+          setEntriesByRound({});
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [tournament.id]);
+
+  const participantsMap = useMemo(() => {
+    const m = new Map();
+    for (const p of participants) m.set(p.id, p);
+    return m;
+  }, [participants]);
+
+  const entriesFor = (roundId) => entriesByRound[roundId] || [];
+
+  // Build filter chips grouped under headings
+  const { compChips, seasonChips, mvChip } = useMemo(() => {
+    const f = tournament.filters || {};
+    const seasons = Array.isArray(f.seasons) ? f.seasons : [];
+    const comps = Array.isArray(f.competitions) ? f.competitions : [];
+    const mv = Number(f.minMarketValue || 0);
+
+    const compChips = comps.map((id) => ({
+      key: `C-${id}`,
+      label: compIdToLabel?.[String(id)] || `League ${id}`,
+    }));
+    const seasonChips = seasons.map((s) => ({
+      key: `S-${s}`,
+      label: String(s),
+    }));
+    const mvChip =
+      mv > 0 ? { key: "MV", label: `Min MV: €${fmtCurrency(mv)}` } : null;
+
+    return { compChips, seasonChips, mvChip };
+  }, [tournament.filters, compIdToLabel]);
+
+  // Play handler — sends a FLATTENED player payload (fixes empty player crash)
+  const handlePlayRound = async (round) => {
+    if (!round?.id || !round?.round_number || !round?.player_id) return;
+
+    // Guard: don't allow play if already played
+    const already = entriesFor(round.id).some((e) => e.user_id === userId);
+    if (already) return;
+
+    // Fetch one player meta row for this round's player_id
+    const { data: meta } = await supabase
+      .from("players_in_seasons")
+      .select(
+        "player_id, player_name, player_position, player_dob_age, player_nationality, player_photo"
+      )
+      .eq("player_id", round.player_id)
+      .limit(1)
+      .maybeSingle();
+
+    if (!meta?.player_id) return;
+
+    // IMPORTANT: LiveGamePage expects these at TOP-LEVEL in location.state
+    navigate("/live", {
+      state: {
+        id: Number(meta.player_id),
+        name: meta.player_name || "",
+        age: meta.player_dob_age || "",
+        nationality: meta.player_nationality || "",
+        position: meta.player_position || "",
+        photo: meta.player_photo || "",
+        potentialPoints: 10000,
+        elimination: {
+          tournamentId: tournament.id,
+          tournamentName: tournament.name,
+          roundId: round.id,
+          roundNumber: round.round_number,
+        },
+      },
+    });
+  };
+
+  const [/* internal: used by auto-finalizer */] = useState(null);
+
+  // Auto-finalization: when a round's time is up or all participants have played,
+  // call the finalize_round RPC to close the round and eliminate users. If more than
+  // one user remains, automatically create the next round by passing a new player id.
+  const finalizingRef = useRef(new Set());
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!Array.isArray(rounds) || rounds.length === 0) return;
+      if (!Array.isArray(participants) || participants.length === 0) return;
+
+      for (const r of rounds) {
+        const entries = entriesByRound[r.id] || [];
+        const everyonePlayed = entries.length >= participants.length;
+        const now = Date.now();
+        the_timeup_check: {
+          // no-op block retained to avoid any functional changes
+        }
+        const timeUp = r.ends_at ? new Date(r.ends_at).getTime() <= now : false;
+        const shouldFinalize = !r.closed_at && (everyonePlayed || timeUp);
+
+        if (!shouldFinalize) continue;
+        if (finalizingRef.current.has(r.id)) continue;
+
+        finalizingRef.current.add(r.id);
+        try {
+          // 1) finalize (close + eliminate)
+          const { data: summary, error } = await supabase.rpc('finalize_round', {
+            p_round_id: r.id,
+            p_force: false,
+          });
+          if (error) throw error;
+
+          // 2) If tournament is not finished and we don't already have a later round,
+          // create the next round with a new random player.
+          const tournamentFinished = summary && summary.tournament_finished === true;
+          const laterRoundExists = rounds.some((x) => x.round_number > r.round_number);
+
+          if (!tournamentFinished && !laterRoundExists) {
+            const nextPlayer = await getRandomPlayer(
+              { ...(tournament.filters || {}), userId },
+              userId
+            );
+            if (nextPlayer?.id) {
+              const { error: err2 } = await supabase.rpc('finalize_round', {
+                p_round_id: r.id,
+                p_next_player_id: nextPlayer.id,
+                p_force: true,
+              });
+              if (err2) throw err2;
+            }
+          }
+
+          // reload lists/cards
+          if (onAdvanced) await onAdvanced();
+        } catch (e) {
+          // Silently ignore; UI will reflect actual DB state on next poll/refresh
+          console.error('[elim] auto-finalize error', e);
+        } finally {
+          finalizingRef.current.delete(r.id);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rounds, entriesByRound, participants, tournament.id, userId, onAdvanced]);
+
+  return (
+    <div className="rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md">
+      {/* Card header with collapse toggle */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setCardCollapsed((v) => !v)}
+            className="rounded-md border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+            title={cardCollapsed ? "Expand" : "Collapse"}
+          >
+            {cardCollapsed ? "▼ Expand" : "▲ Collapse"}
+          </button>
+          <h3 className="text-base font-semibold text-gray-900">
+            {tournament.name}
+          </h3>
+        </div>
+        <span
+          className={classNames(
+            "shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold",
+            isLive ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-800"
+          )}
+        >
+          {isLive ? "Live" : "Finished"}
+        </span>
+      </div>
+
+      <p className="mt-2 text-xs text-gray-500">Created: {dateStr}</p>
+
+      {/* Winner (finished) */}
+      {!isLive && tournament.winner_user_id && (
+        <div className="mt-2 text-xs font-medium text-green-800">
+          Winner: <WinnerName userId={tournament.winner_user_id} />
+        </div>
+      )}
+
+      {/* Collapsible body */}
+      {!cardCollapsed && (
+        <>
+          {/* Difficulty Filters as grouped chips (now collapsible, default collapsed) */}
+          <div className="mt-3">
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-semibold text-gray-700">
+                Difficulty Filters
+              </div>
+              <button
+                type="button"
+                onClick={() => setFiltersCollapsed((v) => !v)}
+                className="text-xs text-gray-600 hover:text-gray-800"
+                title={filtersCollapsed ? "Expand filters" : "Collapse filters"}
+              >
+                {filtersCollapsed ? "▼ Show" : "▲ Hide"}
+              </button>
+            </div>
+
+            {!filtersCollapsed && (
+              <div className="mt-2">
+                {/* Competitions */}
+                {compChips.length > 0 && (
+                  <>
+                    <div className="text-[11px] font-medium text-gray-600 mb-1">
+                      Competitions
+                    </div>
+                    <div className="mb-2 flex flex-wrap gap-1.5">
+                      {compChips.map((c) => (
+                        <span
+                          key={c.key}
+                          className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-800 ring-1 ring-inset ring-green-600/20"
+                        >
+                          {c.label}
+                        </span>
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                {/* Seasons */}
+                {seasonChips.length > 0 && (
+                  <>
+                    <div className="text:[11px] font-medium text-gray-600 mb-1">
+                      Seasons
+                    </div>
+                    <div className="mb-2 flex flex-wrap gap-1.5">
+                      {seasonChips.map((c) => (
+                        <span
+                          key={c.key}
+                          className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-800 ring-1 ring-inset ring-green-600/20"
+                        >
+                          {c.label}
+                        </span>
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                {/* Minimum MV */}
+                {mvChip && (
+                  <>
+                    <div className="text-[11px] font-medium text-gray-600 mb-1">
+                      Minimum MV
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <span
+                        key={mvChip.key}
+                        className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-800 ring-1 ring-inset ring-green-600/20"
+                      >
+                        {mvChip.label}
+                      </span>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Participants as chips */}
+          <div className="mt-3">
+            <div className="text-xs font-semibold mb-1 text-gray-700">
+              Participants
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {participants.length === 0 ? (
+                <span className="text-[11px] text-gray-500">—</span>
+              ) : (
+                participants.map((p) => (
+                  <span
+                    key={p.id}
+                    className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-800 ring-1 ring-inset ring-gray-300"
+                  >
+                    {p.full_name || p.email}
+                  </span>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Rounds list */}
+          <div className="mt-4 space-y-3">
+            {rounds.length === 0 ? (
+              <div className="text-sm text-gray-500">No rounds yet.</div>
+            ) : (
+              rounds.map((r) => {
+                const entries = entriesFor(r.id);
+                const playedUserIds = new Set(entries.map((e) => e.user_id));
+                const notPlayed = participants.filter((p) => !playedUserIds.has(p.id));
+
+                // DERIVED active state to fix "still active" issues
+                const now = Date.now();
+                const endsAt = r.ends_at ? new Date(r.ends_at).getTime() : null;
+                const derivedActive =
+                  !r.closed_at &&
+                  (!!endsAt ? endsAt > now : true) &&
+                  entries.length < participants.length;
+
+                const mePlayed = userId ? playedUserIds.has(userId) : false;
+
+                return (
+                  <div key={r.id} className="rounded-xl border bg-gray-50 p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="font-semibold text-gray-800">Round {r.round_number}</div>
+                      <div
+                        className={classNames(
+                          "text-xs px-2 py-0.5 rounded-full",
+                          derivedActive
+                            ? "bg-emerald-100 text-emerald-700"
+                            : "bg-gray-200 text-gray-700"
+                        )}
+                      >
+                        {derivedActive ? "Active" : "Finished"}
+                      </div>
+                    </div>
+
+                    <div className="mt-1 text-xs text-gray-600">
+                      {derivedActive ? (
+                        <>
+                          Ends in:{" "}
+                          <span className="font-semibold">
+                            <Countdown endsAt={r.ends_at || null} />
+                          </span>{" "}
+                          {timeLimitMin ? `• Limit: ${timeLimitMin} min` : null}
+                        </>
+                      ) : (
+                        <>
+                          Started: {r.started_at ? new Date(r.started_at).toLocaleString() : "—"}
+                          {" • "}
+                          Ended: {r.closed_at
+                            ? new Date(r.closed_at).toLocaleString()
+                            : r.ends_at
+                            ? new Date(r.ends_at).toLocaleString()
+                            : "—"}
+                        </>
+                      )}
+                    </div>
+
+                    {/* Player details: ONLY show after the round is finished */}
+                    {!derivedActive && r.player_id ? (
+                      <div className="mt-3">
+                        <div className="text-xs font-semibold text-gray-700 mb-1">
+                          Round Player
+                        </div>
+                        <RoundPlayer playerId={r.player_id} />
+                      </div>
+                    ) : null}
+
+                    {/* Scores / participation */}
+                    <div className="mt-3 grid gap-2">
+                      <div>
+                        <div className="text-xs font-semibold text-gray-700 mb-1">
+                          Played ({entries.length})
+                        </div>
+                        {entries.length === 0 ? (
+                          <div className="text-xs text-gray-500">No one has played yet.</div>
+                        ) : (
+                          <ul className="space-y-1">
+                            {entries
+                              .slice()
+                              .sort((a, b) => (b.points_earned || 0) - (a.points_earned || 0))
+                              .map((e, idx) => {
+                                const u = participantsMap.get(e.user_id);
+                                const label = u?.full_name || u?.email || e.user_id;
+                                return (
+                                  <li
+                                    key={`${e.user_id}-${idx}`}
+                                    className="text-sm flex items-center justify-between bg-white rounded-md border px-2 py-1"
+                                  >
+                                    <span className="truncate mr-2">{label}</span>
+                                    <span className="font-semibold text-emerald-700">
+                                      {e.points_earned ?? 0} pts
+                                    </span>
+                                  </li>
+                                );
+                              })}
+                          </ul>
+                        )}
+                      </div>
+
+                      {/* Yet to play — always shown so all participants appear */}
+                      <div>
+                        <div className="text-xs font-semibold text-gray-700 mb-1">
+                          Yet to play ({notPlayed.length})
+                        </div>
+                        {notPlayed.length === 0 ? (
+                          <div className="text-xs text-gray-500">—</div>
+                        ) : (
+                          <div className="flex flex-wrap gap-1.5">
+                            {notPlayed.map((p) => (
+                              <span
+                                key={p.id}
+                                className="inline-flex items-center rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-gray-700 border"
+                              >
+                                {p.full_name || p.email}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    {isLive && derivedActive && (
+                      <div className="mt-3 flex items-center justify-end">
+                        <button
+                          type="button"
+                          className="rounded-lg border border-green-600 px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-50 disabled:opacity-60"
+                          onClick={() => handlePlayRound(r)}
+                          disabled={!r.player_id || mePlayed}
+                          title={mePlayed ? "You already played this round" : "Play Round"}
+                        >
+                          {mePlayed ? "Played" : "Play Round"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function WinnerName({ userId }) {
+  const [name, setName] = useState("");
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      if (!userId) return;
+      const { data } = await supabase
+        .from("users")
+        .select("id, full_name, email")
+        .eq("id", userId)
+        .limit(1)
+        .maybeSingle();
+      if (active) setName(data?.full_name || data?.email || "—");
+    })();
+    return () => {
+      active = false;
+    };
+  }, [userId]);
+  return <>{name || "—"}</>;
+}
+
 function SkeletonCard() {
   return (
     <div className="animate-pulse rounded-2xl border bg-white p-5">
@@ -376,7 +963,7 @@ function ErrorCard({ title, message }) {
 
 /* ------------------------------------------------------------
    CreateTournamentModal
-   (unchanged except for surrounding file adjustments)
+   (changed: default filters collapsed; chips summary shown ABOVE sections)
 ------------------------------------------------------------ */
 function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   const dialogRef = useRef(null);
