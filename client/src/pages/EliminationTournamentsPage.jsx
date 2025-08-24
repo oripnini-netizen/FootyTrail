@@ -613,6 +613,61 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
   const iAmEliminated =
     ((myParticipant?.state || "").toLowerCase() === "eliminated");
 
+  // ***** NEW: Per-round active users (simulate bracket progression from entries) *****
+  const activeUsersByRound = useMemo(() => {
+    const result = new Map();
+    if (!Array.isArray(rounds) || rounds.length === 0) return result;
+    if (!Array.isArray(participants) || participants.length === 0) return result;
+
+    // Start with everyone active for Round 1
+    let activeSet = new Set(participants.map((p) => p.id));
+    // Process rounds in order; for each, record current active set,
+    // then, if the round is finished, eliminate DNF + all with min points.
+    const ordered = [...rounds].sort((a, b) => (a.round_number || 0) - (b.round_number || 0));
+    for (const r of ordered) {
+      // Active at the START of this round:
+      result.set(r.id, new Set(activeSet));
+
+      // Only compute eliminations once the round is actually finished
+      const isClosed =
+        !!r.closed_at ||
+        (r.ends_at ? new Date(r.ends_at).getTime() <= Date.now() : false);
+
+      if (!isClosed) continue;
+
+      const entries = entriesByRound[r.id] || [];
+      const ptsByUser = new Map(entries.map((e) => [e.user_id, Number(e.points_earned ?? 0)]));
+
+      const played = [];
+      const notPlayed = [];
+      for (const uid of activeSet) {
+        if (ptsByUser.has(uid)) played.push(uid);
+        else notPlayed.push(uid);
+      }
+
+      const eliminated = new Set();
+      // DNFs are eliminated
+      for (const uid of notPlayed) eliminated.add(uid);
+
+      if (played.length > 0) {
+        let minPts = Infinity;
+        for (const uid of played) {
+          const v = ptsByUser.get(uid);
+          if (v < minPts) minPts = v;
+        }
+        for (const uid of played) {
+          if (ptsByUser.get(uid) === minPts) eliminated.add(uid);
+        }
+      }
+
+      // Update active set for the NEXT round
+      for (const uid of eliminated) activeSet.delete(uid);
+    }
+
+    return result;
+  }, [rounds, participants, entriesByRound]);
+  // ***** END NEW *****
+
   // Play handler — sends a FLATTENED player payload (fixes empty player crash)
   const handlePlayRound = async (round) => {
     if (!round?.id || !round?.round_number || !round?.player_id) return;
@@ -658,7 +713,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
 
   const [/* internal: used by auto-finalizer */] = useState(null);
 
-  // Auto-finalization (UPDATED: ensure next player is NEW & count only ACTIVE participants)
+  // Auto-finalization (keep as-is)
   const finalizingRef = useRef(new Set());
 
   useEffect(() => {
@@ -719,9 +774,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
             }
           }
 
-          // Single finalize call: pass next player along; server will:
-          // - eliminate lowest scorer(s)
-          // - either finish (if one left) OR create the next round using next_player_id
+          // Single finalize call: pass next player along
           const { error } = await supabase.rpc('finalize_round', {
             p_round_id: r.id,
             p_next_player_id: nextPlayerId,
@@ -900,49 +953,53 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
             ) : (
               rounds.map((r) => {
                 const entries = entriesFor(r.id);
-                const entryByUser = new Map(
-                  entries.map((e) => [e.user_id, e])
-                );
+                const entryByUser = new Map(entries.map((e) => [e.user_id, e]));
 
-                // DERIVED active state:
-                // Use only ACTIVE participants count for this round still being open
-                const activeCount = participants.filter(
-                  (p) => (p.state || "").toLowerCase() === "active"
-                ).length || participants.length;
+                // ***** NEW: restrict to the users active AT THIS ROUND *****
+                const activeIdsForRound =
+                  activeUsersByRound.get(r.id) ||
+                  new Set(participants.map((p) => p.id));
+
+                const activeCount = activeIdsForRound.size;
+
+                const entriesFromActive = entries.filter((e) =>
+                  activeIdsForRound.has(e.user_id)
+                );
+                // ***** END NEW *****
 
                 const now = Date.now();
                 const endsAt = r.ends_at ? new Date(r.ends_at).getTime() : null;
                 const derivedActive =
                   !r.closed_at &&
                   (!!endsAt ? endsAt > now : true) &&
-                  entries.length < activeCount;
+                  entriesFromActive.length < activeCount;
 
-                const mePlayed = userId
-                  ? entryByUser.has(userId)
-                  : false;
+                const mePlayed =
+                  userId && activeIdsForRound.has(userId)
+                    ? entryByUser.has(userId)
+                    : false;
 
-                // Compute min/max among played users only
-                const playedPoints = entries
-                  .map((e) => Number(e.points_earned ?? 0));
+                // Compute min/max among played ACTIVE users only
+                const playedPoints = entriesFromActive.map((e) =>
+                  Number(e.points_earned ?? 0)
+                );
                 const hasAnyPlayed = playedPoints.length > 0;
-                const maxPts = hasAnyPlayed
-                  ? Math.max(...playedPoints)
-                  : null;
-                const minPts = hasAnyPlayed
-                  ? Math.min(...playedPoints)
-                  : null;
+                const maxPts = hasAnyPlayed ? Math.max(...playedPoints) : null;
+                const minPts = hasAnyPlayed ? Math.min(...playedPoints) : null;
                 const singleValueOnly =
                   hasAnyPlayed && maxPts === minPts;
 
-                // Build a unified list of all participants with points or "-"
-                const unifiedRows = participants.map((p) => {
-                  const e = entryByUser.get(p.id) || null;
-                  const points =
-                    e && typeof e.points_earned === "number"
-                      ? e.points_earned
-                      : null;
-                  return { user: p, points };
-                });
+                // Build a unified list of ACTIVE participants only (others hidden for this round)
+                const unifiedRows = participants
+                  .filter((p) => activeIdsForRound.has(p.id))
+                  .map((p) => {
+                    const e = entryByUser.get(p.id) || null;
+                    const points =
+                      e && typeof e.points_earned === "number"
+                        ? e.points_earned
+                        : null;
+                    return { user: p, points };
+                  });
 
                 // Sort: played (by points desc) first, then not played
                 unifiedRows.sort((a, b) => {
@@ -1006,7 +1063,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
                       </div>
                     ) : null}
 
-                    {/* Unified scores list as requested */}
+                    {/* Scores — only ACTIVE users for this round */}
                     <div className="mt-3">
                       <div className="text-xs font-semibold text-gray-700 mb-1">
                         Scores
@@ -1120,9 +1177,7 @@ function ErrorCard({ title, message }) {
 
 /* ------------------------------------------------------------
    CreateTournamentModal
-   (changed previously; UPDATED here:
-     1) block creation with only one participant (must invite >= 1)
-     2) no other changes to behavior/UI except showing an error under Invites)
+   (unchanged for this request)
 ------------------------------------------------------------ */
 function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   const dialogRef = useRef(null);
@@ -1414,7 +1469,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
     if (!currentUser?.id) {
       next.user = "You must be logged in to create a tournament.";
     }
-    // NEW: must invite at least one other participant (min 2 total)
+    // Must invite at least one other participant (min 2 total)
     if ((invites || []).length < 1) {
       next.invites = "Invite at least one other user (minimum 2 participants).";
     }
@@ -1692,7 +1747,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                   </div>
                 )}
 
-                {/* NEW: validation message when not enough participants */}
+                {/* validation message */}
                 {errors.invites && (
                   <p className="mt-2 text-xs text-red-600">{errors.invites}</p>
                 )}
