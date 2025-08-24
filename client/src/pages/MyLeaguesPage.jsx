@@ -226,7 +226,7 @@ export default function MyLeaguesPage() {
         .is('read_at', null)
         .order('created_at', { ascending: false });
 
-      if (!cancelled && unread?.length) {
+    if (!cancelled && unread?.length) {
         // keep a copy for the banner before marking as read
         setNotifBanner(
           unread.map((n) => ({
@@ -399,7 +399,8 @@ export default function MyLeaguesPage() {
               .select('user_id, points_earned')
               .in('user_id', humanIds)
               .gte('created_at', start)
-              .lt('created_at', end);
+              .lt('created_at', end)
+              .eq('is_elimination_game', false); // <-- EXCLUDE elimination games from league scores
             byUser = new Map();
             (records || []).forEach((r) => {
               byUser.set(r.user_id, (byUser.get(r.user_id) || 0) + (r.points_earned || 0));
