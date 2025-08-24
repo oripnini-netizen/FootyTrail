@@ -89,7 +89,7 @@ export default function LeaderboardPage() {
           let q = supabase.from('games_records')
             .select('won, points_earned, time_taken_seconds, created_at')
             .eq('user_id', u.id)
-            .eq('is_elimination_game', false); // <<< CHANGE: exclude elimination games
+            .eq('is_elimination_game', false); // exclude elimination games
 
           if (startIso) q = q.gte('created_at', startIso);
 
@@ -135,10 +135,10 @@ export default function LeaderboardPage() {
     setUserStats({ totalPoints: 0, games: 0, avgTime: 0, successRate: 0 });
     setLoadingUser(true);
     try {
-      // Recent 20 for the list — INCLUDE elimination games, but show a badge
+      // Recent 20 for the list — INCLUDE elimination games, but show a badge and purple title
       const { data: games } = await supabase
         .from('games_records')
-        .select('id, player_name, won, points_earned, time_taken_seconds, guesses_attempted, hints_used, created_at, is_daily_challenge, is_elimination_game') // <<< CHANGE: select is_elimination_game
+        .select('id, player_name, won, points_earned, time_taken_seconds, guesses_attempted, hints_used, created_at, is_daily_challenge, is_elimination_game')
         .eq('user_id', player.userId)
         .order('created_at', { ascending: false })
         .limit(20);
@@ -150,7 +150,7 @@ export default function LeaderboardPage() {
         .from('games_records')
         .select('won, points_earned, time_taken_seconds')
         .eq('user_id', player.userId)
-        .eq('is_elimination_game', false); // <<< CHANGE: exclude elimination games
+        .eq('is_elimination_game', false);
 
       const total = allGames?.length || 0;
       const pts = (allGames || []).reduce((s, g) => s + (g.points_earned || 0), 0);
@@ -418,7 +418,12 @@ export default function LeaderboardPage() {
                       <div key={g.id} className="rounded border p-3">
                         <div className="flex items-center justify-between">
                           <div>
-                            <div className={`font-medium ${g.is_daily_challenge ? 'font-semibold text-yellow-600' : ''}`}>
+                            {/* CHANGE: add purple title when elimination (daily remains yellow) */}
+                            <div className={`font-medium ${
+                              g.is_daily_challenge
+                                ? 'font-semibold text-yellow-600'
+                                : (g.is_elimination_game ? 'font-semibold text-purple-600' : '')
+                            }`}>
                               {maskedName}
                             </div>
                             <div className="text-xs text-gray-500">{new Date(g.created_at).toLocaleString()}</div>
@@ -430,7 +435,7 @@ export default function LeaderboardPage() {
                             <div className="text-xs text-gray-500">
                               {g.guesses_attempted} {g.guesses_attempted === 1 ? 'guess' : 'guesses'}
                               {g.is_daily_challenge && ' • Daily'}
-                              {g.is_elimination_game && ' • Elimination' /* <<< CHANGE: show elimination tag */}
+                              {g.is_elimination_game && ' • Elimination'}
                             </div>
                           </div>
                         </div>
