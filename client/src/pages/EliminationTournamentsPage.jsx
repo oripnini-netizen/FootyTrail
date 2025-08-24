@@ -350,7 +350,8 @@ function Countdown({ endsAt }) {
     return `${h}:${m}:${ss}`;
   }
 
-  return <span>{left}</span>;
+  // Requested: countdown in red
+  return <span className="text-red-600">{left}</span>;
 }
 
 /** Fetches player meta only when needed (for finished rounds) */
@@ -411,7 +412,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
     (tournament.round_time_limit_seconds || 0) / 60
   );
 
-  const [participants, setParticipants] = useState([]); // [{id, full_name, email}]
+  const [participants, setParticipants] = useState([]); // [{id, full_name, email, state}]
   const [rounds, setRounds] = useState([]); // [{id, round_number, started_at, ends_at, closed_at, player_id}]
   const [entriesByRound, setEntriesByRound] = useState({}); // { round_id : [{user_id, points_earned}] }
 
@@ -426,13 +427,16 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
 
     (async () => {
       try {
-        // participants
+        // participants + states
         const { data: partRows } = await supabase
           .from("elimination_participants")
           .select("user_id, state")
           .eq("tournament_id", tournament.id);
 
         const idsFromParticipants = (partRows || []).map((r) => r.user_id);
+        const stateByUserId = new Map(
+          (partRows || []).map((r) => [r.user_id, r.state])
+        );
 
         let userRows = [];
         if (idsFromParticipants.length) {
@@ -478,8 +482,14 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
           userRows = [...userRows, ...(extraUsers || [])];
         }
 
+        // attach participant state to user objects
+        const userRowsWithState = (userRows || []).map((u) => ({
+          ...u,
+          state: stateByUserId.get(u.id) || null,
+        }));
+
         if (!cancelled) {
-          setParticipants(userRows);
+          setParticipants(userRowsWithState);
           setRounds(roundsArr);
           setEntriesByRound(entriesMap);
         }
@@ -646,8 +656,10 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
             onClick={() => setCardCollapsed((v) => !v)}
             className="rounded-md border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
             title={cardCollapsed ? "Expand" : "Collapse"}
+            aria-label={cardCollapsed ? "Expand" : "Collapse"}
           >
-            {cardCollapsed ? "▼ Expand" : "▲ Collapse"}
+            {/* Requested: just an arrow, no text */}
+            {cardCollapsed ? "▼" : "▲"}
           </button>
           <h3 className="text-base font-semibold text-gray-900">
             {tournament.name}
@@ -760,14 +772,27 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
               {participants.length === 0 ? (
                 <span className="text-[11px] text-gray-500">—</span>
               ) : (
-                participants.map((p) => (
-                  <span
-                    key={p.id}
-                    className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-800 ring-1 ring-inset ring-gray-300"
-                  >
-                    {p.full_name || p.email}
-                  </span>
-                ))
+                participants.map((p) => {
+                  const isActive = (p.state || "").toLowerCase() === "active";
+                  const isEliminated =
+                    (p.state || "").toLowerCase() === "eliminated";
+                  return (
+                    <span
+                      key={p.id}
+                      className={classNames(
+                        "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset",
+                        isActive &&
+                          "bg-emerald-50 text-emerald-800 ring-emerald-600/20",
+                        isEliminated &&
+                          "bg-red-50 text-red-700 ring-red-600/20 opacity-70",
+                        !isActive && !isEliminated &&
+                          "bg-gray-100 text-gray-800 ring-gray-300"
+                      )}
+                    >
+                      {p.full_name || p.email}
+                    </span>
+                  );
+                })
               )}
             </div>
           </div>
@@ -779,8 +804,9 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
             ) : (
               rounds.map((r) => {
                 const entries = entriesFor(r.id);
-                const playedUserIds = new Set(entries.map((e) => e.user_id));
-                const notPlayed = participants.filter((p) => !playedUserIds.has(p.id));
+                const entryByUser = new Map(
+                  entries.map((e) => [e.user_id, e])
+                );
 
                 // DERIVED active state to fix "still active" issues
                 const now = Date.now();
@@ -790,12 +816,47 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
                   (!!endsAt ? endsAt > now : true) &&
                   entries.length < participants.length;
 
-                const mePlayed = userId ? playedUserIds.has(userId) : false;
+                const mePlayed = userId
+                  ? entryByUser.has(userId)
+                  : false;
+
+                // Compute min/max among played users only
+                const playedPoints = entries
+                  .map((e) => Number(e.points_earned ?? 0));
+                const hasAnyPlayed = playedPoints.length > 0;
+                const maxPts = hasAnyPlayed
+                  ? Math.max(...playedPoints)
+                  : null;
+                const minPts = hasAnyPlayed
+                  ? Math.min(...playedPoints)
+                  : null;
+                const singleValueOnly =
+                  hasAnyPlayed && maxPts === minPts;
+
+                // Build a unified list of all participants with points or "-"
+                const unifiedRows = participants.map((p) => {
+                  const e = entryByUser.get(p.id) || null;
+                  const points =
+                    e && typeof e.points_earned === "number"
+                      ? e.points_earned
+                      : null;
+                  return { user: p, points };
+                });
+
+                // Sort: played (by points desc) first, then not played
+                unifiedRows.sort((a, b) => {
+                  if (a.points === null && b.points === null) return 0;
+                  if (a.points === null) return 1;
+                  if (b.points === null) return -1;
+                  return b.points - a.points;
+                });
 
                 return (
                   <div key={r.id} className="rounded-xl border bg-gray-50 p-3">
                     <div className="flex items-center justify-between">
-                      <div className="font-semibold text-gray-800">Round {r.round_number}</div>
+                      <div className="font-semibold text-gray-800">
+                        Round {r.round_number}
+                      </div>
                       <div
                         className={classNames(
                           "text-xs px-2 py-0.5 rounded-full",
@@ -819,9 +880,13 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
                         </>
                       ) : (
                         <>
-                          Started: {r.started_at ? new Date(r.started_at).toLocaleString() : "—"}
+                          Started:{" "}
+                          {r.started_at
+                            ? new Date(r.started_at).toLocaleString()
+                            : "—"}
                           {" • "}
-                          Ended: {r.closed_at
+                          Ended:{" "}
+                          {r.closed_at
                             ? new Date(r.closed_at).toLocaleString()
                             : r.ends_at
                             ? new Date(r.ends_at).toLocaleString()
@@ -840,58 +905,49 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
                       </div>
                     ) : null}
 
-                    {/* Scores / participation */}
-                    <div className="mt-3 grid gap-2">
-                      <div>
-                        <div className="text-xs font-semibold text-gray-700 mb-1">
-                          Played ({entries.length})
-                        </div>
-                        {entries.length === 0 ? (
-                          <div className="text-xs text-gray-500">No one has played yet.</div>
-                        ) : (
-                          <ul className="space-y-1">
-                            {entries
-                              .slice()
-                              .sort((a, b) => (b.points_earned || 0) - (a.points_earned || 0))
-                              .map((e, idx) => {
-                                const u = participantsMap.get(e.user_id);
-                                const label = u?.full_name || u?.email || e.user_id;
-                                return (
-                                  <li
-                                    key={`${e.user_id}-${idx}`}
-                                    className="text-sm flex items-center justify-between bg-white rounded-md border px-2 py-1"
-                                  >
-                                    <span className="truncate mr-2">{label}</span>
-                                    <span className="font-semibold text-emerald-700">
-                                      {e.points_earned ?? 0} pts
-                                    </span>
-                                  </li>
-                                );
-                              })}
-                          </ul>
-                        )}
+                    {/* Unified scores list as requested */}
+                    <div className="mt-3">
+                      <div className="text-xs font-semibold text-gray-700 mb-1">
+                        Scores
                       </div>
+                      {unifiedRows.length === 0 ? (
+                        <div className="text-xs text-gray-500">
+                          No participants.
+                        </div>
+                      ) : (
+                        <ul className="space-y-1">
+                          {unifiedRows.map(({ user: u, points }, idx) => {
+                            const isMax =
+                              points !== null && maxPts !== null && points === maxPts;
+                            const isMin =
+                              points !== null && minPts !== null && points === minPts;
 
-                      {/* Yet to play — always shown so all participants appear */}
-                      <div>
-                        <div className="text-xs font-semibold text-gray-700 mb-1">
-                          Yet to play ({notPlayed.length})
-                        </div>
-                        {notPlayed.length === 0 ? (
-                          <div className="text-xs text-gray-500">—</div>
-                        ) : (
-                          <div className="flex flex-wrap gap-1.5">
-                            {notPlayed.map((p) => (
-                              <span
-                                key={p.id}
-                                className="inline-flex items-center rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-gray-700 border"
+                            // If only one unique value, treat it as "max" (green) and not as "min"
+                            const scoreClass =
+                              points === null
+                                ? "text-gray-500"
+                                : isMax
+                                ? "text-emerald-700 font-semibold"
+                                : isMin && !singleValueOnly
+                                ? "text-red-600 font-semibold"
+                                : "text-gray-800 font-medium";
+
+                            return (
+                              <li
+                                key={`${u.id}-${idx}`}
+                                className="text-sm flex items-center justify-between bg-white rounded-md border px-2 py-1"
                               >
-                                {p.full_name || p.email}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
+                                <span className="truncate mr-2">
+                                  {u.full_name || u.email}
+                                </span>
+                                <span className={scoreClass}>
+                                  {points === null ? "—" : `${points} pts`}
+                                </span>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
                     </div>
 
                     {/* Actions */}
