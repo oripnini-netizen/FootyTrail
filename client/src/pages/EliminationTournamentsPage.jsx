@@ -415,6 +415,11 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
   const [rounds, setRounds] = useState([]); // [{id, round_number, started_at, ends_at, closed_at, player_id}]
   const [entriesByRound, setEntriesByRound] = useState({}); // { round_id : [{user_id, points_earned}] }
 
+  // NEW: card-level collapse (defaults to OPEN)
+  const [cardCollapsed, setCardCollapsed] = useState(false);
+  // NEW: filters section collapse (defaults to COLLAPSED)
+  const [filtersCollapsed, setFiltersCollapsed] = useState(true);
+
   // Fetch participants + all rounds (+ fill in any missing users from entries)
   useEffect(() => {
     let cancelled = false;
@@ -578,6 +583,9 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
         const entries = entriesByRound[r.id] || [];
         const everyonePlayed = entries.length >= participants.length;
         const now = Date.now();
+        the_timeup_check: {
+          // no-op block retained to avoid any functional changes
+        }
         const timeUp = r.ends_at ? new Date(r.ends_at).getTime() <= now : false;
         const shouldFinalize = !r.closed_at && (everyonePlayed || timeUp);
 
@@ -630,10 +638,21 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
 
   return (
     <div className="rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md">
+      {/* Card header with collapse toggle */}
       <div className="flex items-start justify-between gap-3">
-        <h3 className="text-base font-semibold text-gray-900">
-          {tournament.name}
-        </h3>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setCardCollapsed((v) => !v)}
+            className="rounded-md border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+            title={cardCollapsed ? "Expand" : "Collapse"}
+          >
+            {cardCollapsed ? "▼ Expand" : "▲ Collapse"}
+          </button>
+          <h3 className="text-base font-semibold text-gray-900">
+            {tournament.name}
+          </h3>
+        </div>
         <span
           className={classNames(
             "shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold",
@@ -653,230 +672,249 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced }) {
         </div>
       )}
 
-      {/* Difficulty Filters as grouped chips */}
-      <div className="mt-3">
-        <div className="text-xs font-semibold mb-1 text-gray-700">
-          Difficulty Filters
-        </div>
+      {/* Collapsible body */}
+      {!cardCollapsed && (
+        <>
+          {/* Difficulty Filters as grouped chips (now collapsible, default collapsed) */}
+          <div className="mt-3">
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-semibold text-gray-700">
+                Difficulty Filters
+              </div>
+              <button
+                type="button"
+                onClick={() => setFiltersCollapsed((v) => !v)}
+                className="text-xs text-gray-600 hover:text-gray-800"
+                title={filtersCollapsed ? "Expand filters" : "Collapse filters"}
+              >
+                {filtersCollapsed ? "▼ Show" : "▲ Hide"}
+              </button>
+            </div>
 
-        {/* Competitions */}
-        {compChips.length > 0 && (
-          <>
-            <div className="text-[11px] font-medium text-gray-600 mb-1">
-              Competitions
-            </div>
-            <div className="mb-2 flex flex-wrap gap-1.5">
-              {compChips.map((c) => (
-                <span
-                  key={c.key}
-                  className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-800 ring-1 ring-inset ring-green-600/20"
-                >
-                  {c.label}
-                </span>
-              ))}
-            </div>
-          </>
-        )}
+            {!filtersCollapsed && (
+              <div className="mt-2">
+                {/* Competitions */}
+                {compChips.length > 0 && (
+                  <>
+                    <div className="text-[11px] font-medium text-gray-600 mb-1">
+                      Competitions
+                    </div>
+                    <div className="mb-2 flex flex-wrap gap-1.5">
+                      {compChips.map((c) => (
+                        <span
+                          key={c.key}
+                          className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-800 ring-1 ring-inset ring-green-600/20"
+                        >
+                          {c.label}
+                        </span>
+                      ))}
+                    </div>
+                  </>
+                )}
 
-        {/* Seasons */}
-        {seasonChips.length > 0 && (
-          <>
-            <div className="text-[11px] font-medium text-gray-600 mb-1">
-              Seasons
-            </div>
-            <div className="mb-2 flex flex-wrap gap-1.5">
-              {seasonChips.map((c) => (
-                <span
-                  key={c.key}
-                  className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-800 ring-1 ring-inset ring-green-600/20"
-                >
-                  {c.label}
-                </span>
-              ))}
-            </div>
-          </>
-        )}
+                {/* Seasons */}
+                {seasonChips.length > 0 && (
+                  <>
+                    <div className="text:[11px] font-medium text-gray-600 mb-1">
+                      Seasons
+                    </div>
+                    <div className="mb-2 flex flex-wrap gap-1.5">
+                      {seasonChips.map((c) => (
+                        <span
+                          key={c.key}
+                          className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-800 ring-1 ring-inset ring-green-600/20"
+                        >
+                          {c.label}
+                        </span>
+                      ))}
+                    </div>
+                  </>
+                )}
 
-        {/* Minimum MV */}
-        {mvChip && (
-          <>
-            <div className="text-[11px] font-medium text-gray-600 mb-1">
-              Minimum MV
+                {/* Minimum MV */}
+                {mvChip && (
+                  <>
+                    <div className="text-[11px] font-medium text-gray-600 mb-1">
+                      Minimum MV
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <span
+                        key={mvChip.key}
+                        className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-800 ring-1 ring-inset ring-green-600/20"
+                      >
+                        {mvChip.label}
+                      </span>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Participants as chips */}
+          <div className="mt-3">
+            <div className="text-xs font-semibold mb-1 text-gray-700">
+              Participants
             </div>
             <div className="flex flex-wrap gap-1.5">
-              <span
-                key={mvChip.key}
-                className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-800 ring-1 ring-inset ring-green-600/20"
-              >
-                {mvChip.label}
-              </span>
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* Participants as chips */}
-      <div className="mt-3">
-        <div className="text-xs font-semibold mb-1 text-gray-700">
-          Participants
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {participants.length === 0 ? (
-            <span className="text-[11px] text-gray-500">—</span>
-          ) : (
-            participants.map((p) => (
-              <span
-                key={p.id}
-                className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-800 ring-1 ring-inset ring-gray-300"
-              >
-                {p.full_name || p.email}
-              </span>
-            ))
-          )}
-        </div>
-      </div>
-
-      {/* Rounds list */}
-      <div className="mt-4 space-y-3">
-        {rounds.length === 0 ? (
-          <div className="text-sm text-gray-500">No rounds yet.</div>
-        ) : (
-          rounds.map((r) => {
-            const entries = entriesFor(r.id);
-            const playedUserIds = new Set(entries.map((e) => e.user_id));
-            const notPlayed = participants.filter((p) => !playedUserIds.has(p.id));
-
-            // DERIVED active state to fix "still active" issues
-            const now = Date.now();
-            const endsAt = r.ends_at ? new Date(r.ends_at).getTime() : null;
-            const derivedActive =
-              !r.closed_at &&
-              (!!endsAt ? endsAt > now : true) &&
-              entries.length < participants.length;
-
-            const mePlayed = userId ? playedUserIds.has(userId) : false;
-
-            return (
-              <div key={r.id} className="rounded-xl border bg-gray-50 p-3">
-                <div className="flex items-center justify-between">
-                  <div className="font-semibold text-gray-800">Round {r.round_number}</div>
-                  <div
-                    className={classNames(
-                      "text-xs px-2 py-0.5 rounded-full",
-                      derivedActive
-                        ? "bg-emerald-100 text-emerald-700"
-                        : "bg-gray-200 text-gray-700"
-                    )}
+              {participants.length === 0 ? (
+                <span className="text-[11px] text-gray-500">—</span>
+              ) : (
+                participants.map((p) => (
+                  <span
+                    key={p.id}
+                    className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-800 ring-1 ring-inset ring-gray-300"
                   >
-                    {derivedActive ? "Active" : "Finished"}
-                  </div>
-                </div>
+                    {p.full_name || p.email}
+                  </span>
+                ))
+              )}
+            </div>
+          </div>
 
-                <div className="mt-1 text-xs text-gray-600">
-                  {derivedActive ? (
-                    <>
-                      Ends in:{" "}
-                      <span className="font-semibold">
-                        <Countdown endsAt={r.ends_at || null} />
-                      </span>{" "}
-                      {timeLimitMin ? `• Limit: ${timeLimitMin} min` : null}
-                    </>
-                  ) : (
-                    <>
-                      Started: {r.started_at ? new Date(r.started_at).toLocaleString() : "—"}
-                      {" • "}
-                      Ended: {r.closed_at
-                        ? new Date(r.closed_at).toLocaleString()
-                        : r.ends_at
-                        ? new Date(r.ends_at).toLocaleString()
-                        : "—"}
-                    </>
-                  )}
-                </div>
+          {/* Rounds list */}
+          <div className="mt-4 space-y-3">
+            {rounds.length === 0 ? (
+              <div className="text-sm text-gray-500">No rounds yet.</div>
+            ) : (
+              rounds.map((r) => {
+                const entries = entriesFor(r.id);
+                const playedUserIds = new Set(entries.map((e) => e.user_id));
+                const notPlayed = participants.filter((p) => !playedUserIds.has(p.id));
 
-                {/* Player details: ONLY show after the round is finished */}
-                {!derivedActive && r.player_id ? (
-                  <div className="mt-3">
-                    <div className="text-xs font-semibold text-gray-700 mb-1">
-                      Round Player
+                // DERIVED active state to fix "still active" issues
+                const now = Date.now();
+                const endsAt = r.ends_at ? new Date(r.ends_at).getTime() : null;
+                const derivedActive =
+                  !r.closed_at &&
+                  (!!endsAt ? endsAt > now : true) &&
+                  entries.length < participants.length;
+
+                const mePlayed = userId ? playedUserIds.has(userId) : false;
+
+                return (
+                  <div key={r.id} className="rounded-xl border bg-gray-50 p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="font-semibold text-gray-800">Round {r.round_number}</div>
+                      <div
+                        className={classNames(
+                          "text-xs px-2 py-0.5 rounded-full",
+                          derivedActive
+                            ? "bg-emerald-100 text-emerald-700"
+                            : "bg-gray-200 text-gray-700"
+                        )}
+                      >
+                        {derivedActive ? "Active" : "Finished"}
+                      </div>
                     </div>
-                    <RoundPlayer playerId={r.player_id} />
-                  </div>
-                ) : null}
 
-                {/* Scores / participation */}
-                <div className="mt-3 grid gap-2">
-                  <div>
-                    <div className="text-xs font-semibold text-gray-700 mb-1">
-                      Played ({entries.length})
+                    <div className="mt-1 text-xs text-gray-600">
+                      {derivedActive ? (
+                        <>
+                          Ends in:{" "}
+                          <span className="font-semibold">
+                            <Countdown endsAt={r.ends_at || null} />
+                          </span>{" "}
+                          {timeLimitMin ? `• Limit: ${timeLimitMin} min` : null}
+                        </>
+                      ) : (
+                        <>
+                          Started: {r.started_at ? new Date(r.started_at).toLocaleString() : "—"}
+                          {" • "}
+                          Ended: {r.closed_at
+                            ? new Date(r.closed_at).toLocaleString()
+                            : r.ends_at
+                            ? new Date(r.ends_at).toLocaleString()
+                            : "—"}
+                        </>
+                      )}
                     </div>
-                    {entries.length === 0 ? (
-                      <div className="text-xs text-gray-500">No one has played yet.</div>
-                    ) : (
-                      <ul className="space-y-1">
-                        {entries
-                          .slice()
-                          .sort((a, b) => (b.points_earned || 0) - (a.points_earned || 0))
-                          .map((e, idx) => {
-                            const u = participantsMap.get(e.user_id);
-                            const label = u?.full_name || u?.email || e.user_id;
-                            return (
-                              <li
-                                key={`${e.user_id}-${idx}`}
-                                className="text-sm flex items-center justify-between bg-white rounded-md border px-2 py-1"
+
+                    {/* Player details: ONLY show after the round is finished */}
+                    {!derivedActive && r.player_id ? (
+                      <div className="mt-3">
+                        <div className="text-xs font-semibold text-gray-700 mb-1">
+                          Round Player
+                        </div>
+                        <RoundPlayer playerId={r.player_id} />
+                      </div>
+                    ) : null}
+
+                    {/* Scores / participation */}
+                    <div className="mt-3 grid gap-2">
+                      <div>
+                        <div className="text-xs font-semibold text-gray-700 mb-1">
+                          Played ({entries.length})
+                        </div>
+                        {entries.length === 0 ? (
+                          <div className="text-xs text-gray-500">No one has played yet.</div>
+                        ) : (
+                          <ul className="space-y-1">
+                            {entries
+                              .slice()
+                              .sort((a, b) => (b.points_earned || 0) - (a.points_earned || 0))
+                              .map((e, idx) => {
+                                const u = participantsMap.get(e.user_id);
+                                const label = u?.full_name || u?.email || e.user_id;
+                                return (
+                                  <li
+                                    key={`${e.user_id}-${idx}`}
+                                    className="text-sm flex items-center justify-between bg-white rounded-md border px-2 py-1"
+                                  >
+                                    <span className="truncate mr-2">{label}</span>
+                                    <span className="font-semibold text-emerald-700">
+                                      {e.points_earned ?? 0} pts
+                                    </span>
+                                  </li>
+                                );
+                              })}
+                          </ul>
+                        )}
+                      </div>
+
+                      {/* Yet to play — always shown so all participants appear */}
+                      <div>
+                        <div className="text-xs font-semibold text-gray-700 mb-1">
+                          Yet to play ({notPlayed.length})
+                        </div>
+                        {notPlayed.length === 0 ? (
+                          <div className="text-xs text-gray-500">—</div>
+                        ) : (
+                          <div className="flex flex-wrap gap-1.5">
+                            {notPlayed.map((p) => (
+                              <span
+                                key={p.id}
+                                className="inline-flex items-center rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-gray-700 border"
                               >
-                                <span className="truncate mr-2">{label}</span>
-                                <span className="font-semibold text-emerald-700">
-                                  {e.points_earned ?? 0} pts
-                                </span>
-                              </li>
-                            );
-                          })}
-                      </ul>
-                    )}
-                  </div>
-
-                  {/* Yet to play — always shown so all participants appear */}
-                  <div>
-                    <div className="text-xs font-semibold text-gray-700 mb-1">
-                      Yet to play ({notPlayed.length})
+                                {p.full_name || p.email}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    {notPlayed.length === 0 ? (
-                      <div className="text-xs text-gray-500">—</div>
-                    ) : (
-                      <div className="flex flex-wrap gap-1.5">
-                        {notPlayed.map((p) => (
-                          <span
-                            key={p.id}
-                            className="inline-flex items-center rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-gray-700 border"
-                          >
-                            {p.full_name || p.email}
-                          </span>
-                        ))}
+
+                    {/* Actions */}
+                    {isLive && derivedActive && (
+                      <div className="mt-3 flex items-center justify-end">
+                        <button
+                          type="button"
+                          className="rounded-lg border border-green-600 px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-50 disabled:opacity-60"
+                          onClick={() => handlePlayRound(r)}
+                          disabled={!r.player_id || mePlayed}
+                          title={mePlayed ? "You already played this round" : "Play Round"}
+                        >
+                          {mePlayed ? "Played" : "Play Round"}
+                        </button>
                       </div>
                     )}
                   </div>
-                </div>
-
-                {/* Actions */}
-                {isLive && derivedActive && (
-                  <div className="mt-3 flex items-center justify-end">
-                    <button
-                      type="button"
-                      className="rounded-lg border border-green-600 px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-50 disabled:opacity-60"
-                      onClick={() => handlePlayRound(r)}
-                      disabled={!r.player_id || mePlayed}
-                      title={mePlayed ? "You already played this round" : "Play Round"}
-                    >
-                      {mePlayed ? "Played" : "Play Round"}
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })
-        )}
-      </div>
+                );
+              })
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
