@@ -40,6 +40,9 @@ import {
   Search
 } from 'lucide-react';
 
+// >>> NEW: import supabase client for querying games_records
+import { supabase } from '../supabase';
+
 function classNames(...s) {
   return s.filter(Boolean).join(' ');
 }
@@ -546,11 +549,91 @@ export default function GamePage() {
     }
   };
 
+  // >>> NEW: local state for NON-elimination daily metrics
+  const [nonElimTodayCount, setNonElimTodayCount] = useState(null);
+  const [nonElimTodayPoints, setNonElimTodayPoints] = useState(null);
+  const [nonElimTotalPoints, setNonElimTotalPoints] = useState(null);
+
+  // >>> NEW: compute NON-elimination games/points (today + total) from games_records
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (!user?.id) {
+          if (!cancelled) {
+            setNonElimTodayCount(null);
+            setNonElimTodayPoints(null);
+            setNonElimTotalPoints(null);
+          }
+          return;
+        }
+
+        // UTC day boundaries
+        const now = new Date();
+        const startUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+        const endUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+
+        // Today (non-elimination)
+        const { data: todayRows, error: e1 } = await supabase
+          .from('games_records')
+          .select('points_earned, created_at')
+          .eq('user_id', user.id)
+          .eq('is_elimination_game', false)
+          .gte('created_at', startUtc.toISOString())
+          .lt('created_at', endUtc.toISOString());
+
+        if (e1) throw e1;
+
+        const todayCount = (todayRows || []).length;
+        const todayPoints = (todayRows || []).reduce((sum, r) => sum + Number(r?.points_earned || 0), 0);
+
+        // Total (non-elimination)
+        const { data: totalRows, error: e2 } = await supabase
+          .from('games_records')
+          .select('points_earned')
+          .eq('user_id', user.id)
+          .eq('is_elimination_game', false);
+
+        if (e2) throw e2;
+
+        const totalPoints = (totalRows || []).reduce((sum, r) => sum + Number(r?.points_earned || 0), 0);
+
+        if (!cancelled) {
+          setNonElimTodayCount(todayCount);
+          setNonElimTodayPoints(todayPoints);
+          setNonElimTotalPoints(totalPoints);
+        }
+      } catch (err) {
+        // On any failure, fall back to server-provided limits
+        if (!cancelled) {
+          setNonElimTodayCount(null);
+          setNonElimTodayPoints(null);
+          setNonElimTotalPoints(null);
+        }
+      }
+    })();
+
+    return () => { cancelled = true; };
+    // Recompute when user changes or when server limits update (e.g., after playing)
+  }, [user?.id, limits?.gamesToday, limits?.pointsToday, limits?.pointsTotal]);
+
   const maxGames = limits?.dailyWin ? 11 : 10;
-  const pointsToday = limits?.pointsToday ?? 0;
-  const pointsTotal = limits?.pointsTotal ?? 0;
+
+  // >>> NEW: use NON-elimination values when available
+  const gamesTodayEffective = (nonElimTodayCount != null)
+    ? nonElimTodayCount
+    : Number(limits?.gamesToday || 0);
+
+  const pointsToday = (nonElimTodayPoints != null)
+    ? nonElimTodayPoints
+    : (limits?.pointsToday ?? 0);
+
+  const pointsTotal = (nonElimTotalPoints != null)
+    ? nonElimTotalPoints
+    : (limits?.pointsTotal ?? 0);
+
   const isAdmin = (user?.role === 'admin');
-  const reachedLimit = !isAdmin && (Number(limits?.gamesToday || 0) >= maxGames);
+  const reachedLimit = !isAdmin && (gamesTodayEffective >= maxGames);
 
   // CENTERED OVERLAY: replaces previous min-h-screen container
   const LoadingOverlay = () => (
@@ -627,7 +710,7 @@ export default function GamePage() {
           <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-6 grid grid-cols-3 gap-4">
             <div className="text-center">
               <div className="text-xl font-bold">
-                {`${limits.gamesToday || 0}/${maxGames}`}
+                {`${gamesTodayEffective || 0}/${maxGames}`}
               </div>
               <div className="text-sm text-gray-600">Daily Progress</div>
             </div>
