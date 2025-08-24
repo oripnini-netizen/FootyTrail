@@ -1,6 +1,5 @@
 // src/pages/EliminationTournamentsPage.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { supabase } from "../supabase";
 import { useAuth } from "../context/AuthContext";
 
@@ -21,7 +20,7 @@ import {
   Axe,
 } from "lucide-react";
 
-// NEW: use the extracted card component
+// NEW: use the external card component you created
 import EliminationTournamentCard from "../components/EliminationTournamentCard";
 
 /* ------------------------------------------------------------
@@ -238,14 +237,26 @@ export default function EliminationTournamentsPage() {
               )}
               {!loading.live && !error.live && live.length > 0 && (
                 <>
-                  {live.map((t) => (
-                    <EliminationTournamentCard
-                      key={t.id}
-                      tournament={t}
-                      compIdToLabel={compIdToLabel}
-                      onAdvanced={reloadLists}
-                    />
-                  ))}
+                  {live.map((t) => {
+                    // Normalize filters to protect the external card (avoids .map on undefined)
+                    const safeTournament = {
+                      ...t,
+                      filters: {
+                        competitions: [],
+                        seasons: [],
+                        minMarketValue: 0,
+                        ...(t.filters || {}),
+                      },
+                    };
+                    return (
+                      <EliminationTournamentCard
+                        key={t.id}
+                        tournament={safeTournament}
+                        compIdToLabel={compIdToLabel}
+                        onAdvanced={reloadLists}
+                      />
+                    );
+                  })}
                 </>
               )}
               {!loading.live && !error.live && live.length === 0 && (
@@ -274,14 +285,25 @@ export default function EliminationTournamentsPage() {
               )}
               {!loading.finished && !error.finished && finished.length > 0 && (
                 <>
-                  {finished.map((t) => (
-                    <EliminationTournamentCard
-                      key={t.id}
-                      tournament={t}
-                      compIdToLabel={compIdToLabel}
-                      onAdvanced={reloadLists}
-                    />
-                  ))}
+                  {finished.map((t) => {
+                    const safeTournament = {
+                      ...t,
+                      filters: {
+                        competitions: [],
+                        seasons: [],
+                        minMarketValue: 0,
+                        ...(t.filters || {}),
+                      },
+                    };
+                    return (
+                      <EliminationTournamentCard
+                        key={t.id}
+                        tournament={safeTournament}
+                        compIdToLabel={compIdToLabel}
+                        onAdvanced={reloadLists}
+                      />
+                    );
+                  })}
                 </>
               )}
               {!loading.finished && !error.finished && finished.length === 0 && (
@@ -309,7 +331,7 @@ export default function EliminationTournamentsPage() {
 }
 
 /* ------------------------------------------------------------
-   Cards & helpers (list-level placeholders/errors/skeleton)
+   Cards & helpers
 ------------------------------------------------------------ */
 function PlaceholderCard({ title, subtitle, ctaLabel, onCtaClick }) {
   return (
@@ -354,7 +376,7 @@ function ErrorCard({ title, message }) {
 
 /* ------------------------------------------------------------
    CreateTournamentModal
-   (unchanged, still includes its own collapsible Difficulty Filters)
+   (unchanged except for surrounding file adjustments)
 ------------------------------------------------------------ */
 function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   const dialogRef = useRef(null);
@@ -385,9 +407,6 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   // Competition search (GamePage)
   const [compSearch, setCompSearch] = useState("");
   const [compSug, setCompSug] = useState([]);
-  the_comp_sug_open_label: {
-    /* No UI change here */
-  }
   const [compSugOpen, setCompSugOpen] = useState(false);
   const [compSugIndex, setCompSugIndex] = useState(-1);
   const compSearchRef = useRef(null);
