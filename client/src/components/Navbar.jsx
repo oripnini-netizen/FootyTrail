@@ -28,20 +28,34 @@ export default function Navbar() {
   // ---- unread notifications for My Leagues ----
   const [unreadLeagues, setUnreadLeagues] = useState(0);
 
+  // ---- unread notifications for Elimination (NEW) ----
+  const [unreadElimination, setUnreadElimination] = useState(0);
+
   async function refreshUnread() {
     try {
       if (!user?.id) {
         setUnreadLeagues(0);
+        setUnreadElimination(0);
         return;
       }
-      const { count, error } = await supabase
+
+      // Leagues
+      const { count: leaguesCount } = await supabase
         .from('notifications')
         .select('id', { count: 'exact', head: true })
         .eq('user_id', user.id)
         .eq('type', 'league_invite')
         .is('read_at', null);
+      setUnreadLeagues(leaguesCount || 0);
 
-      if (!error) setUnreadLeagues(count || 0);
+      // Elimination (NEW)
+      const { count: elimCount } = await supabase
+        .from('notifications')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .eq('type', 'elimination_invite')
+        .is('read_at', null);
+      setUnreadElimination(elimCount || 0);
     } catch {
       /* noop */
     }
@@ -65,14 +79,21 @@ export default function Navbar() {
       )
       .subscribe();
 
-    const onMarkedRead = () => refreshUnread();
-    window.addEventListener('leagues-notifications-read', onMarkedRead);
+    const onMarkedLeagues = () => refreshUnread();
+    const onMarkedElimination = () => refreshUnread(); // NEW
+    const onNewElimination = () => refreshUnread(); // NEW
+
+    window.addEventListener('leagues-notifications-read', onMarkedLeagues);
+    window.addEventListener('elimination-notifications-read', onMarkedElimination); // NEW
+    window.addEventListener('elimination-notifications-new', onNewElimination); // NEW
 
     const id = setInterval(refreshUnread, 30000);
 
     return () => {
       clearInterval(id);
-      window.removeEventListener('leagues-notifications-read', onMarkedRead);
+      window.removeEventListener('leagues-notifications-read', onMarkedLeagues);
+      window.removeEventListener('elimination-notifications-read', onMarkedElimination);
+      window.removeEventListener('elimination-notifications-new', onNewElimination);
       try {
         supabase.removeChannel(channel);
       } catch {}
@@ -193,6 +214,7 @@ export default function Navbar() {
                   title="Elimination"
                   icon={Axe}
                   onClick={() => navigate('/elimination-tournaments')}
+                  showDot={unreadElimination > 0} // NEW
                 />
                 <NavItem
                   title="Leaderboard"
@@ -272,10 +294,13 @@ export default function Navbar() {
                       </button>
                       <button
                         onClick={() => navigate('/elimination-tournaments')}
-                        className="flex items-center gap-3 p-3 hover:bg-gray-50 text-gray-700"
+                        className="relative flex items-center gap-3 p-3 hover:bg-gray-50 text-gray-700"
                       >
                         <Axe className="h-5 w-5" />
                         <span>Elimination</span>
+                        {unreadElimination > 0 ? (
+                          <span className="ml-auto h-2.5 w-2.5 rounded-full bg-red-500" />
+                        ) : null}
                       </button>
                       <button
                         onClick={() => navigate('/leaderboard')}
