@@ -1509,18 +1509,18 @@ if (error) {
 
                     {/* Actions (centered, bigger, and hidden if already played or eliminated) */}
                     {isLive && derivedActive && !iAmEliminated && !mePlayed && (
-                      <div className="mt-4 flex items-center justify.center">
-                        <button
-                          type="button"
-                          className="rounded-xl bg-green-700 px-6 py-2.5 text-sm md:text-base font-semibold text.white shadow hover:bg-green-800 transition transform hover:-translate-y-0.5"
-                          onClick={() => handlePlayRound(r)}
-                          disabled={!r.player_id}
-                          title="Play Round to Survive!"
-                        >
-                          Play Round to Survive!
-                        </button>
-                      </div>
-                    )}
+  <div className="mt-4 flex items-center justify-center">
+    <button
+      type="button"
+      className="play-round-btn rounded-2xl bg-gradient-to-r from-green-600 via-green-400 to-green-600 px-8 py-4 text-lg md:text-xl font-bold text-white shadow-lg transition-all duration-200 transform hover:scale-105 hover:from-green-700 hover:to-green-500 hover:shadow-2xl hover:ring-4 hover:ring-green-300 focus:outline-none"
+      onClick={() => handlePlayRound(r)}
+      disabled={!r.player_id}
+      title="Play Round to Survive!"
+    >
+      🎯 Play Round to Survive!
+    </button>
+  </div>
+)}
                   </div>
                 );
               })
