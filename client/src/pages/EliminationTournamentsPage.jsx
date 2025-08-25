@@ -901,15 +901,24 @@ function TournamentCard({
       const eliminated = new Set();
       for (const uid of notPlayed) eliminated.add(uid);
 
-      if (played.length > 0) {
+            if (played.length > 0) {
         let minPts = Infinity;
+        let maxPts = -Infinity;
         for (const uid of played) {
-          const v = ptsByUser.get(uid);
+          const v = Number(ptsByUser.get(uid));
           if (v < minPts) minPts = v;
+          if (v > maxPts) maxPts = v;
         }
-        for (const uid of played) {
-          if (ptsByUser.get(uid) === minPts) eliminated.add(uid);
+        const allTied = Number.isFinite(minPts) && minPts === maxPts;
+        if (!allTied && maxPts > minPts) {
+          // eliminate strictly-min scorers only if someone scored higher
+          for (const uid of played) {
+            if (Number(ptsByUser.get(uid)) === minPts) {
+              eliminated.add(uid);
+            }
+          }
         }
+        // else: all tied → eliminate nobody
       }
 
       for (const uid of eliminated) activeSet.delete(uid);
