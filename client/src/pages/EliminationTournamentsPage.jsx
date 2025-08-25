@@ -1606,6 +1606,9 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   const [emailResults, setEmailResults] = useState([]);
   const [invites, setInvites] = useState([]); // rows from users table
 
+  // NEW: keep the search box focused after adding an invite
+  const searchEmailRef = useRef(null);
+
   // NEW: keyboard nav for invite results
   const [inviteIndex, setInviteIndex] = useState(-1);
   const inviteListRef = useRef(null);
@@ -1855,15 +1858,22 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
 
   // Invites helpers
   const addInvite = (u) => {
-    if (!u || u.id === currentUser?.id) return;
-    if (invites.find((x) => x.id === u.id)) return;
-    setInvites((prev) => [...prev, u]);
-    setSearchEmail("");
-    setEmailResults([]);
-    setInviteIndex(-1);
-  };
-  const removeInvite = (id) =>
-    setInvites((prev) => prev.filter((x) => x.id !== id));
+  if (!u || u.id === currentUser?.id) return;
+  if (invites.find((x) => x.id === u.id)) return;
+  setInvites((prev) => [...prev, u]);
+
+  // clear results and re-focus for rapid entry
+  setSearchEmail("");
+  setEmailResults([]);
+  setInviteIndex(-1);
+  // focus next tick so DOM has updated
+  setTimeout(() => searchEmailRef.current?.focus(), 0);
+};
+
+  const removeInvite = (id) => {
+  setInvites((prev) => prev.filter((x) => x.id !== id));
+  setTimeout(() => searchEmailRef.current?.focus(), 0);
+};
 
   /* ---------- validation ---------- */
   const validate = () => {
@@ -1885,113 +1895,46 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
 
   /* ---------- submit ---------- */
   const handleSubmit = async (e) => {
-    e.preventDefault();
-    setSubmitError("");
-    if (!validate()) return;
+  e.preventDefault();
+  setSubmitError("");
+  if (!validate()) return;
 
-    setSubmitting(true);
-    try {
-      const filtersPayload = {
-        competitions: selectedCompetitionIds,
-        seasons: selectedSeasons,
-        minMarketValue: Number(minMarketValue) || 0,
-      };
+  setSubmitting(true);
+  try {
+    const filtersPayload = {
+      competitions: selectedCompetitionIds,
+      seasons: selectedSeasons,
+      minMarketValue: Number(minMarketValue) || 0,
+    };
 
-      const randomPlayer = await getRandomPlayer(
-        { ...filtersPayload, userId: currentUser?.id },
-        currentUser?.id
-      );
-      if (!randomPlayer || !randomPlayer.id) {
-        throw new Error(
-          "No players found for the selected filters. Try broadening your selection."
-        );
-      }
+    // Call the server-side RPC that does everything atomically:
+    //  - creates the tournament (owner = currentUser.id)
+    //  - inserts participants (owner + invited users)
+    //  - creates round 1 with an eligible random player based on filters
+    //  - (optionally: your SQL may also enqueue notifications)
+    const { data, error } = await supabase.rpc("create_elimination_tournament_full", {
+      p_name: name.trim(),
+      p_filters: filtersPayload,
+      p_round_time_limit_seconds: Math.floor(Number(roundTimeMinutes) * 60),
+      p_invited_user_ids: invites.map((u) => u.id),
+    });
 
-      const { data: tournament, error: tErr } = await supabase
-        .from("elimination_tournaments")
-        .insert([
-          {
-            owner_id: currentUser.id,
-            name: name.trim(),
-            filters: filtersPayload,
-            round_time_limit_seconds: Math.floor(Number(roundTimeMinutes) * 60),
-            status: "live",
-          },
-        ])
-        .select()
-        .single();
-
-      if (tErr) throw new Error(tErr.message || "Failed to create tournament.");
-      if (!tournament?.id) throw new Error("Tournament creation returned no id.");
-
-      const people = [
-        {
-          id: currentUser.id,
-          email: currentUser.email,
-          full_name:
-            currentUser.full_name ||
-            currentUser.user_metadata?.full_name ||
-            "You",
-        },
-        ...invites,
-      ];
-      const partsPayload = people.map((p) => ({
-        tournament_id: tournament.id,
-        user_id: p.id,
-        state: "active",
-      }));
-      if (partsPayload.length) {
-        await supabase.from("elimination_participants").insert(partsPayload);
-      }
-
-      const invitedHumans = invites.filter(
-        (i) => !!i.id && i.id !== currentUser.id
-      );
-      if (invitedHumans.length) {
-        const payloads = invitedHumans.map((uRow) => ({
-          user_id: uRow.id,
-          type: "elimination_invite",
-          payload: {
-            tournament_id: tournament.id,
-            tournament_name: tournament.name,
-            round_time_limit_minutes: Math.floor(Number(roundTimeMinutes)),
-            creator_name:
-              currentUser.user_metadata?.full_name ||
-              currentUser.full_name ||
-              currentUser.email ||
-              "A user",
-            filters: filtersPayload,
-          },
-        }));
-        await supabase.from("notifications").insert(payloads);
-
-        window.dispatchEvent(new Event("elimination-notifications-new"));
-      }
-
-      const now = new Date();
-      const endsAt = new Date(
-        now.getTime() + Math.floor(Number(roundTimeMinutes)) * 60 * 1000
-      );
-      await supabase.from("elimination_rounds").insert([
-        {
-          tournament_id: tournament.id,
-          round_number: 1,
-          player_id: randomPlayer.id,
-          started_at: now.toISOString(),
-          ends_at: endsAt.toISOString(),
-        },
-      ]);
-
-      await onCreated?.();
-      onClose?.();
-    } catch (ex) {
-      setSubmitError(
-        ex instanceof Error ? ex.message : "Failed to create tournament."
-      );
-    } finally {
-      setSubmitting(false);
+    if (error) {
+      throw new Error(error.message || "Failed to create tournament.");
     }
-  };
+
+    // If you still want to emit client-side notifications here,
+    // keep your previous notifications insert, otherwise omit.
+
+    await onCreated?.();
+    onClose?.();
+  } catch (ex) {
+    setSubmitError(ex instanceof Error ? ex.message : "Failed to create tournament.");
+  } finally {
+    setSubmitting(false);
+  }
+};
+
 
   /* ---------- UI ---------- */
   return (
@@ -2095,6 +2038,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
 
                 <div className="flex gap-2">
                   <input
+                    ref={searchEmailRef}              // <-- add this
                     type="text"
                     value={searchEmail}
                     onChange={(e) => setSearchEmail(e.target.value)}
