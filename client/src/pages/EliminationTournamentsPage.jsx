@@ -1107,6 +1107,7 @@ function TournamentCard({
 
           const { error } = await supabase.rpc("finalize_round", {
             p_round_id: r.id,
+            p_next_player_id: nextPlayerId ?? null, 
             p_force: Boolean(nextPlayerId),
           });
           if (error) throw error;
