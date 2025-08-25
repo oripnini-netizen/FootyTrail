@@ -59,6 +59,37 @@ function fmtDuration(ms) {
 }
 
 /* ------------------------------------------------------------
+   FIX HELPERS: always resolve a round_id (never a tournament_id)
+------------------------------------------------------------ */
+async function getLatestOpenRoundIdForTournament(tournamentId) {
+  const { data, error } = await supabase
+    .from("elimination_rounds")
+    .select("id, round_number, closed_at")
+    .eq("tournament_id", tournamentId)
+    .is("closed_at", null)
+    .order("round_number", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data?.id ?? null;
+}
+
+async function finalizeLatestRoundForTournament(tournamentId, nextPlayerId = null, force = false) {
+  const roundId = await getLatestOpenRoundIdForTournament(tournamentId);
+  if (!roundId) {
+    throw new Error(`No open round found for tournament ${tournamentId}`);
+  }
+  const { data, error } = await supabase.rpc("finalize_round", {
+    p_round_id: roundId,             // ✅ guaranteed to be a round_id
+    p_force: Boolean(force),
+    p_next_player_id: nextPlayerId ?? null,
+  });
+  if (error) throw error;
+  return data;
+}
+
+/* ------------------------------------------------------------
    Page: EliminationTournamentsPage
 ------------------------------------------------------------ */
 export default function EliminationTournamentsPage() {
@@ -1053,7 +1084,7 @@ function TournamentCard({
     });
   };
 
-  // Auto-finalization (unchanged)
+  // Auto-finalization (hardened): if a bad id slips through, fallback to latest open round
   const finalizingRef = useRef(new Set());
   useEffect(() => {
     let cancelled = false;
@@ -1105,12 +1136,28 @@ function TournamentCard({
             }
           }
 
+          // Normal path: finalize THIS round id
           const { error } = await supabase.rpc("finalize_round", {
-            p_round_id: r.id,
-            p_next_player_id: nextPlayerId ?? null, 
+            p_round_id: r.id,                      // ✅ round id
+            p_next_player_id: nextPlayerId ?? null,
             p_force: Boolean(nextPlayerId),
           });
-          if (error) throw error;
+
+          if (error) {
+            // If the server says "round ... not found", fall back to latest open round by tournament id
+            const msg = String(error?.message || "").toLowerCase();
+            const isNotFound = msg.includes("not found") && msg.includes("round");
+            if (error.code === "P0001" && isNotFound) {
+              console.warn("[elim] finalize_round reported not found for round", r.id, "— retrying with latest open round");
+              await finalizeLatestRoundForTournament(
+                tournament.id,
+                nextPlayerId ?? null,
+                Boolean(nextPlayerId)
+              );
+            } else {
+              throw error;
+            }
+          }
 
           if (onAdvanced) await onAdvanced();
         } catch (e) {
@@ -1249,7 +1296,7 @@ function TournamentCard({
                     <div className="text-[11px] font-medium text-gray-600 mb-1">
                       Minimum MV
                     </div>
-                    <div className="flex flex-wrap gap-1.5">
+                    <div className="flex flex.wrap gap-1.5">
                       <span
                         key={mvChip.key}
                         className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text:[11px] font-medium text-green-800 ring-1 ring-inset ring-green-600/20"
@@ -1451,10 +1498,10 @@ function TournamentCard({
 
                     {/* Actions (centered, bigger, and hidden if already played or eliminated) */}
                     {isLive && derivedActive && !iAmEliminated && !mePlayed && (
-                      <div className="mt-4 flex items-center justify-center">
+                      <div className="mt-4 flex items-center justify.center">
                         <button
                           type="button"
-                          className="rounded-xl bg-green-700 px-6 py-2.5 text-sm md:text-base font-semibold text-white shadow hover:bg-green-800 transition transform hover:-translate-y-0.5"
+                          className="rounded-xl bg-green-700 px-6 py-2.5 text-sm md:text-base font-semibold text.white shadow hover:bg-green-800 transition transform hover:-translate-y-0.5"
                           onClick={() => handlePlayRound(r)}
                           disabled={!r.player_id}
                           title="Play Round to Survive!"
@@ -2011,11 +2058,10 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                 setMvCollapsed={setMvCollapsed}
                 compSearch={compSearch}
                 setCompSearch={setCompSearch}
-                compSugOpen={compSugOpen}
-                setCompSugOpen={setCompSugOpen}
-                compSug={compSug}
+                compSugOpen={setCompSugOpen}
                 compSugIndex={compSugIndex}
                 setCompSugIndex={setCompSugIndex}
+                compSug={compSug}
                 compSearchRef={compSearchRef}
                 compSugBoxRef={compSugBoxRef}
                 handleCompSearchKeyDown={handleCompSearchKeyDown}
@@ -2042,7 +2088,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
               />
 
               {/* Invites */}
-              <div className="rounded-xl shadow-sm border bg-white p-4">
+              <div className="rounded-xl shadow-sm border bg.white p-4">
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
                   Invite users (by email)
                 </label>
@@ -2152,7 +2198,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
               </div>
 
               {/* Round time */}
-              <div className="rounded-xl shadow-sm border bg-white p-4">
+              <div className="rounded-xl shadow-sm border bg.white p-4">
                 <label className="block text-sm font-semibold text-gray-700">
                   Round Time Limit (minutes)
                 </label>
@@ -2215,7 +2261,7 @@ function Section({ title, icon, collapsed, onToggle, actions, children }) {
           className="inline-flex items-center gap-2"
         >
           {icon}
-          <span className="font-medium text-green-900">{title}</span>
+          <span className="font.medium text-green-900">{title}</span>
           <span className="ml-1 text-gray-600">{collapsed ? "▼" : "▲"}</span>
         </button>
         <div className="hidden sm:flex items-center gap-2 flex-wrap">
