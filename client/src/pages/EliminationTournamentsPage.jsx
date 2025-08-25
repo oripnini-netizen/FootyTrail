@@ -1084,93 +1084,107 @@ function TournamentCard({
     });
   };
 
-  // Auto-finalization (hardened): if a bad id slips through, fallback to latest open round
-  const finalizingRef = useRef(new Set());
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!Array.isArray(rounds) || rounds.length === 0) return;
-      if (!Array.isArray(participants) || participants.length === 0) return;
+  // Auto-finalization (single latest open round only, idempotent)
+const finalizingRef = useRef(new Set());
+useEffect(() => {
+  let cancelled = false;
 
-      const usedPlayerIds = new Set(
-        (rounds || [])
-          .map((x) => x?.player_id)
-          .filter((v) => v !== null && v !== undefined)
-      );
+  (async () => {
+    if (!Array.isArray(rounds) || rounds.length === 0) return;
+    if (!Array.isArray(participants) || participants.length === 0) return;
 
-      const activeCount =
-        participants.filter((p) => (p.state || "").toLowerCase() === "active")
-          .length || participants.length;
+    // Pick the highest-numbered round that is still open
+    const open = rounds
+      .filter((r) => !r.closed_at)
+      .sort((a, b) => (b.round_number || 0) - (a.round_number || 0));
+    const r = open[0];
+    if (!r) return;
 
-      for (const r of rounds) {
-        const entries = entriesByRound[r.id] || [];
-        const everyonePlayed = entries.length >= activeCount;
-        const now = Date.now();
-        const timeUp = r.ends_at ? new Date(r.ends_at).getTime() <= now : false;
-        const shouldFinalize = !r.closed_at && (everyonePlayed || timeUp);
+    // Compute how many *active* participants exist now
+    const activeCount =
+      participants.filter((p) => (p.state || "").toLowerCase() === "active")
+        .length || participants.length;
 
-        if (!shouldFinalize) continue;
-        if (finalizingRef.current.has(r.id)) continue;
+    // How many entries this round has
+    const entries = entriesByRound[r.id] || [];
+    const everyonePlayed = entries.length >= activeCount;
+    const timeUp = r.ends_at ? new Date(r.ends_at).getTime() <= Date.now() : false;
+    const shouldFinalize = !r.closed_at && (everyonePlayed || timeUp);
 
-        finalizingRef.current.add(r.id);
-        try {
-          const laterRoundExists = rounds.some((x) => x.round_number > r.round_number);
+    if (!shouldFinalize) return;
+    if (finalizingRef.current.has(r.id)) return;
 
-          let nextPlayerId = null;
-          if (!laterRoundExists) {
-            const maxAttempts = 24;
-            for (let i = 0; i < maxAttempts; i++) {
-              const candidate = await getRandomPlayer(
-                {
-                  ...(tournament.filters || {}),
-                  userId,
-                  excludePlayerIds: Array.from(usedPlayerIds),
-                },
-                userId
-              );
-              const candId = candidate?.id || null;
-              if (candId && !usedPlayerIds.has(candId)) {
-                nextPlayerId = candId;
-                break;
-              }
-            }
+    finalizingRef.current.add(r.id);
+    try {
+      // Only pick a next player if there is no later round already
+      const laterRoundExists = rounds.some((x) => x.round_number > r.round_number);
+
+      let nextPlayerId = null;
+      if (!laterRoundExists) {
+        // Build used set only when needed
+        const usedPlayerIds = new Set(
+          (rounds || [])
+            .map((x) => x?.player_id)
+            .filter((v) => v !== null && v !== undefined)
+        );
+
+        const maxAttempts = 24;
+        for (let i = 0; i < maxAttempts; i++) {
+          const candidate = await getRandomPlayer(
+            {
+              ...(tournament.filters || {}),
+              userId,
+              excludePlayerIds: Array.from(usedPlayerIds),
+            },
+            userId
+          );
+          const candId = candidate?.id || null;
+          if (candId && !usedPlayerIds.has(candId)) {
+            nextPlayerId = candId;
+            break;
           }
-
-          // Normal path: finalize THIS round id
-          const { error } = await supabase.rpc("finalize_round", {
-            p_round_id: r.id,                      // ✅ round id
-            p_next_player_id: nextPlayerId ?? null,
-            p_force: Boolean(nextPlayerId),
-          });
-
-          if (error) {
-            // If the server says "round ... not found", fall back to latest open round by tournament id
-            const msg = String(error?.message || "").toLowerCase();
-            const isNotFound = msg.includes("not found") && msg.includes("round");
-            if (error.code === "P0001" && isNotFound) {
-              console.warn("[elim] finalize_round reported not found for round", r.id, "— retrying with latest open round");
-              await finalizeLatestRoundForTournament(
-                tournament.id,
-                nextPlayerId ?? null,
-                Boolean(nextPlayerId)
-              );
-            } else {
-              throw error;
-            }
-          }
-
-          if (onAdvanced) await onAdvanced();
-        } catch (e) {
-          console.error("[elim] auto-finalize error", e);
-        } finally {
-          finalizingRef.current.delete(r.id);
         }
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [rounds, entriesByRound, participants, tournament.id, userId, onAdvanced]);
+
+      // Respect deadlines by default. Only force if you *explicitly* want to override.
+      const { error } = await supabase.rpc("finalize_round", {
+        p_round_id: r.id,
+        p_next_player_id: nextPlayerId ?? null,
+        p_force: false,
+      });
+
+      if (error) {
+        const msg = String(error?.message || "").toLowerCase();
+        const isNotFound = msg.includes("not found") && msg.includes("round");
+        if (error.code === "P0001" && isNotFound) {
+          // Fallback: server thinks a different round is latest open
+          await finalizeLatestRoundForTournament(
+            tournament.id,
+            nextPlayerId ?? null,
+            false
+          );
+        } else if (error.code === "PGRST202") {
+          // Function not yet in schema cache — harmless; will retry on next tick
+          console.warn("[elim] finalize_round not in schema cache yet; will retry");
+        } else {
+          throw error;
+        }
+      }
+
+      if (onAdvanced) await onAdvanced();
+    } catch (e) {
+      console.error("[elim] auto-finalize error", e);
+    } finally {
+      finalizingRef.current.delete(r.id);
+    }
+  })();
+
+  return () => {
+    cancelled = true;
+  };
+  // keep deps minimal; parent state changes will retrigger naturally
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [rounds, entriesByRound, participants, tournament.id, userId, onAdvanced]);
 
   return (
     <div className="rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md">
