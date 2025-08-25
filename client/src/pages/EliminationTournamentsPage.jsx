@@ -75,19 +75,14 @@ async function getLatestOpenRoundIdForTournament(tournamentId) {
   return data?.id ?? null;
 }
 
-async function finalizeLatestRoundForTournament(tournamentId, nextPlayerId = null, force = false) {
+async function finalizeLatestRoundForTournament(tournamentId) {
   const roundId = await getLatestOpenRoundIdForTournament(tournamentId);
-  if (!roundId) {
-    throw new Error(`No open round found for tournament ${tournamentId}`);
-  }
-  const { data, error } = await supabase.rpc("finalize_round", {
-    p_round_id: roundId,             // ✅ guaranteed to be a round_id
-    p_force: Boolean(force),
-    p_next_player_id: nextPlayerId ?? null,
-  });
+  if (!roundId) throw new Error(`No open round found for tournament ${tournamentId}`);
+  const { data, error } = await supabase.rpc("finalize_round", { p_round_id: roundId });
   if (error) throw error;
   return data;
 }
+
 
 /* ------------------------------------------------------------
    Page: EliminationTournamentsPage
@@ -1147,29 +1142,20 @@ useEffect(() => {
       }
 
       // Respect deadlines by default. Only force if you *explicitly* want to override.
-      const { error } = await supabase.rpc("finalize_round", {
-        p_round_id: r.id,
-        p_next_player_id: nextPlayerId ?? null,
-        p_force: false,
-      });
+      // …inside the effect, after you detect shouldFinalize…
+const { error } = await supabase.rpc("finalize_round", { p_round_id: r.id });
+if (error) {
+  const msg = String(error?.message || "").toLowerCase();
+  const isNotFound = msg.includes("not found") && msg.includes("round");
+  if (error.code === "P0001" && isNotFound) {
+    await finalizeLatestRoundForTournament(tournament.id);
+  } else if (error.code === "PGRST202") {
+    console.warn("[elim] finalize_round not in schema cache yet; will retry");
+  } else {
+    throw error;
+  }
+}
 
-      if (error) {
-        const msg = String(error?.message || "").toLowerCase();
-        const isNotFound = msg.includes("not found") && msg.includes("round");
-        if (error.code === "P0001" && isNotFound) {
-          // Fallback: server thinks a different round is latest open
-          await finalizeLatestRoundForTournament(
-            tournament.id,
-            nextPlayerId ?? null,
-            false
-          );
-        } else if (error.code === "PGRST202") {
-          // Function not yet in schema cache — harmless; will retry on next tick
-          console.warn("[elim] finalize_round not in schema cache yet; will retry");
-        } else {
-          throw error;
-        }
-      }
 
       if (onAdvanced) await onAdvanced();
     } catch (e) {
