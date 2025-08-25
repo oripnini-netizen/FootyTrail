@@ -258,7 +258,11 @@ export default function LiveGamePage() {
   }, [location.state?.id, location.state?.name]);
 
   // -------------------------
-  // Suggestions (debounced, defensive)
+  // Suggestions (debounced, defensive)  ✅ UPDATED
+  //   - 200ms debounce
+  //   - only after 3+ characters
+  //   - group by normalized name (single row per name)
+  //   - attach a photo when available
   // -------------------------
   useEffect(() => {
     let active = true;
@@ -267,63 +271,96 @@ export default function LiveGamePage() {
       const raw = typeof guess === 'string' ? guess : String(guess ?? '');
       const q = raw.trim();
 
-      if (!q) {
+      // Minimum characters: 3
+      if (!q || q.length < 3) {
         if (active) {
           setSuggestions([]);
-          setIsLoadingSuggestions(false); // nothing to load
+          setIsLoadingSuggestions(false);
         }
         return;
       }
 
       try {
         if (active) setIsLoadingSuggestions(true);
-        const res = await suggestNames(q, 50); // ask for more than 5
+
+        // Ask for a generous limit to have enough items to group
+        const res = await suggestNames(q, 50);
         if (!active) return;
 
-        // Normalize to { id, display }
-        const normalized = (Array.isArray(res) ? res : [])
+        // Normalize incoming rows into a standard shape and group by normalized display name
+        // We accept a variety of possible field names to keep compatibility with your RPC.
+        const rows = Array.isArray(res) ? res : [];
+
+        // Helper to pick a photo field if present
+        const pickPhoto = (r) =>
+          r.photo ||
+          r.player_photo ||
+          r.player_photo_url ||
+          r.photo_url ||
+          r.avatar ||
+          r.image ||
+          r.img ||
+          null;
+
+        // First, map to a canonical shape
+        const mapped = rows
           .map((r) => {
-            if (typeof r === 'string') return { id: r, display: r };
-            const idVal =
-              r.id ??
+            // Try to read canonical fields robustly
+            const pid =
               r.player_id ??
+              r.id ??
               r.pid ??
-              r.value ??
-              `${r.player_name || r.name || r.display || r.player_norm_name || r.norm || ''}`.toLowerCase();
+              null;
 
             const displayVal =
-              r.display ??
-              r.name ??
               r.player_name ??
-              r.norm ??
+              r.name ??
+              r.display ??
               r.player_norm_name ??
+              r.norm ??
               '';
 
-            return { id: idVal, display: String(displayVal || '').trim() };
+            return {
+              player_id: pid,
+              display: String(displayVal || '').trim(),
+              photo: pickPhoto(r),
+            };
           })
-          .filter((x) => x.display); // drop empties
+          .filter((x) => x.display);
 
-        // De-duplicate by display text
-        const seen = new Set();
-        const deduped = [];
-        for (const s of normalized) {
-          const key = s.display.toLowerCase();
-          if (!seen.has(key)) {
-            seen.add(key);
-            deduped.push(s);
+        // Group by normalized display (lowercased + de-accented + trimmed)
+        const groups = new Map(); // key -> { id, display, ids[], photo }
+        for (const row of mapped) {
+          const key = normalize(row.display).trim();
+          if (!key) continue;
+          const existing = groups.get(key);
+          if (!existing) {
+            groups.set(key, {
+              id: key,                        // stable key
+              display: row.display,           // representative name
+              ids: row.player_id != null ? [row.player_id] : [],
+              photo: row.photo || null,       // first seen photo (if any)
+            });
+          } else {
+            if (row.player_id != null) existing.ids.push(row.player_id);
+            // Prefer keeping first non-null photo if we don't have one yet
+            if (!existing.photo && row.photo) existing.photo = row.photo;
+            // If you ever want to reconcile different display casings, do it here (we keep first)
           }
         }
 
-        setSuggestions(deduped);
+        const grouped = Array.from(groups.values());
+
+        setSuggestions(grouped);
         // reset item refs length to match
-        itemRefs.current = new Array(deduped.length);
+        itemRefs.current = new Array(grouped.length);
       } catch (e) {
         console.error('[suggestNames] failed:', e);
         if (active) setSuggestions([]);
       } finally {
         if (active) setIsLoadingSuggestions(false);
       }
-    }, 200);
+    }, 200); // ✅ 200ms debounce
     return () => {
       active = false;
       clearTimeout(id);
@@ -945,7 +982,30 @@ export default function LiveGamePage() {
                     submitGuess(sug.display);
                   }}
                 >
-                  {sug.display}
+                  <div className="flex items-center gap-3">
+                    {/* ✅ Player photo in suggestion (if available) */}
+                    {sug.photo ? (
+                      <img
+                        src={sug.photo}
+                        alt=""
+                        className="h-8 w-8 rounded-full object-cover object-top flex-shrink-0"
+                      />
+                    ) : (
+                      <div className="h-8 w-8 rounded-full bg-gray-200 flex items-center justify-center text-xs text-gray-500 flex-shrink-0">
+                        {sug.display?.[0]?.toUpperCase() || '?'}
+                      </div>
+                    )}
+
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate">{sug.display}</div>
+                      {/* If multiple players share the same name, you can hint it subtly (optional) */}
+                      {Array.isArray(sug.ids) && sug.ids.length > 1 ? (
+                        <div className="text-[11px] text-gray-500">
+                          Multiple players share this name
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
                 </li>
               ))}
             </ul>
