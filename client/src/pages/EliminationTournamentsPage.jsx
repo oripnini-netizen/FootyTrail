@@ -1,5 +1,5 @@
 // src/pages/EliminationTournamentsPage.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, createRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../supabase";
 import { useAuth } from "../context/AuthContext";
@@ -72,6 +72,9 @@ export default function EliminationTournamentsPage() {
 
   // Notifications banner (NEW) — load unread on first visit, mark as read, show once
   const [notifBanner, setNotifBanner] = useState([]);
+
+  // Force children to refetch on page reloads / realtime updates
+  const [refreshTick, setRefreshTick] = useState(0);
 
   // For pretty filter chips on cards
   const [groupedCompetitions, setGroupedCompetitions] = useState({});
@@ -162,6 +165,8 @@ export default function EliminationTournamentsPage() {
       setFinished([]);
     } finally {
       setLoading((s) => ({ ...s, finished: false }));
+      // bump refresh token so TournamentCards refetch internals
+      setRefreshTick((t) => t + 1);
     }
   };
 
@@ -171,23 +176,63 @@ export default function EliminationTournamentsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
+  // Auto-reload every 30s ONLY if there is a live challenge
+  useEffect(() => {
+    if (!live || live.length === 0) return;
+    const id = setInterval(() => {
+      reloadLists();
+    }, 30_000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live.length]);
+
+  // Realtime subscriptions: reload on any change in elim tables
+  useEffect(() => {
+    const ch = supabase
+      .channel("elim-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "elimination_tournaments" },
+        () => reloadLists()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "elimination_rounds" },
+        () => reloadLists()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "elimination_round_entries" },
+        () => reloadLists()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "elimination_participants" },
+        () => reloadLists()
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(ch);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Load unread elimination notifications ON FIRST VISIT, then mark as read (NEW)
   useEffect(() => {
     if (!user?.id) return;
     let cancelled = false;
 
     async function loadAndMark() {
-      // 1) load unread elimination invites
       const { data: unread } = await supabase
-        .from('notifications')
-        .select('id, payload, created_at')
-        .eq('user_id', user.id)
-        .eq('type', 'elimination_invite')
-        .is('read_at', null)
-        .order('created_at', { ascending: false });
+        .from("notifications")
+        .select("id, payload, created_at")
+        .eq("user_id", user.id)
+        .eq("type", "elimination_invite")
+        .is("read_at", null)
+        .order("created_at", { ascending: false });
 
       if (!cancelled && unread?.length) {
-        // keep a copy for the banner before marking as read
         setNotifBanner(
           unread.map((n) => ({
             id: n.id,
@@ -196,15 +241,13 @@ export default function EliminationTournamentsPage() {
           }))
         );
 
-        // 2) mark as read
         const ids = unread.map((n) => n.id);
         await supabase
-          .from('notifications')
+          .from("notifications")
           .update({ read_at: new Date().toISOString() })
-          .in('id', ids);
+          .in("id", ids);
 
-        // 3) notify navbar to clear the red dot immediately
-        window.dispatchEvent(new Event('elimination-notifications-read'));
+        window.dispatchEvent(new Event("elimination-notifications-read"));
       }
     }
     loadAndMark();
@@ -227,7 +270,7 @@ export default function EliminationTournamentsPage() {
             <Axe className="h-8 w-8 text-green-800" aria-hidden="true" />
             <span>Elimination Challenges</span>
           </h1>
-        <p className="mt-2 text-sm text-gray-700">
+          <p className="mt-2 text-sm text-gray-700">
             Create and follow elimination challenges with friends. Each round
             uses the same mystery player for everyone. Lowest score(s) are
             eliminated until a single winner remains.
@@ -241,14 +284,23 @@ export default function EliminationTournamentsPage() {
                   <Bell className="h-5 w-5" />
                 </div>
                 <div className="flex-1">
-                  <div className="font-semibold text-amber-900 mb-1">Notifications</div>
+                  <div className="font-semibold text-amber-900 mb-1">
+                    Notifications
+                  </div>
                   <ul className="space-y-1">
                     {notifBanner.map((n) => (
                       <li key={n.id} className="text-sm text-amber-900">
-                        You were added to <span className="font-medium">{n.tournament_name}</span> by{" "}
-                        <span className="font-medium">{n.creator_name}</span>
-                        {typeof n.round_time_limit_minutes === 'number' ? (
-                          <> — round time limit <span className="font-medium">{n.round_time_limit_minutes} min</span></>
+                        You were added to{" "}
+                        <span className="font-medium">{n.tournament_name}</span>{" "}
+                        by <span className="font-medium">{n.creator_name}</span>
+                        {typeof n.round_time_limit_minutes === "number" ? (
+                          <>
+                            {" "}
+                            — round time limit{" "}
+                            <span className="font-medium">
+                              {n.round_time_limit_minutes} min
+                            </span>
+                          </>
                         ) : null}
                       </li>
                     ))}
@@ -284,7 +336,10 @@ export default function EliminationTournamentsPage() {
               <SkeletonCard />
             </>
           ) : error.live ? (
-            <ErrorCard title="Couldn't load live tournaments" message={error.live} />
+            <ErrorCard
+              title="Couldn't load live tournaments"
+              message={error.live}
+            />
           ) : (
             <>
               {live.map((t) => (
@@ -294,6 +349,7 @@ export default function EliminationTournamentsPage() {
                   compIdToLabel={compIdToLabel}
                   onAdvanced={reloadLists}
                   defaultCollapsed={false} // LIVE → expanded by default
+                  refreshToken={refreshTick}
                 />
               ))}
             </>
@@ -307,7 +363,10 @@ export default function EliminationTournamentsPage() {
               <SkeletonCard />
             </>
           ) : error.finished ? (
-            <ErrorCard title="Couldn't load finished tournaments" message={error.finished} />
+            <ErrorCard
+              title="Couldn't load finished tournaments"
+              message={error.finished}
+            />
           ) : (
             <>
               {finished.map((t) => (
@@ -317,6 +376,7 @@ export default function EliminationTournamentsPage() {
                   compIdToLabel={compIdToLabel}
                   onAdvanced={reloadLists}
                   defaultCollapsed={t.id === mostRecentFinishedId ? false : true}
+                  refreshToken={refreshTick}
                 />
               ))}
             </>
@@ -387,7 +447,8 @@ function RoundPlayer({ playerId }) {
     };
   }, [playerId]);
 
-  if (!meta) return <div className="text-sm text-gray-500">Player details unavailable.</div>;
+  if (!meta)
+    return <div className="text-sm text-gray-500">Player details unavailable.</div>;
 
   return (
     <div className="flex items-center gap-3">
@@ -411,15 +472,14 @@ function RoundPlayer({ playerId }) {
 }
 
 /* ------------------------------------------------------------
-   Confetti + Winner Celebration (NEW)
+   Confetti + Winner Celebration (existing)
 ------------------------------------------------------------ */
 function ConfettiRain({ count = 80, durationMs = 4000 }) {
   const pieces = useMemo(() => {
     const arr = [];
     for (let i = 0; i < count; i++) {
-      const left = Math.random() * 100; // vw%
-      the_delay_block: { /* keep structure */ }
-      const delay = Math.random() * 0.8; // s
+      const left = Math.random() * 100;
+      const delay = Math.random() * 0.8;
       const scale = 0.6 + Math.random() * 0.8;
       const rotate = Math.floor(Math.random() * 360);
       arr.push({ left, delay, scale, rotate });
@@ -442,10 +502,7 @@ function ConfettiRain({ count = 80, durationMs = 4000 }) {
             width: "10px",
             height: "14px",
             transform: `scale(${p.scale}) rotate(${p.rotate}deg)`,
-            background:
-              ["#16a34a", "#22c55e", "#a3e635", "#065f46", "#34d399"][
-                idx % 5
-              ],
+            background: ["#16a34a", "#22c55e", "#a3e635", "#065f46", "#34d399"][idx % 5],
             animation: `ft-fall ${durationMs}ms linear ${p.delay}s 1`,
             borderRadius: "2px",
           }}
@@ -464,11 +521,7 @@ function ConfettiRain({ count = 80, durationMs = 4000 }) {
 function WinnerStarAvatar({ src, alt }) {
   return (
     <div className="relative inline-flex items-center justify-center">
-      {/* Star frame */}
-      <svg
-        viewBox="0 0 100 100"
-        className="w-28 h-28 text-yellow-400 drop-shadow"
-      >
+      <svg viewBox="0 0 100 100" className="w-28 h-28 text-yellow-400 drop-shadow">
         <polygon
           points="50,5 61,35 95,35 67,55 77,88 50,70 23,88 33,55 5,35 39,35"
           fill="currentColor"
@@ -476,7 +529,6 @@ function WinnerStarAvatar({ src, alt }) {
           strokeWidth="2"
         />
       </svg>
-      {/* Avatar */}
       <img
         src={src || ""}
         alt={alt || "Winner"}
@@ -490,13 +542,7 @@ function WinnerStarAvatar({ src, alt }) {
   );
 }
 
-function WinnerCelebrationCard({
-  tournamentName,
-  winner,
-  stats,
-  ranking,
-}) {
-  // winner: { id, full_name/email, profile_photo_url }
+function WinnerCelebrationCard({ tournamentName, winner, stats, ranking }) {
   return (
     <div className="relative overflow-hidden rounded-xl border bg-gradient-to-b from-amber-50 to-white p-4 md:p-5 shadow-sm">
       <ConfettiRain />
@@ -570,17 +616,103 @@ function WinnerCelebrationCard({
 }
 
 /* ------------------------------------------------------------
+   NEW: Loser Final Card (shown to non-winners)
+------------------------------------------------------------ */
+function LoserFinalCard({ tournamentName, winner, stats, ranking }) {
+  return (
+    <div className="relative overflow-hidden rounded-xl border bg-gradient-to-b from-red-50 to-white p-4 md:p-5 shadow-sm">
+      <div className="flex flex-col md:flex-row md:items-center gap-4 md:gap-6">
+        <div className="flex items-center justify-center md:justify-start">
+          {/* Winner avatar in a simple ring (no star, no confetti) */}
+          <img
+            src={winner?.profile_photo_url || ""}
+            alt={winner?.full_name || winner?.email || "Winner"}
+            className="w-24 h-24 rounded-full object-cover ring-4 ring-red-100"
+            onError={(e) => {
+              e.currentTarget.style.display = "none";
+            }}
+          />
+        </div>
+
+        <div className="flex-1">
+          <div className="text-2xl font-extrabold text-red-700 flex items-center gap-2">
+            ❌ You lost {tournamentName}.
+          </div>
+          <p className="mt-1 text-sm text-gray-700">
+            Shamefully defeated—bow before{" "}
+            <span className="font-semibold">
+              {winner?.full_name || winner?.email || "the victor"}
+            </span>
+            . Train harder and return stronger.
+          </p>
+
+          {/* Stats */}
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div className="rounded-lg bg-white border p-3">
+              <div className="text-xs text-gray-500">Rounds</div>
+              <div className="text-lg font-semibold text-gray-900">{stats.rounds}</div>
+            </div>
+            <div className="rounded-lg bg-white border p-3">
+              <div className="text-xs text-gray-500">Time Played</div>
+              <div className="text-lg font-semibold text-gray-900">{stats.timePlayed}</div>
+            </div>
+            <div className="rounded-lg bg-white border p-3">
+              <div className="text-xs text-gray-500">Participants</div>
+              <div className="text-lg font-semibold text-gray-900">{stats.participants}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Full standings (same list) */}
+      <div className="mt-5">
+        <div className="text-sm font-semibold text-gray-700 mb-2">Final Standings</div>
+        {ranking.length === 0 ? (
+          <div className="text-sm text-gray-500">No other participants.</div>
+        ) : (
+          <ol className="space-y-1">
+            <li className="flex items-center justify-between rounded-md bg-emerald-50 border border-emerald-100 px-3 py-2">
+              <span className="font-semibold text-emerald-800">
+                1. {winner?.full_name || winner?.email || "Winner"}
+              </span>
+              <span className="text-xs text-emerald-700">Winner</span>
+            </li>
+            {ranking.map((r, idx) => (
+              <li
+                key={r.user.id}
+                className="flex items-center justify-between rounded-md bg-white border px-3 py-2"
+              >
+                <span className="truncate">
+                  {idx + 2}. {r.user.full_name || r.user.email}
+                </span>
+                <span className="text-xs text-gray-600">
+                  Eliminated R{r.eliminatedAtRound}
+                  {Number.isFinite(r.lastPoints) ? ` • ${r.lastPoints} pts` : ""}
+                </span>
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------
    Tournament Card
 ------------------------------------------------------------ */
-function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapsed = false }) {
+function TournamentCard({
+  tournament,
+  compIdToLabel,
+  onAdvanced,
+  defaultCollapsed = false,
+  refreshToken, // NEW: force internal refetches
+}) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const userId = user?.id || null;
 
   const createdAt = new Date(tournament.created_at);
-  the_header_date: {
-    // no-op block retained
-  }
   const dateStr = createdAt.toLocaleString();
   const isLive = tournament.status === "live";
   const timeLimitMin = Math.round(
@@ -617,7 +749,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
         if (idsFromParticipants.length) {
           const { data: usersRows } = await supabase
             .from("users")
-            .select("id, full_name, email, profile_photo_url") // <-- added avatar
+            .select("id, full_name, email, profile_photo_url")
             .in("id", idsFromParticipants);
           userRows = usersRows || [];
         }
@@ -648,7 +780,6 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
           }
         }
 
-        // fetch any missing users referenced by entries (avoids GUID fallback)
         if (extraUserIds.size) {
           const { data: extraUsers } = await supabase
             .from("users")
@@ -680,7 +811,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
     return () => {
       cancelled = true;
     };
-  }, [tournament.id]);
+  }, [tournament.id, refreshToken]); // <- NEW dep to refetch when parent reloads
 
   const participantsMap = useMemo(() => {
     const m = new Map();
@@ -705,8 +836,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
       key: `S-${s}`,
       label: String(s),
     }));
-    const mvChip =
-      mv > 0 ? { key: "MV", label: `Min MV: €${fmtCurrency(mv)}` } : null;
+    const mvChip = mv > 0 ? { key: "MV", label: `Min MV: €${fmtCurrency(mv)}` } : null;
 
     return { compChips, seasonChips, mvChip };
   }, [tournament.filters, compIdToLabel]);
@@ -715,22 +845,17 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
   const iAmEliminated =
     ((participantsMap.get(userId)?.state || "").toLowerCase() === "eliminated");
 
-  // ***** NEW: Per-round active users (simulate bracket progression from entries) *****
+  // ***** Per-round active users (already implemented) *****
   const activeUsersByRound = useMemo(() => {
     const result = new Map();
     if (!Array.isArray(rounds) || rounds.length === 0) return result;
     if (!Array.isArray(participants) || participants.length === 0) return result;
 
-    // Start with everyone active for Round 1
     let activeSet = new Set(participants.map((p) => p.id));
-    // Process rounds in order; for each, record current active set,
-    // then, if the round is finished, eliminate DNF + all with min points.
     const ordered = [...rounds].sort((a, b) => (a.round_number || 0) - (b.round_number || 0));
     for (const r of ordered) {
-      // Active at the START of this round:
       result.set(r.id, new Set(activeSet));
 
-      // Only compute eliminations once the round is actually finished
       const isClosed =
         !!r.closed_at ||
         (r.ends_at ? new Date(r.ends_at).getTime() <= Date.now() : false);
@@ -748,7 +873,6 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
       }
 
       const eliminated = new Set();
-      // DNFs are eliminated
       for (const uid of notPlayed) eliminated.add(uid);
 
       if (played.length > 0) {
@@ -762,28 +886,23 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
         }
       }
 
-      // Update active set for the NEXT round
       for (const uid of eliminated) activeSet.delete(uid);
     }
 
     return result;
   }, [rounds, participants, entriesByRound]);
-  // ***** END NEW *****
 
-  // ***** NEW: Winner + standings + stats for finished tournaments *****
+  // ***** Winner + standings + stats for finished tournaments *****
   const celebrationData = useMemo(() => {
     if (tournament.status !== "finished") return null;
     if (!rounds?.length || !participants?.length) return null;
 
-    // Determine winner from tournament.winner_user_id (primary)
     const winner =
       (tournament.winner_user_id && participantsMap.get(tournament.winner_user_id)) ||
       null;
 
-    // Reconstruct elimination each round to rank others:
-    // Start active set with all
     let activeSet = new Set(participants.map((p) => p.id));
-    const eliminatedRecords = []; // { userId, eliminatedAtRound, lastPoints }
+    const eliminatedRecords = [];
     const ordered = [...rounds].sort(
       (a, b) => (a.round_number || 0) - (b.round_number || 0)
     );
@@ -805,13 +924,12 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
       }
 
       const eliminated = new Set();
-      // DNFs
       for (const uid of notPlayed) {
         eliminated.add(uid);
         eliminatedRecords.push({
           userId: uid,
           eliminatedAtRound: r.round_number,
-          lastPoints: null, // DNF
+          lastPoints: null,
         });
       }
 
@@ -833,29 +951,22 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
         }
       }
 
-      // Update active
       for (const uid of eliminated) activeSet.delete(uid);
     }
 
-    // The one remaining in activeSet is the winner if not provided
     let computedWinner = winner;
     if (!computedWinner && activeSet.size === 1) {
       const wId = Array.from(activeSet)[0];
       computedWinner = participantsMap.get(wId) || null;
     }
 
-    // Build ranking list for others
     const ranking = eliminatedRecords
       .map((rec) => ({
         user: participantsMap.get(rec.userId),
         eliminatedAtRound: rec.eliminatedAtRound,
-        lastPoints:
-          rec.lastPoints === null || rec.lastPoints === undefined
-            ? null
-            : Number(rec.lastPoints),
+        lastPoints: rec.lastPoints === null || rec.lastPoints === undefined ? null : Number(rec.lastPoints),
       }))
       .filter((x) => x.user && (!computedWinner || x.user.id !== computedWinner.id))
-      // Sort: later elimination (higher round) first; then by lastPoints desc; then name
       .sort((a, b) => {
         if (b.eliminatedAtRound !== a.eliminatedAtRound) {
           return b.eliminatedAtRound - a.eliminatedAtRound;
@@ -868,7 +979,6 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
         return an.localeCompare(bn);
       });
 
-    // Stats
     const roundsCount = ordered.length;
     const startMs = ordered
       .map((r) => (r.started_at ? new Date(r.started_at).getTime() : null))
@@ -895,21 +1005,24 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
         participants: participants.length,
       },
     };
-  }, [tournament.status, tournament.winner_user_id, participants, participantsMap, rounds, entriesByRound]);
-  // ***** END NEW *****
+  }, [
+    tournament.status,
+    tournament.winner_user_id,
+    participants,
+    participantsMap,
+    rounds,
+    entriesByRound,
+  ]);
 
-  // Play handler — sends a FLATTENED player payload (fixes empty player crash)
+  // Play handler — sends a FLATTENED player payload
   const handlePlayRound = async (round) => {
     if (!round?.id || !round?.round_number || !round?.player_id) return;
 
-    // HARD GUARD: do not allow eliminated players to enter
     if (iAmEliminated) return;
 
-    // Guard: don't allow play if already played
     const already = entriesFor(round.id).some((e) => e.user_id === userId);
     if (already) return;
 
-    // Fetch one player meta row for this round's player_id
     const { data: meta } = await supabase
       .from("players_in_seasons")
       .select(
@@ -921,7 +1034,6 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
 
     if (!meta?.player_id) return;
 
-    // IMPORTANT: LiveGamePage expects these at TOP-LEVEL in location.state
     navigate("/live", {
       state: {
         id: Number(meta.player_id),
@@ -941,36 +1053,28 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
     });
   };
 
-  const [/* internal: used by auto-finalizer */] = useState(null);
-
-  // Auto-finalization (keep as-is)
+  // Auto-finalization (unchanged)
   const finalizingRef = useRef(new Set());
-
   useEffect(() => {
     let cancelled = false;
     (async () => {
       if (!Array.isArray(rounds) || rounds.length === 0) return;
       if (!Array.isArray(participants) || participants.length === 0) return;
 
-      // Set of players already used in this tournament (for uniqueness)
       const usedPlayerIds = new Set(
         (rounds || [])
           .map((x) => x?.player_id)
           .filter((v) => v !== null && v !== undefined)
       );
 
-      // Count only ACTIVE participants for "everyone played"
-      const activeCount = participants.filter(
-        (p) => (p.state || "").toLowerCase() === "active"
-      ).length || participants.length;
+      const activeCount =
+        participants.filter((p) => (p.state || "").toLowerCase() === "active")
+          .length || participants.length;
 
       for (const r of rounds) {
         const entries = entriesByRound[r.id] || [];
         const everyonePlayed = entries.length >= activeCount;
         const now = Date.now();
-        the_timeup_check: {
-          // no-op block retained to avoid any functional changes
-        }
         const timeUp = r.ends_at ? new Date(r.ends_at).getTime() <= now : false;
         const shouldFinalize = !r.closed_at && (everyonePlayed || timeUp);
 
@@ -981,17 +1085,14 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
         try {
           const laterRoundExists = rounds.some((x) => x.round_number > r.round_number);
 
-          // Pre-pick the next player ONLY if a later round doesn't already exist
           let nextPlayerId = null;
           if (!laterRoundExists) {
-            // Try up to N attempts to get a fresh player (front-end uniqueness)
             const maxAttempts = 24;
             for (let i = 0; i < maxAttempts; i++) {
               const candidate = await getRandomPlayer(
                 {
                   ...(tournament.filters || {}),
                   userId,
-                  // If your getRandomPlayer ignores this field, loop still prevents duplicates.
                   excludePlayerIds: Array.from(usedPlayerIds),
                 },
                 userId
@@ -1004,8 +1105,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
             }
           }
 
-          // Single finalize call: pass next player along
-          const { error } = await supabase.rpc('finalize_round', {
+          const { error } = await supabase.rpc("finalize_round", {
             p_round_id: r.id,
             p_next_player_id: nextPlayerId,
             p_force: Boolean(nextPlayerId),
@@ -1014,7 +1114,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
 
           if (onAdvanced) await onAdvanced();
         } catch (e) {
-          console.error('[elim] auto-finalize error', e);
+          console.error("[elim] auto-finalize error", e);
         } finally {
           finalizingRef.current.delete(r.id);
         }
@@ -1037,7 +1137,6 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
             title={cardCollapsed ? "Expand" : "Collapse"}
             aria-label={cardCollapsed ? "Expand" : "Collapse"}
           >
-            {/* Requested: just an arrow, no text */}
             {cardCollapsed ? "▼" : "▲"}
           </button>
           <h3 className="text-base font-semibold text-gray-900">
@@ -1066,18 +1165,27 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
       {/* Collapsible body */}
       {!cardCollapsed && (
         <>
-          {/* ===== NEW: Winner Celebration Card (finished only) ===== */}
+          {/* ===== Winner / Loser Final Card (finished only) ===== */}
           {!isLive && celebrationData?.winner && (
             <div className="mt-4">
-              <WinnerCelebrationCard
-                tournamentName={tournament.name}
-                winner={celebrationData.winner}
-                stats={celebrationData.stats}
-                ranking={celebrationData.ranking}
-              />
+              {userId && celebrationData.winner?.id === userId ? (
+                <WinnerCelebrationCard
+                  tournamentName={tournament.name}
+                  winner={celebrationData.winner}
+                  stats={celebrationData.stats}
+                  ranking={celebrationData.ranking}
+                />
+              ) : (
+                <LoserFinalCard
+                  tournamentName={tournament.name}
+                  winner={celebrationData.winner}
+                  stats={celebrationData.stats}
+                  ranking={celebrationData.ranking}
+                />
+              )}
             </div>
           )}
-          {/* ===== END NEW ===== */}
+          {/* ===== END ===== */}
 
           {/* Difficulty Filters as grouped chips (now collapsible, default collapsed) */}
           <div className="mt-3">
@@ -1177,7 +1285,8 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
                           "bg-emerald-50 text-emerald-800 ring-emerald-600/20",
                         isEliminated &&
                           "bg-red-50 text-red-700 ring-red-600/20 opacity-70",
-                        !isActive && !isEliminated &&
+                        !isActive &&
+                          !isEliminated &&
                           "bg-gray-100 text-gray-800 ring-gray-300"
                       )}
                     >
@@ -1198,7 +1307,6 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
                 const entries = entriesFor(r.id);
                 const entryByUser = new Map(entries.map((e) => [e.user_id, e]));
 
-                // ***** NEW: restrict to the users active AT THIS ROUND *****
                 const activeIdsForRound =
                   activeUsersByRound.get(r.id) ||
                   new Set(participants.map((p) => p.id));
@@ -1208,7 +1316,6 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
                 const entriesFromActive = entries.filter((e) =>
                   activeIdsForRound.has(e.user_id)
                 );
-                // ***** END NEW *****
 
                 const now = Date.now();
                 const endsAt = r.ends_at ? new Date(r.ends_at).getTime() : null;
@@ -1222,29 +1329,23 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
                     ? entryByUser.has(userId)
                     : false;
 
-                // Compute min/max among played ACTIVE users only
                 const playedPoints = entriesFromActive.map((e) =>
                   Number(e.points_earned ?? 0)
                 );
                 const hasAnyPlayed = playedPoints.length > 0;
                 const maxPts = hasAnyPlayed ? Math.max(...playedPoints) : null;
                 const minPts = hasAnyPlayed ? Math.min(...playedPoints) : null;
-                const singleValueOnly =
-                  hasAnyPlayed && maxPts === minPts;
+                const singleValueOnly = hasAnyPlayed && maxPts === minPts;
 
-                // Build a unified list of ACTIVE participants only (others hidden for this round)
                 const unifiedRows = participants
                   .filter((p) => activeIdsForRound.has(p.id))
                   .map((p) => {
                     const e = entryByUser.get(p.id) || null;
                     const points =
-                      e && typeof e.points_earned === "number"
-                        ? e.points_earned
-                        : null;
+                      e && typeof e.points_earned === "number" ? e.points_earned : null;
                     return { user: p, points };
                   });
 
-                // Sort: played (by points desc) first, then not played
                 unifiedRows.sort((a, b) => {
                   if (a.points === null && b.points === null) return 0;
                   if (a.points === null) return 1;
@@ -1312,9 +1413,7 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
                         Scores
                       </div>
                       {unifiedRows.length === 0 ? (
-                        <div className="text-xs text-gray-500">
-                          No participants.
-                        </div>
+                        <div className="text-xs text-gray-500">No participants.</div>
                       ) : (
                         <ul className="space-y-1">
                           {unifiedRows.map(({ user: u, points }, idx) => {
@@ -1323,7 +1422,6 @@ function TournamentCard({ tournament, compIdToLabel, onAdvanced, defaultCollapse
                             const isMin =
                               points !== null && minPts !== null && points === minPts;
 
-                            // If only one unique value, treat it as "max" (green) and not as "min"
                             const scoreClass =
                               points === null
                                 ? "text-gray-500"
@@ -1400,7 +1498,7 @@ function WinnerName({ userId }) {
 function SkeletonCard() {
   return (
     <div className="animate-pulse rounded-2xl border bg-white p-5">
-      <div className="h-4 w-1/2 rounded bg-gray-2 00" />
+      <div className="h-4 w-1/2 rounded bg-gray-200" />
       <div className="mt-3 h-3 w-2/3 rounded bg-gray-100" />
       <div className="mt-6 flex justify-end">
         <div className="h-7 w-20 rounded bg-gray-100" />
@@ -1420,7 +1518,7 @@ function ErrorCard({ title, message }) {
 
 /* ------------------------------------------------------------
    CreateTournamentModal
-   (unchanged for this request, aside from existing file content)
+   (CHANGED: adds keyboard navigation for invite results)
 ------------------------------------------------------------ */
 function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   const dialogRef = useRef(null);
@@ -1451,9 +1549,6 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   // Competition search (GamePage)
   const [compSearch, setCompSearch] = useState("");
   const [compSug, setCompSug] = useState([]);
-  the_comp_sug_block: {
-    // no-op block retained
-  }
   const [compSugOpen, setCompSugOpen] = useState(false);
   const [compSugIndex, setCompSugIndex] = useState(-1);
   const compSearchRef = useRef(null);
@@ -1463,6 +1558,11 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   const [searchEmail, setSearchEmail] = useState("");
   const [emailResults, setEmailResults] = useState([]);
   const [invites, setInvites] = useState([]); // rows from users table
+
+  // NEW: keyboard nav for invite results
+  const [inviteIndex, setInviteIndex] = useState(-1);
+  const inviteListRef = useRef(null);
+  const inviteItemRefs = useRef([]);
 
   // Round time limit (minutes)
   const [roundTimeMinutes, setRoundTimeMinutes] = useState(5);
@@ -1514,8 +1614,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
           userId: currentUser?.id,
         };
         const countsResult = await getCounts(payload);
-        const { poolCount: filteredCount, totalCount: dbTotal } =
-          countsResult || {};
+        const { poolCount: filteredCount, totalCount: dbTotal } = countsResult || {};
         if (!cancelled) {
           setPoolCount(filteredCount || 0);
           setTotalCount(dbTotal || 0);
@@ -1563,7 +1662,10 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
     const t = setTimeout(async () => {
       const q = (searchEmail || "").trim();
       if (!q || q.length < 2) {
-        if (active) setEmailResults([]);
+        if (active) {
+          setEmailResults([]);
+          setInviteIndex(-1);
+        }
         return;
       }
       const { data } = await supabase
@@ -1572,13 +1674,28 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
         .ilike("email", `%${q}%`)
         .limit(10);
       const filtered = (data || []).filter((u) => u.id !== currentUser?.id);
-      if (active) setEmailResults(filtered);
+      if (active) {
+        setEmailResults(filtered);
+        setInviteIndex(filtered.length ? 0 : -1);
+      }
     }, 250);
     return () => {
       active = false;
       clearTimeout(t);
     };
   }, [searchEmail, currentUser?.id]);
+
+  // Keep inviteItemRefs array in sync and auto-scroll active item into view
+  useEffect(() => {
+    inviteItemRefs.current = emailResults.map(
+      (_, i) => inviteItemRefs.current[i] || createRef()
+    );
+    if (inviteIndex >= 0 && inviteItemRefs.current[inviteIndex]?.current) {
+      inviteItemRefs.current[inviteIndex].current.scrollIntoView({
+        block: "nearest",
+      });
+    }
+  }, [emailResults, inviteIndex]);
 
   // Competition suggestion logic (copied pattern)
   useEffect(() => {
@@ -1672,18 +1789,14 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   };
   const clearCompetitions = () => setSelectedCompetitionIds([]);
   const selectAllCompetitions = () =>
-    setSelectedCompetitionIds(
-      flatCompetitions.map((c) => String(c.competition_id))
-    );
+    setSelectedCompetitionIds(flatCompetitions.map((c) => String(c.competition_id)));
 
   const selectTop10Competitions = () => {
     const arr = [...flatCompetitions];
     arr.sort(
       (a, b) => Number(b.total_value_eur || 0) - Number(a.total_value_eur || 0)
     );
-    setSelectedCompetitionIds(
-      arr.slice(0, 10).map((c) => String(c.competition_id))
-    );
+    setSelectedCompetitionIds(arr.slice(0, 10).map((c) => String(c.competition_id)));
   };
 
   const clearSeasons = () => setSelectedSeasons([]);
@@ -1700,6 +1813,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
     setInvites((prev) => [...prev, u]);
     setSearchEmail("");
     setEmailResults([]);
+    setInviteIndex(-1);
   };
   const removeInvite = (id) =>
     setInvites((prev) => prev.filter((x) => x.id !== id));
@@ -1715,7 +1829,6 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
     if (!currentUser?.id) {
       next.user = "You must be logged in to create a tournament.";
     }
-    // Must invite at least one other participant (min 2 total)
     if ((invites || []).length < 1) {
       next.invites = "Invite at least one other user (minimum 2 participants).";
     }
@@ -1731,14 +1844,12 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
 
     setSubmitting(true);
     try {
-      // Build filters exactly like GamePage payload
       const filtersPayload = {
         competitions: selectedCompetitionIds,
         seasons: selectedSeasons,
         minMarketValue: Number(minMarketValue) || 0,
       };
 
-      // First: pick a player to guarantee a playable round
       const randomPlayer = await getRandomPlayer(
         { ...filtersPayload, userId: currentUser?.id },
         currentUser?.id
@@ -1749,7 +1860,6 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
         );
       }
 
-      // Create tournament
       const { data: tournament, error: tErr } = await supabase
         .from("elimination_tournaments")
         .insert([
@@ -1767,7 +1877,6 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
       if (tErr) throw new Error(tErr.message || "Failed to create tournament.");
       if (!tournament?.id) throw new Error("Tournament creation returned no id.");
 
-      // Participants: owner + invites
       const people = [
         {
           id: currentUser.id,
@@ -1788,7 +1897,6 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
         await supabase.from("elimination_participants").insert(partsPayload);
       }
 
-      // Notifications for invited users (not the owner)
       const invitedHumans = invites.filter(
         (i) => !!i.id && i.id !== currentUser.id
       );
@@ -1810,11 +1918,9 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
         }));
         await supabase.from("notifications").insert(payloads);
 
-        // Let the navbar know to refresh axe dot immediately
         window.dispatchEvent(new Event("elimination-notifications-new"));
       }
 
-      // Create Round 1 immediately
       const now = new Date();
       const endsAt = new Date(
         now.getTime() + Math.floor(Number(roundTimeMinutes)) * 60 * 1000
@@ -1829,7 +1935,6 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
         },
       ]);
 
-      // done → refresh list and close
       await onCreated?.();
       onClose?.();
     } catch (ex) {
@@ -1947,24 +2052,71 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                     type="text"
                     value={searchEmail}
                     onChange={(e) => setSearchEmail(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (!emailResults.length) return;
+
+                      if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        setInviteIndex((i) =>
+                          i < 0 ? 0 : (i + 1) % emailResults.length
+                        );
+                      } else if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        setInviteIndex((i) =>
+                          i < 0 ? emailResults.length - 1 : (i - 1 + emailResults.length) % emailResults.length
+                        );
+                      } else if (e.key === "Enter" || e.key === " ") {
+                        if (inviteIndex >= 0 && emailResults[inviteIndex]) {
+                          e.preventDefault();
+                          addInvite(emailResults[inviteIndex]);
+                        }
+                      } else if (e.key === "Escape") {
+                        setEmailResults([]);
+                        setInviteIndex(-1);
+                      }
+                    }}
                     placeholder="Type an email to search…"
                     className="flex-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-700"
+                    aria-autocomplete="list"
+                    aria-controls="invite-results-list"
+                    aria-expanded={emailResults.length > 0}
+                    aria-activedescendant={
+                      inviteIndex >= 0 ? `invite-item-${inviteIndex}` : undefined
+                    }
                   />
                 </div>
 
-                {/* search results */}
+                {/* search results with keyboard nav */}
                 {emailResults.length > 0 && (
-                  <div className="mt-2 border rounded-md">
-                    {emailResults.map((u) => (
-                      <button
-                        key={u.id}
-                        type="button"
-                        onClick={() => addInvite(u)}
-                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
-                      >
-                        {u.full_name ? `${u.full_name} — ${u.email}` : u.email}
-                      </button>
-                    ))}
+                  <div
+                    id="invite-results-list"
+                    ref={inviteListRef}
+                    role="listbox"
+                    className="mt-2 border rounded-md max-h-60 overflow-auto"
+                  >
+                    {emailResults.map((u, idx) => {
+                      const active = idx === inviteIndex;
+                      return (
+                        <button
+                          key={u.id}
+                          ref={inviteItemRefs.current[idx]}
+                          id={`invite-item-${idx}`}
+                          role="option"
+                          aria-selected={active}
+                          type="button"
+                          onClick={() => addInvite(u)}
+                          className={classNames(
+                            "w-full text-left px-3 py-2 text-sm flex items-center justify-between",
+                            active ? "bg-green-100" : "hover:bg-gray-50"
+                          )}
+                        >
+                          <span className="truncate">
+                            {u.full_name ? `${u.full_name} — ${u.email}` : u.email}
+                          </span>
+                          <span className="text-xs text-gray-500 ml-3">Add</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
 
@@ -2305,10 +2457,7 @@ function DifficultyFilters(props) {
             }
           >
             {/* search */}
-            <div
-              className="mb-3 relative"
-              onClick={(e) => e.stopPropagation()}
-            >
+            <div className="mb-3 relative" onClick={(e) => e.stopPropagation()}>
               <div className="flex items-center gap-2 border rounded-md bg-white px-2 py-1">
                 <Search className="h-4 w-4 text-gray-500" />
                 <input
@@ -2401,8 +2550,7 @@ function DifficultyFilters(props) {
                       <div className="ml-8 space-y-2 mt-2">
                         {comps.map((c) => {
                           const cid = String(c.competition_id);
-                          const checked =
-                            selectedCompetitionIds.includes(cid);
+                          const checked = selectedCompetitionIds.includes(cid);
                           return (
                             <label
                               key={cid}
@@ -2422,9 +2570,7 @@ function DifficultyFilters(props) {
                                   className="w-5 h-5 object-contain"
                                 />
                               )}
-                              <span className="text-sm">
-                                {c.competition_name}
-                              </span>
+                              <span className="text-sm">{c.competition_name}</span>
                               {c.tier && (
                                 <span className="ml-2 text:[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700">
                                   Tier {c.tier}
@@ -2489,10 +2635,7 @@ function DifficultyFilters(props) {
               {allSeasons.map((s) => {
                 const checked = selectedSeasons.includes(s);
                 return (
-                  <label
-                    key={s}
-                    className="flex items-center gap-2 cursor-pointer"
-                  >
+                  <label key={s} className="flex items-center gap-2 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={checked}
@@ -2540,9 +2683,7 @@ function DifficultyFilters(props) {
                 min={0}
                 step={100000}
                 value={minMarketValue}
-                onChange={(e) =>
-                  setMinMarketValue(Math.max(0, Number(e.target.value)))
-                }
+                onChange={(e) => setMinMarketValue(Math.max(0, Number(e.target.value)))}
                 className="w-44 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-700"
               />
             </div>
