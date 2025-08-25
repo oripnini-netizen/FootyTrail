@@ -101,19 +101,17 @@ export async function getPlayersCoverage() {
   return data || [];
 }
 
-/* === Suggestions (robust) ===
-   We normalize to { id, name, norm, label, value } so any UI can use label/value. */
+/* === Suggestions (use Supabase RPC) ===
+   Return rows AS-IS so we don't drop fields like player_photo. */
 export async function suggestNames(query, limit = 50) {
   const q = typeof query === 'string' ? query : (query?.query || '');
   const lim = typeof query === 'object' && Number.isFinite(query?.limit) ? query.limit : limit;
-  const raw = await jfetch(`/names?q=${encodeURIComponent(q)}&limit=${encodeURIComponent(lim)}`);
-  // Defensive normalization in case the server changes again
-  return (Array.isArray(raw) ? raw : []).map((r) => {
-    const id   = r.id ?? r.player_id ?? r.playerId ?? null;
-    const name = r.label ?? r.name ?? r.player_name ?? r.playerName ?? r.norm ?? r.player_norm_name ?? '';
-    const norm = r.norm ?? r.player_norm_name ?? '';
-    return { id, name, norm, label: name, value: name };
-  });
+
+  const { data, error } = await supabase.rpc('suggest_names', { q, lim });
+  if (error) throw error;
+
+  // data rows already include: player_id, player_name, player_norm_name, player_photo
+  return Array.isArray(data) ? data : [];
 }
 
 export const getProfile    = async () => ({});
