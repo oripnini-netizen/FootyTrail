@@ -16,7 +16,7 @@ const pickModel = (kind = 'fast') => {
     return (
       process.env.OPENAI_MODEL_FAST || // optional override
       process.env.OPENAI_RESPONSES_MODEL_FAST || // optional override
-      'gpt-4o-mini' // good quality, much faster than gpt-4o/gpt-5
+      'gpt-5-nano	' // good quality, much faster than gpt-4o/gpt-5
     );
   }
   // quality/default fallback (kept for completeness; not used in changes below)
@@ -24,7 +24,7 @@ const pickModel = (kind = 'fast') => {
     process.env.OPENAI_MODEL_QUALITY ||
     process.env.OPENAI_RESPONSES_MODEL ||
     process.env.OPENAI_MODEL ||
-    'gpt-4o'
+    'gpt-5-nano	'
   );
 };
 
@@ -264,7 +264,7 @@ function normCountryName(s = '') {
  * 1) Fast local map
  * 2) Tiny Responses API call with web_search to resolve the code
  */
-async function getIso2FromNationality(nationality, modelForLookup = 'gpt-5') {
+async function getIso2FromNationality(nationality, modelForLookup = 'gpt-5-nano') {
   if (!nationality) return null;
   const key = normCountryName(nationality);
   if (!key) return null;
@@ -480,7 +480,7 @@ router.post('/generate-game-prompt', async (_req, res) => {
     }
 
     const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4o',
+      model: process.env.OPENAI_MODEL || 'gpt-5-nano',
       temperature: 0.9,
       max_tokens: 60,
       messages: [
@@ -516,7 +516,7 @@ router.post('/generate-daily-prompt', async (_req, res) => {
       return res.status(500).json({ error: 'OPENAI_API_KEY not configured' });
     }
     const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4o',
+      model: process.env.OPENAI_MODEL || 'gpt-5-nano',
       temperature: 0.9,
       max_tokens: 60,
       messages: [
