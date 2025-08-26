@@ -1904,48 +1904,59 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
     return Object.keys(next).length === 0;
   };
 
-  /* ---------- submit ---------- */
+   /* ---------- submit ---------- */
   const handleSubmit = async (e) => {
-  e.preventDefault();
-  setSubmitError("");
-  if (!validate()) return;
+    e.preventDefault();
+    setSubmitError("");
+    if (!validate()) return;
 
-  setSubmitting(true);
-  try {
-    const filtersPayload = {
-      competitions: selectedCompetitionIds,
-      seasons: selectedSeasons,
-      minMarketValue: Number(minMarketValue) || 0,
-    };
+    setSubmitting(true);
+    try {
+      const filtersPayload = {
+        competitions: selectedCompetitionIds,
+        seasons: selectedSeasons,
+        minMarketValue: Number(minMarketValue) || 0,
+      };
 
-    // Call the server-side RPC that does everything atomically:
-    //  - creates the tournament (owner = currentUser.id)
-    //  - inserts participants (owner + invited users)
-    //  - creates round 1 with an eligible random player based on filters
-    //  - (optionally: your SQL may also enqueue notifications)
-    const { data, error } = await supabase.rpc("create_elimination_tournament_full", {
-      p_name: name.trim(),
-      p_filters: filtersPayload,
-      p_round_time_limit_seconds: Math.floor(Number(roundTimeMinutes) * 60),
-      p_invited_user_ids: invites.map((u) => u.id),
-    });
+      // Call the server-side RPC that does everything atomically:
+      //  - creates the tournament (owner = currentUser.id)
+      //  - inserts participants (owner + invited users)
+      //  - creates round 1 with an eligible random player based on filters
+      const { data, error } = await supabase.rpc("create_elimination_tournament_full", {
+        p_name: name.trim(),
+        p_filters: filtersPayload,
+        p_round_time_limit_seconds: Math.floor(Number(roundTimeMinutes) * 60),
+        p_invited_user_ids: invites.map((u) => u.id),
+      });
 
-    if (error) {
-      throw new Error(error.message || "Failed to create tournament.");
+      if (error) {
+        throw new Error(error.message || "Failed to create tournament.");
+      }
+
+      // ✅ FIX: also insert notifications for each invited user
+      if (invites.length > 0) {
+        const notifRows = invites.map((u) => ({
+          user_id: u.id, // <-- FIXED: ensure not null
+          type: "elimination_invite",
+          payload: {
+            tournament_id: data?.id || "unknown",
+            tournament_name: name.trim(),
+            creator_name: currentUser?.full_name || currentUser?.email || "Someone",
+            round_time_limit_minutes: roundTimeMinutes,
+          },
+        }));
+
+        await supabase.from("notifications").insert(notifRows);
+      }
+
+      await onCreated?.();
+      onClose?.();
+    } catch (ex) {
+      setSubmitError(ex instanceof Error ? ex.message : "Failed to create tournament.");
+    } finally {
+      setSubmitting(false);
     }
-
-    // If you still want to emit client-side notifications here,
-    // keep your previous notifications insert, otherwise omit.
-
-    await onCreated?.();
-    onClose?.();
-  } catch (ex) {
-    setSubmitError(ex instanceof Error ? ex.message : "Failed to create tournament.");
-  } finally {
-    setSubmitting(false);
-  }
-};
-
+  };
 
   /* ---------- UI ---------- */
   return (
