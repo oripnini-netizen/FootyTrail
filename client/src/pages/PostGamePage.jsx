@@ -24,6 +24,8 @@ import {
 const REGULAR_START_POINTS = 6000;
 
 const AI_TIMEOUT_MS = 3500;
+// NEW: allow more time for the "fun fact" so server can return (or fall back)
+const AI_FACT_TIMEOUT_MS = 9000;
 
 // Abortable fetch with timeout for snappier UX
 function fetchWithTimeout(url, options = {}, ms = AI_TIMEOUT_MS) {
@@ -310,13 +312,18 @@ export default function PostGamePage() {
               },
               transferHistory: transfers,
             }),
-          });
+          }, AI_FACT_TIMEOUT_MS); // <-- LONGER TIMEOUT FOR FACT
+
           if (!cancelled && res.ok) {
             const data = await res.json();
             const fact = (data && typeof data.fact === 'string') ? data.fact.trim() : '';
             if (fact) setAiGeneratedFact(fact);
+            else setAiGeneratedFact(localBanterFact(player?.name));
           }
-        } catch {}
+        } catch {
+          // If aborted or failed, show a local playful fallback so user still sees a line
+          if (!cancelled) setAiGeneratedFact(localBanterFact(player?.name));
+        }
       })();
 
       // 2) Outro line (parallel): try getGamePrompt first (with timeout), then backend AI, else keep local line
@@ -853,6 +860,19 @@ function localOutroLine({ didWin, stats, player }) {
     if (hints >= 2) return `Even with hints, ${name} stayed elusive — tough one! 😵`;
     return `So close! ${name} was the answer — tomorrow’s your day 💪`;
   }
+}
+
+// Local playful fallback for the fact (shown if client times out or request fails)
+function localBanterFact(name = 'this player') {
+  const n = name || 'this player';
+  const lines = [
+    `Did you know that ${n} once nutmegged his own shadow? Allegedly.`,
+    `Did you know that ${n} is so underrated even the quizmaster Googles him twice?`,
+    `Did you know that ${n} flies so far under the radar, even scouts need a map?`,
+    `Did you know that ${n} has more mystery than Transfermarkt comments at 2am?`,
+    `Did you know that ${n}'s legend grows every time someone fails this round?`,
+  ];
+  return lines[Math.floor(Math.random() * lines.length)];
 }
 
 /** Prefer guessHistory length when present; fallback to guessesUsed; never negative */
