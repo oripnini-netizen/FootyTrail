@@ -23,6 +23,16 @@ import {
 
 const REGULAR_START_POINTS = 6000;
 
+const AI_TIMEOUT_MS = 3500;
+
+// Abortable fetch with timeout for snappier UX
+function fetchWithTimeout(url, options = {}, ms = AI_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), ms);
+  return fetch(url, { ...options, signal: controller.signal })
+    .finally(() => clearTimeout(id));
+}
+
 /* =========================
    UTC day boundary helpers
    ========================= */
@@ -260,61 +270,85 @@ export default function PostGamePage() {
       navigate('/game', { replace: true });
       return;
     }
+
+    // If we restored cached content, we're already fast
     if (restoredFromCacheRef.current && (aiGeneratedFact || outroLine)) {
       setPageReady(true);
       return;
     }
 
-    const fetchAll = async () => {
-      let fact = '';
-      let outro = '';
+    // Optimistic: show page immediately with a local outro line, then upgrade if AI returns
+    if (!pageReady) {
+      const baseLine = localOutroLine({ didWin: !!didWin, stats, player });
+      const nameForLine =
+        displayName ||
+        user?.full_name ||
+        user?.user_metadata?.full_name ||
+        (user?.email ? user.email.split('@')[0] : null) ||
+        'Player';
+      const personalized = personalizeUserNameInLine(baseLine, nameForLine);
+      setOutroLine(personalized);
+      setPageReady(true);
+    }
 
-      try {
-        const transfers = player.transfers || player.transferHistory || [];
-        const res = await fetch(`${API_BASE}/ai/generate-player-fact`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            player: {
-              name: player.name || player.player_name || 'Unknown Player',
-              nationality:
-                player.nationality || player.player_nationality || '',
-              position: player.position || player.player_position || '',
-              age: player.age || player.player_age || '',
-            },
-            transferHistory: transfers,
-          }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          fact =
-            data && typeof data.fact === 'string' ? data.fact.trim() : '';
-        }
-      } catch {}
+    let cancelled = false;
 
-      try {
-        let line = '';
+    (async () => {
+      // 1) Player fact (parallel)
+      (async () => {
         try {
-          if (typeof getGamePrompt === 'function') {
-            const promptRes = await getGamePrompt({
-              mode: 'postgame',
-              didWin: !!didWin,
-              stats: stats || {},
+          const transfers = player.transfers || player.transferHistory || [];
+          const res = await fetchWithTimeout(`${API_BASE}/ai/generate-player-fact`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
               player: {
-                name: player?.name,
-                position: player?.position,
-                nationality: player?.nationality,
+                name: player.name || player.player_name || 'Unknown Player',
+                nationality: player.nationality || player.player_nationality || '',
+                position: player.position || player.player_position || '',
+                age: player.age || player.player_age || '',
               },
-            });
-            if (promptRes && typeof promptRes.text === 'string') {
-              line = promptRes.text.trim();
-            }
+              transferHistory: transfers,
+            }),
+          });
+          if (!cancelled && res.ok) {
+            const data = await res.json();
+            const fact = (data && typeof data.fact === 'string') ? data.fact.trim() : '';
+            if (fact) setAiGeneratedFact(fact);
           }
         } catch {}
+      })();
 
+      // 2) Outro line (parallel): try getGamePrompt first (with timeout), then backend AI, else keep local line
+      try {
+        let line = '';
+
+        // Try app-level prompt helper with a timeout
+        if (typeof getGamePrompt === 'function') {
+          try {
+            const p = await Promise.race([
+              getGamePrompt({
+                mode: 'postgame',
+                didWin: !!didWin,
+                stats: stats || {},
+                player: {
+                  name: player?.name,
+                  position: player?.position,
+                  nationality: player?.nationality,
+                },
+              }),
+              new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), AI_TIMEOUT_MS)),
+            ]);
+            if (p && typeof p.text === 'string') {
+              line = p.text.trim();
+            }
+          } catch {}
+        }
+
+        // Fallback to backend AI route with timeout
         if (!line) {
           try {
-            const res2 = await fetch(`${API_BASE}/ai/game-outro`, {
+            const res2 = await fetchWithTimeout(`${API_BASE}/ai/game-outro`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -326,50 +360,38 @@ export default function PostGamePage() {
             });
             if (res2.ok) {
               const data = await res2.json();
-              line =
-                data && typeof data.line === 'string'
-                  ? data.line.trim()
-                  : '';
+              line = (data && typeof data.line === 'string') ? data.line.trim() : '';
             }
           } catch {}
         }
 
-        if (!line) {
-          line = localOutroLine({ didWin: !!didWin, stats, player });
+        if (!cancelled && line) {
+          const nameForLine =
+            displayName ||
+            user?.full_name ||
+            user?.user_metadata?.full_name ||
+            (user?.email ? user.email.split('@')[0] : null) ||
+            'Player';
+          const personalized = personalizeUserNameInLine(line, nameForLine);
+          setOutroLine(personalized);
         }
+      } catch {}
 
-        const nameForLine =
-          displayName ||
-          user?.full_name ||
-          user?.user_metadata?.full_name ||
-          (user?.email ? user.email.split('@')[0] : null) ||
-          'Player';
-        outro = personalizeUserNameInLine(line, nameForLine);
-      } catch {
-        const fallbackLine = localOutroLine({ didWin: !!didWin, stats, player });
-        const nameForLine =
-          displayName ||
-          user?.full_name ||
-          user?.user_metadata?.full_name ||
-          (user?.email ? user.email.split('@')[0] : null) ||
-          'Player';
-        outro = personalizeUserNameInLine(fallbackLine, nameForLine);
+      // Save cache promptly (even if partial)
+      if (!cancelled) {
+        savePostGameCache({
+          playerKey,
+          aiGeneratedFact,
+          outroLine,
+          gamesLeft,
+          scrollY: window.scrollY,
+        });
       }
+    })();
 
-      setAiGeneratedFact(fact);
-      setOutroLine(outro);
-      setPageReady(true);
-
-      savePostGameCache({
-        playerKey,
-        aiGeneratedFact: fact,
-        outroLine: outro,
-        gamesLeft,
-        scrollY: window.scrollY,
-      });
+    return () => {
+      cancelled = true;
     };
-
-    fetchAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playerKey, displayName]);
 
