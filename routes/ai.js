@@ -15,7 +15,7 @@ const pickModel = (kind = 'fast') => {
     return (
       process.env.OPENAI_MODEL_FAST ||           // preferred override
       process.env.OPENAI_RESPONSES_MODEL_FAST || // optional legacy override
-      'gpt-4o-mini'                              // safe, fast default
+      'gpt-5-nano'                               // fast default (fixed: no trailing tab)
     );
   }
   // quality/default fallback (kept for completeness)
@@ -23,7 +23,7 @@ const pickModel = (kind = 'fast') => {
     process.env.OPENAI_MODEL_QUALITY ||
     process.env.OPENAI_RESPONSES_MODEL ||
     process.env.OPENAI_MODEL ||
-    'gpt-4o-mini'
+    'gpt-5-nano'
   );
 };
 
@@ -425,20 +425,30 @@ Write the one-sentence outro now.`
     );
 
     const line = firstSentenceOnly(completion?.choices?.[0]?.message?.content?.trim() || '');
-    if (!line) return res.status(502).json({ error: 'LLM returned empty content' });
-    return res.json({ line });
-  } catch (err) {
-    if (err && err.message === 'openai-timeout') {
-      return res.json({
-        line: 'Solid round—quick thinking and sharp instincts. Ready for another shot at glory?',
+    if (!line) {
+      // benign fallback to avoid error spam
+      return res.status(200).json({
+        line: didWin
+          ? `${safeUserName}, class finish — crisp guesses under pressure.`
+          : `${safeUserName}, tough break — shake it off and go again.`,
       });
     }
+    return res.json({ line });
+  } catch (err) {
+    // ALWAYS return 200 with a safe line to avoid console 500 spam
+    const didWin = !!req?.body?.didWin;
+    const safeUserName =
+      (typeof req?.body?.username === 'string' && req.body.username.trim()) ? req.body.username.trim() : 'Player';
     const safe = {
       name: err?.name, status: err?.status, statusText: err?.statusText, code: err?.code,
       message: err?.message, details: err?.response?.data || err?.data || null,
     };
     console.error('[AI game-outro error]', safe);
-    return res.status(500).json({ error: 'Failed to generate outro' });
+    return res.status(200).json({
+      line: didWin
+        ? `${safeUserName}, class finish — crisp guesses under pressure.`
+        : `${safeUserName}, tough break — shake it off and go again.`,
+    });
   }
 });
 
