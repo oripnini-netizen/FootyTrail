@@ -1,7 +1,7 @@
 // src/pages/LiveGamePage.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { suggestNames, saveGameCompleted, fetchTransfers } from '../api';
+import { suggestNames, saveGameCompleted, fetchTransfers, API_BASE } from '../api';
 import {
   AlarmClock,
   Lightbulb,
@@ -162,7 +162,7 @@ export default function LiveGamePage() {
   // helper to call backend outro with username
   const generateOutro = async (won, pointsValue, guessesUsed, elapsedSec) => {
     try {
-      const resp = await fetch('/api/ai/game-outro', {
+      const resp = await fetch(`${API_BASE}/ai/game-outro`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
