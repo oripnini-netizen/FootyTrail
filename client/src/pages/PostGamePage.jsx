@@ -577,7 +577,7 @@ export default function PostGamePage() {
 
   // PROXY the external photo through our own domain to make it same-origin (capturable)
   const proxiedPhoto = photo
-    ? `/api/proxy-image?src=${encodeURIComponent(photo)}`
+    ? `${API_BASE}/proxy-image?src=${encodeURIComponent(photo)}`
     : null;
 
   // Compute guesses used (fix: prefer history length when present; never negative)
