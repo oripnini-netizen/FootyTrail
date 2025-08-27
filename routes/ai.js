@@ -274,7 +274,7 @@ async function getIso2FromNationality(nationality, modelForLookup = 'gpt-4o-mini
     const resp = await openai.responses.create({
       model: modelForLookup,
       temperature: 0,
-      tools: [{ type: 'web_search_preview' }],
+      tools: [{ type: 'web_search' }],
       instructions: 'Return ONLY the ISO 3166-1 alpha-2 code for the country name provided. No extra text.',
       input: `Country name: "${nationality}"`,
     });
@@ -329,7 +329,7 @@ Find a NEW and INTERESTING fact about ${name}.
 Return ONE sentence only, as instructed.`.trim();
 
     const tools = [
-      { type: 'web_search_preview', ...(countryCode ? { user_location: { type: 'approximate', country: countryCode } } : {}) },
+      { type: 'web_search', ...(countryCode ? { user_location: { type: 'approximate', country: countryCode } } : {}) },
     ];
 
     const response = await withTimeout(
