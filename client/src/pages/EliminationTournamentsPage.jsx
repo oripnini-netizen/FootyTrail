@@ -310,7 +310,7 @@ export default function EliminationTournamentsPage() {
           <p className="mt-2 text-sm text-gray-700">
             Create and follow elimination challenges with friends. Each round
             uses the same mystery player for everyone. Lowest score(s) are
-            eliminated until a single winner remains. Creators can now choose how often eliminations occur (every 1–5 rounds).
+            eliminated until a single winner remains.
           </p>
 
           {/* Notifications banner */}
