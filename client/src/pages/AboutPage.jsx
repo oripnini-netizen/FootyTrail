@@ -1,6 +1,6 @@
 // client/src/pages/AboutPage.jsx
 import React from 'react';
-import { Trophy, Clock, Filter, Target, Users, Shield, Award, Lightbulb } from 'lucide-react';
+import { Trophy, Clock, Filter, Target, Users, Shield, Award, Lightbulb, Axe } from 'lucide-react';
 
 export default function AboutPage() {
   return (
@@ -41,6 +41,15 @@ export default function AboutPage() {
             </div>
             <h3 className="font-semibold text-lg text-green-800 mb-2">Private Leagues</h3>
             <p className="text-gray-600">Challenge friends; daily totals decide matchday wins.</p>
+          </div>
+
+          {/* NEW: Elimination Challenges card */}
+          <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-5 flex flex-col items-center text-center">
+            <div className="h-16 w-16 rounded-full bg-green-100 flex items-center justify-center mb-3">
+              <Axe className="h-8 w-8 text-green-600" />
+            </div>
+            <h3 className="font-semibold text-lg text-green-800 mb-2">Elimination Challenges</h3>
+            <p className="text-gray-600">Survive round by round with friends—lowest totals get knocked out on elimination rounds.</p>
           </div>
 
           <div className="bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-5 flex flex-col items-center text-center">
@@ -90,6 +99,10 @@ export default function AboutPage() {
                 <em> minimum market value</em> filter.
               </li>
               <li><strong>Rules:</strong> 3 minutes & 3 guesses per player in all modes.</li>
+              {/* NEW: Elimination Challenges mode reference */}
+              <li>
+                <strong>Elimination Challenges:</strong> Create survival-style tournaments with friends. Scores accumulate across rounds and the lowest totals are eliminated on designated elimination rounds.
+              </li>
             </ul>
           </div>
           
@@ -225,6 +238,60 @@ export default function AboutPage() {
               <li>League play is independent of global rankings.</li>
               <li>Fixtures are generated automatically for the whole schedule.</li>
             </ul>
+          </div>
+        </section>
+
+        {/* NEW: Contact Us */}
+        <section className="mb-8 bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-6">
+          <h2 className="text-2xl font-semibold text-green-800 mb-3">Contact & Support</h2>
+          <p className="text-gray-700">
+            Found a bug, want to request additional leagues, have feedback, or ran into any other issue?
+            Drop us a line at{' '}
+            <a href="mailto:footy.trail.app@gmail.com" className="text-green-700 underline">
+              footy.trail.app@gmail.com
+            </a>.
+          </p>
+        </section>
+
+        {/* NEW: Site Policy & Legal */}
+        <section className="mb-8 bg-white rounded-xl shadow-md transition-all hover:shadow-lg p-6">
+          <h2 className="text-2xl font-semibold text-green-800 mb-3">Site Policy & Legal</h2>
+          <div className="space-y-3 text-gray-700">
+            <p>
+              <strong>Unofficial Fan Project:</strong> FootyTrail is a fan-made game and is not affiliated with, endorsed by,
+              or sponsored by any football league, club, player, or governing body. Logos, names, and other marks may be
+              the property of their respective owners and are used for identification purposes only.
+            </p>
+            <p>
+              <strong>Data Accuracy:</strong> We strive to keep all information up to date, but we can’t guarantee accuracy,
+              completeness, or availability at all times. The app is provided on an “as is” and “as available” basis, without
+              warranties of any kind.
+            </p>
+            <p>
+              <strong>Fair Use & Takedowns:</strong> If you believe any content infringes your rights, please contact us at{' '}
+              <a href="mailto:footy.trail.app@gmail.com" className="text-green-700 underline">
+                footy.trail.app@gmail.com
+              </a>{' '}
+              with details, and we’ll review and address it promptly.
+            </p>
+            <p>
+              <strong>Privacy:</strong> We collect only the information necessary to operate the game (e.g., account and gameplay
+              data). We don’t sell personal information. For any privacy questions or data deletion requests, email{' '}
+              <a href="mailto:footy.trail.app@gmail.com" className="text-green-700 underline">
+                footy.trail.app@gmail.com
+              </a>.
+            </p>
+            <p>
+              <strong>No Gambling:</strong> FootyTrail is for entertainment purposes only and does not support wagering or betting.
+            </p>
+            <p>
+              <strong>Age Requirement:</strong> By using FootyTrail, you confirm that you are at least 13 years old (or the age of
+              digital consent in your jurisdiction).
+            </p>
+            <p>
+              <strong>Limitation of Liability:</strong> To the fullest extent permitted by law, FootyTrail and its creators are not
+              liable for any indirect, incidental, special, consequential, or punitive damages arising from your use of the app.
+            </p>
           </div>
         </section>
       </div>
