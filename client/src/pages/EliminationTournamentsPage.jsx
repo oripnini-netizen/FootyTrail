@@ -603,7 +603,7 @@ function WinnerCelebrationCard({ tournamentName, winner, stats, ranking }) {
               <div className="text-xs text-gray-500">Time Played</div>
               <div className="text-lg font-semibold text-gray-900">{stats.timePlayed}</div>
             </div>
-            <div className="rounded-lg bg-white border p-3">
+            <div className="rounded-lg bg.white border p-3">
               <div className="text-xs text-gray-500">Participants</div>
               <div className="text-lg font-semibold text-gray-900">{stats.participants}</div>
             </div>
@@ -1421,29 +1421,72 @@ function TournamentCard({
                     ? entryByUser.has(userId)
                     : false;
 
-                const playedPoints = entriesFromActive.map((e) =>
-                  Number(e.points_earned ?? 0)
+                // ---------- NEW: accumulated points from previous rounds in the current block ----------
+                // Helper to decide if a round is an elimination round
+                const isElimRoundCheck = (roundObj) =>
+                  typeof roundObj?.is_elimination === "boolean"
+                    ? roundObj.is_elimination
+                    : ((Number(roundObj?.round_number) || 0) % roundsToElim === 0);
+
+                // All rounds strictly before the current one
+                const earlierRounds = rounds.filter(
+                  (rr) => (rr.round_number || 0) < (r.round_number || 0)
                 );
+
+                // Find the most recent elimination round BEFORE this one
+                const lastElimBefore = [...earlierRounds]
+                  .reverse()
+                  .find((rr) => isElimRoundCheck(rr));
+
+                const blockStartNumber = lastElimBefore
+                  ? (lastElimBefore.round_number || 0) + 1
+                  : 1;
+
+                // The previous rounds in the CURRENT block (do NOT include current round)
+                const prevBlockRounds = earlierRounds.filter(
+                  (rr) =>
+                    (rr.round_number || 0) >= blockStartNumber &&
+                    (rr.round_number || 0) < (r.round_number || 0)
+                );
+
+                // Build a quick lookup map from round_id -> Map<user_id, points>
+                const pointsByRound = new Map();
+                for (const pr of prevBlockRounds) {
+                  const ents = entriesByRound[pr.id] || [];
+                  const m = new Map();
+                  for (const e of ents) {
+                    m.set(e.user_id, Number(e.points_earned ?? 0));
+                  }
+                  pointsByRound.set(pr.id, m);
+                }
+
+                // For every active user in THIS round, sum points across prevBlockRounds.
+                const cumRows = [];
+                for (const uid of activeIdsForRound) {
+                  let sum = 0;
+                  for (const pr of prevBlockRounds) {
+                    const m = pointsByRound.get(pr.id);
+                    const v = m ? m.get(uid) ?? 0 : 0;
+                    sum += v;
+                  }
+                  const u = participants.find((p) => p.id === uid);
+                  if (u) cumRows.push({ user: u, points: sum });
+                }
+
+                // Determine coloring (max/min within these cumulative values)
+                const playedPoints = cumRows.map((row) => Number(row.points ?? 0));
                 const hasAnyPlayed = playedPoints.length > 0;
                 const maxPts = hasAnyPlayed ? Math.max(...playedPoints) : null;
                 const minPts = hasAnyPlayed ? Math.min(...playedPoints) : null;
                 const singleValueOnly = hasAnyPlayed && maxPts === minPts;
 
-                const unifiedRows = participants
-                  .filter((p) => activeIdsForRound.has(p.id))
-                  .map((p) => {
-                    const e = entryByUser.get(p.id) || null;
-                    const points =
-                      e && typeof e.points_earned === "number" ? e.points_earned : null;
-                    return { user: p, points };
-                  });
-
-                unifiedRows.sort((a, b) => {
-                  if (a.points === null && b.points === null) return 0;
-                  if (a.points === null) return 1;
-                  if (b.points === null) return -1;
-                  return b.points - a.points;
+                // Sort descending by cumulative points (0s will group together)
+                const unifiedRows = [...cumRows].sort((a, b) => {
+                  const ap = Number.isFinite(a.points) ? Number(a.points) : -Infinity;
+                  const bp = Number.isFinite(b.points) ? Number(b.points) : -Infinity;
+                  return bp - ap;
                 });
+                // ---------- END NEW ACCUMULATION LOGIC ----------
 
                 // is this an elimination round? (prefer DB flag; fallback to modulo)
                 const isElimRound =
@@ -1553,7 +1596,7 @@ function TournamentCard({
                                   {u.full_name || u.email}
                                 </span>
                                 <span className={scoreClass}>
-                                  {points === null ? "—" : `${points} pts`}
+                                  {Number.isFinite(points) ? `${points} pts` : "0 pts"}
                                 </span>
                               </li>
                             );
