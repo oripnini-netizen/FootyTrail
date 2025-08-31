@@ -615,11 +615,10 @@ function WinnerStarAvatar({ src, alt }) {
   );
 }
 
-function WinnerCelebrationCard({ tournamentName, winner, stats, ranking }) {
+function WinnerCelebrationCard({ tournamentName, winner, stats, ranking, potPoints }) {
   return (
     <div className="relative overflow-hidden rounded-xl border bg-gradient-to-b from-amber-50 to-white p-4 md:p-5 shadow-sm">
       <ConfettiRain />
-
       <div className="flex flex-col md:flex-row md:items-center gap-4 md:gap-6">
         <div className="flex items-center justify-center md:justify-start">
           <WinnerStarAvatar
@@ -627,16 +626,14 @@ function WinnerCelebrationCard({ tournamentName, winner, stats, ranking }) {
             alt={winner?.full_name || winner?.email || "Winner"}
           />
         </div>
-
         <div className="flex-1">
           <div className="text-2xl font-extrabold text-green-800 flex items-center gap-2">
             🏆 Congratulations, {winner?.full_name || winner?.email || "Champion"}!
           </div>
           <p className="mt-1 text-sm text-gray-700">
-            You conquered <span className="font-semibold">{tournamentName}</span> and outlasted everyone. Glory secured!
+            You conquered <span className="font-semibold">{tournamentName}</span> and outlasted everyone.
+            You won <span className="font-semibold">{potPoints}</span> pts from the pot.
           </p>
-
-          {/* Stats */}
           <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
             <div className="rounded-lg bg-white border p-3">
               <div className="text-xs text-gray-500">Rounds</div>
@@ -654,7 +651,6 @@ function WinnerCelebrationCard({ tournamentName, winner, stats, ranking }) {
         </div>
       </div>
 
-      {/* Ranking of other users */}
       <div className="mt-5">
         <div className="text-sm font-semibold text-gray-700 mb-2">Final Standings</div>
         {ranking.length === 0 ? (
@@ -688,15 +684,11 @@ function WinnerCelebrationCard({ tournamentName, winner, stats, ranking }) {
   );
 }
 
-/* ------------------------------------------------------------
-   NEW: Loser Final Card (shown to non-winners)
------------------------------------------------------------- */
-function LoserFinalCard({ tournamentName, winner, stats, ranking }) {
+function LoserFinalCard({ tournamentName, winner, stats, ranking, stakePoints }) {
   return (
     <div className="relative overflow-hidden rounded-xl border bg-gradient-to-b from-red-50 to-white p-4 md:p-5 shadow-sm">
       <div className="flex flex-col md:flex-row md:items-center gap-4 md:gap-6">
         <div className="flex items-center justify-center md:justify-start">
-          {/* Winner avatar in a simple ring (no star, no confetti) */}
           <img
             src={winner?.profile_photo_url || ""}
             alt={winner?.full_name || winner?.email || "Winner"}
@@ -709,17 +701,15 @@ function LoserFinalCard({ tournamentName, winner, stats, ranking }) {
 
         <div className="flex-1">
           <div className="text-2xl font-extrabold text-red-700 flex items-center gap-2">
-            ❌ You lost {tournamentName}.
+            ❌ You lost {tournamentName}. You lost <span className="font-semibold">{stakePoints}</span> pts.
           </div>
           <p className="mt-1 text-sm text-gray-700">
-            Shamefully defeated—bow before{" "}
+            The victor is{" "}
             <span className="font-semibold">
-              {winner?.full_name || winner?.email || "the victor"}
-            </span>
-            . Train harder and return stronger.
+              {winner?.full_name || winner?.email || "the winner"}
+            </span>. Better luck next time.
           </p>
 
-        {/* Stats */}
           <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
             <div className="rounded-lg bg-white border p-3">
               <div className="text-xs text-gray-500">Rounds</div>
@@ -737,7 +727,6 @@ function LoserFinalCard({ tournamentName, winner, stats, ranking }) {
         </div>
       </div>
 
-      {/* Full standings (same list) */}
       <div className="mt-5">
         <div className="text-sm font-semibold text-gray-700 mb-2">Final Standings</div>
         {ranking.length === 0 ? (
@@ -1447,24 +1436,26 @@ const handleStartNow = async () => {
         <>
           {/* ===== Winner / Loser Final Card (finished only) ===== */}
           {!isLive && celebrationData?.winner && (
-            <div className="mt-4">
-              {userId && celebrationData.winner?.id === userId ? (
-                <WinnerCelebrationCard
-                  tournamentName={tournament.name}
-                  winner={celebrationData.winner}
-                  stats={celebrationData.stats}
-                  ranking={celebrationData.ranking}
-                />
-              ) : (
-                <LoserFinalCard
-                  tournamentName={tournament.name}
-                  winner={celebrationData.winner}
-                  stats={celebrationData.stats}
-                  ranking={celebrationData.ranking}
-                />
-              )}
-            </div>
-          )}
+  <div className="mt-4">
+    {userId && celebrationData.winner?.id === userId ? (
+      <WinnerCelebrationCard
+        tournamentName={tournament.name}
+        winner={celebrationData.winner}
+        stats={celebrationData.stats}
+        ranking={celebrationData.ranking}
+        potPoints={Number(tournament.stake_points || 0) * acceptedCount}
+      />
+    ) : (
+      <LoserFinalCard
+        tournamentName={tournament.name}
+        winner={celebrationData.winner}
+        stats={celebrationData.stats}
+        ranking={celebrationData.ranking}
+        stakePoints={Number(tournament.stake_points || 0)}
+      />
+    )}
+  </div>
+)}
           {/* ===== END ===== */}
 
           {/* Difficulty Filters as grouped chips */}
@@ -1661,6 +1652,8 @@ const handleStartNow = async () => {
                     ? entryByUser.has(userId)
                     : false;
 
+                // -------- ACCUMULATION & RESET FIX (begin) --------
+                // Identify the last elimination round BEFORE this one.
                 const isElimRoundCheck = (roundObj) =>
                   typeof roundObj?.is_elimination === "boolean"
                     ? roundObj.is_elimination
@@ -1674,18 +1667,25 @@ const handleStartNow = async () => {
                   .reverse()
                   .find((rr) => isElimRoundCheck(rr));
 
+                // A block starts at round 1 or immediately after the last elimination
                 const blockStartNumber = lastElimBefore
                   ? (lastElimBefore.round_number || 0) + 1
                   : 1;
 
+                // All previous rounds in the block
                 const prevBlockRounds = earlierRounds.filter(
                   (rr) =>
                     (rr.round_number || 0) >= blockStartNumber &&
                     (rr.round_number || 0) < (r.round_number || 0)
                 );
 
+                // If the current round is still active, don't include it yet.
+                // If it's finished (derivedActive === false), include the current round too.
+                const blockRoundsToSum = [...prevBlockRounds, ...(!derivedActive ? [r] : [])];
+
+                // Build a per-round map of user -> points for rounds in the block
                 const pointsByRound = new Map();
-                for (const pr of prevBlockRounds) {
+                for (const pr of blockRoundsToSum) {
                   const ents = entriesByRound[pr.id] || [];
                   const m = new Map();
                   for (const e of ents) {
@@ -1694,10 +1694,11 @@ const handleStartNow = async () => {
                   pointsByRound.set(pr.id, m);
                 }
 
+                // For each ACTIVE user in this round, sum their points across the block
                 const cumRows = [];
                 for (const uid of activeIdsForRound) {
                   let sum = 0;
-                  for (const pr of prevBlockRounds) {
+                  for (const pr of blockRoundsToSum) {
                     const m = pointsByRound.get(pr.id);
                     const v = m ? m.get(uid) ?? 0 : 0;
                     sum += v;
@@ -1706,17 +1707,20 @@ const handleStartNow = async () => {
                   if (u) cumRows.push({ user: u, points: sum });
                 }
 
+                // Highlight logic
                 const playedPoints = cumRows.map((row) => Number(row.points ?? 0));
                 const hasAnyPlayed = playedPoints.length > 0;
                 const maxPts = hasAnyPlayed ? Math.max(...playedPoints) : null;
                 const minPts = hasAnyPlayed ? Math.min(...playedPoints) : null;
                 const singleValueOnly = hasAnyPlayed && maxPts === minPts;
 
+                // Sort display by points desc
                 const unifiedRows = [...cumRows].sort((a, b) => {
                   const ap = Number.isFinite(a.points) ? Number(a.points) : -Infinity;
                   const bp = Number.isFinite(b.points) ? Number(b.points) : -Infinity;
                   return bp - ap;
                 });
+                // -------- ACCUMULATION & RESET FIX (end) --------
 
                 const isElimRound =
                   typeof r.is_elimination === "boolean"
