@@ -153,8 +153,8 @@ export default function EliminationTournamentsPage() {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
         .select(
-          // ADDED: stake_points, min_participants, join_deadline, created_by, rounds_to_elimination
-          "id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, created_by"
+          // ADDED: stake_points, min_participants, join_deadline, owner_id, rounds_to_elimination
+          "id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id"
         )
         .eq("status", "live")
         .order("created_at", { ascending: false });
@@ -178,7 +178,7 @@ export default function EliminationTournamentsPage() {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
         .select(
-          "id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, created_by"
+          "id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id"
         )
         .eq("status", "finished")
         .order("created_at", { ascending: false });
@@ -1293,7 +1293,7 @@ function TournamentCard({
     }
   };
 
-  const isCreator = userId && tournament.created_by === userId;
+  const isCreator = userId && tournament.owner_id === userId;
   const joinDeadline = tournament.join_deadline || null;
   const canStartNow = isCreator && acceptedCount >= Math.max(2, Number(tournament.min_participants || 2));
 
