@@ -75,7 +75,7 @@ export default function LeaderboardPage() {
           setDailyChampions([]);
         }
 
-        // Leaderboard (EXCLUDING elimination games)
+        // Leaderboard (BASE: EXCLUDING elimination games; PLUS: points_transactions)
         const now = new Date();
         const start = PERIOD_TO_START(now, tab);
         const startIso = start ? start.toISOString() : null;
@@ -86,6 +86,7 @@ export default function LeaderboardPage() {
 
         const rows = [];
         for (const u of (users || [])) {
+          // base points from non-elimination games_records (keep your original leaderboard logic)
           let q = supabase.from('games_records')
             .select('won, points_earned, time_taken_seconds, created_at')
             .eq('user_id', u.id)
@@ -94,23 +95,38 @@ export default function LeaderboardPage() {
           if (startIso) q = q.gte('created_at', startIso);
 
           const { data: games } = await q;
-          if (!games || games.length === 0) continue;
+          if (!games || games.length === 0) {
+            // even if no base games in window, we might still have transactions (stakes/pots). Check them too.
+          }
 
-          const points = games.reduce((s, g) => s + (g.points_earned || 0), 0);
-          const gamesCount = games.length;
-          const wins = games.filter(g => g.won).length;
-          const totalTime = games.reduce((s, g) => s + (g.time_taken_seconds || 0), 0);
+          const basePoints = (games || []).reduce((s, g) => s + (g.points_earned || 0), 0);
+          const gamesCount = (games || []).length;
+          const wins = (games || []).filter(g => g.won).length;
+          const totalTime = (games || []).reduce((s, g) => s + (g.time_taken_seconds || 0), 0);
+
+          // NEW: add points from points_transactions (stakes/pots, bonuses, etc.)
+          // We treat points_transactions as net credits/debits to user's balance and include them in totals.
+          let tQuery = supabase
+            .from('points_transactions')
+            .select('amount, created_at')
+            .eq('user_id', u.id);
+          if (startIso) tQuery = tQuery.gte('created_at', startIso);
+          const { data: txs } = await tQuery;
+
+          const txPoints = (txs || []).reduce((s, t) => s + Number(t.amount || 0), 0);
+
+          const totalPoints = basePoints + txPoints;
 
           rows.push({
             userId: u.id,
             name: u.full_name || 'Unknown Player',
             profilePhoto: u.profile_photo_url || '',
             memberSince: u.created_at ? new Date(u.created_at).toLocaleDateString() : '—',
-            points,
+            points: totalPoints,
             gamesCount,
             avgTime: gamesCount ? Math.round(totalTime / gamesCount) : 0,
             successRate: gamesCount ? Math.round((wins / gamesCount) * 100) : 0,
-            avgPoints: gamesCount ? Math.round(points / gamesCount) : 0
+            avgPoints: gamesCount ? Math.round(totalPoints / gamesCount) : totalPoints // avoid div-by-zero
           });
         }
 
@@ -145,7 +161,7 @@ export default function LeaderboardPage() {
 
       setUserGames(games || []);
 
-      // ALL games for stats — EXCLUDE elimination games
+      // ALL games for stats — EXCLUDE elimination games for the base portion (as before)
       const { data: allGames } = await supabase
         .from('games_records')
         .select('won, points_earned, time_taken_seconds')
@@ -153,12 +169,20 @@ export default function LeaderboardPage() {
         .eq('is_elimination_game', false);
 
       const total = allGames?.length || 0;
-      const pts = (allGames || []).reduce((s, g) => s + (g.points_earned || 0), 0);
+      const basePts = (allGames || []).reduce((s, g) => s + (g.points_earned || 0), 0);
       const wins = (allGames || []).filter(g => g.won).length;
       const time = (allGames || []).reduce((s, g) => s + (g.time_taken_seconds || 0), 0);
 
+      // NEW: add lifetime net from points_transactions
+      const { data: txs } = await supabase
+        .from('points_transactions')
+        .select('amount')
+        .eq('user_id', player.userId);
+
+      const txPts = (txs || []).reduce((s, t) => s + Number(t.amount || 0), 0);
+
       setUserStats({
-        totalPoints: pts,
+        totalPoints: basePts + txPts,
         games: total,
         avgTime: total ? Math.round(time / total) : 0,
         successRate: total ? Math.round((wins / total) * 100) : 0
@@ -377,7 +401,7 @@ export default function LeaderboardPage() {
               </button>
             </div>
 
-            {/* Stats are ALL-TIME, EXCLUDING elimination games */}
+            {/* Stats are ALL-TIME, EXCLUDING elimination games for base points + PLUS transactions */}
             <div className="grid grid-cols-2 gap-3 p-4 md:grid-cols-4">
               <div className="rounded border p-3 text-center">
                 <div className="text-xs text-gray-500">Total Points</div>
