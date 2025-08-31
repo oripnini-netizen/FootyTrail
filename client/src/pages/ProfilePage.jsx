@@ -199,7 +199,7 @@ export default function ProfilePage() {
     }
   }, [user]);
 
-  // Fetch recent games (20) + ALL games (for stats)
+  // Fetch recent games (20) + ALL games (for stats) + NEW: include points_transactions in totals
   useEffect(() => {
     const fetchGames = async () => {
       if (!user?.id) return;
@@ -224,12 +224,20 @@ export default function ProfilePage() {
 
         const totalGames = allGames?.length || 0;
         const wonGames = (allGames || []).filter(g => g.won).length;
-        const totalPoints = (allGames || []).reduce((sum, g) => sum + (g.points_earned || 0), 0);
+        const basePoints = (allGames || []).reduce((sum, g) => sum + (g.points_earned || 0), 0);
         const totalTime = (allGames || []).reduce((sum, g) => sum + (g.time_taken_seconds || 0), 0);
+
+        // NEW: combine with points_transactions (lifetime net)
+        const { data: txs } = await supabase
+          .from('points_transactions')
+          .select('amount')
+          .eq('user_id', user.id);
+
+        const txPoints = (txs || []).reduce((s, t) => s + Number(t.amount || 0), 0);
 
         setLocalStats({
           games_played: totalGames,
-          total_points: totalPoints,
+          total_points: basePoints + txPoints,
           avg_time: totalGames > 0 ? Math.round(totalTime / totalGames) : 0,
           success_rate: totalGames > 0 ? Math.round((wonGames / totalGames) * 100) : 0
         });
