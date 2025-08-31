@@ -149,7 +149,8 @@ export default function EliminationTournamentsPage() {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
         .select(
-          "id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id"
+          // ADDED rounds_to_elimination
+          "id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination"
         )
         .eq("status", "live")
         .order("created_at", { ascending: false });
@@ -173,7 +174,8 @@ export default function EliminationTournamentsPage() {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
         .select(
-          "id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id"
+          // ADDED rounds_to_elimination
+          "id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination"
         )
         .eq("status", "finished")
         .order("created_at", { ascending: false });
@@ -299,7 +301,7 @@ export default function EliminationTournamentsPage() {
           <p className="mt-2 text-sm text-gray-700">
             Create and follow elimination challenges with friends. Each round
             uses the same mystery player for everyone. Lowest score(s) are
-            eliminated until a single winner remains.
+            eliminated until a single winner remains. Creators can now choose how often eliminations occur (every 1–5 rounds).
           </p>
 
           {/* Notifications banner (NEW) */}
@@ -440,10 +442,12 @@ function Countdown({ endsAt }) {
     const now = Date.now();
     const ms = Math.max(0, end - now);
     const s = Math.floor(ms / 1000);
-    const h = String(Math.floor(s / 3600)).padStart(2, "0");
-    const m = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
-    const ss = String(s % 60).padStart(2, "0");
-    return `${h}:${m}:${ss}`;
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const ss = s % 60;
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m ${ss}s`;
+    return `${ss}s`;
   }
 
   // Requested: countdown in red
@@ -745,8 +749,11 @@ function TournamentCard({
     (tournament.round_time_limit_seconds || 0) / 60
   );
 
+  // NEW: rounds-to-elimination (default 1 if missing)
+  const roundsToElim = Math.max(1, Number(tournament.rounds_to_elimination || 1));
+
   const [participants, setParticipants] = useState([]); // [{id, full_name, email, profile_photo_url, state}]
-  const [rounds, setRounds] = useState([]); // [{id, round_number, started_at, ends_at, closed_at, player_id}]
+  const [rounds, setRounds] = useState([]); // [{id, round_number, started_at, ends_at, closed_at, player_id, is_elimination?}]
   const [entriesByRound, setEntriesByRound] = useState({}); // { round_id : [{user_id, points_earned}] }
 
   // NEW: card-level collapse (default uses incoming prop)
@@ -780,10 +787,10 @@ function TournamentCard({
           userRows = usersRows || [];
         }
 
-        // rounds
+        // rounds (ADDED: is_elimination)
         const { data: roundRows } = await supabase
           .from("elimination_rounds")
-          .select("id, round_number, started_at, ends_at, closed_at, player_id")
+          .select("id, round_number, started_at, ends_at, closed_at, player_id, is_elimination")
           .eq("tournament_id", tournament.id)
           .order("round_number", { ascending: true });
 
@@ -871,63 +878,78 @@ function TournamentCard({
   const iAmEliminated =
     ((participantsMap.get(userId)?.state || "").toLowerCase() === "eliminated");
 
-  // ***** Per-round active users (already implemented) *****
+  /* ------------------------------------------------------------
+     UPDATED: Per-round active users using block sums and elimination rounds
+     - Only eliminate at elimination rounds (r.is_elimination true OR r.round_number % roundsToElim === 0)
+     - Sum points across the block (since last elimination), including the elimination round itself.
+  ------------------------------------------------------------ */
   const activeUsersByRound = useMemo(() => {
     const result = new Map();
     if (!Array.isArray(rounds) || rounds.length === 0) return result;
     if (!Array.isArray(participants) || participants.length === 0) return result;
 
     let activeSet = new Set(participants.map((p) => p.id));
+    let blockPoints = new Map([...activeSet].map((uid) => [uid, 0]));
+
     const ordered = [...rounds].sort((a, b) => (a.round_number || 0) - (b.round_number || 0));
+
     for (const r of ordered) {
+      // before processing the round, record current active set for this round id
       result.set(r.id, new Set(activeSet));
 
+      // only process logic when round is closed
       const isClosed =
         !!r.closed_at ||
         (r.ends_at ? new Date(r.ends_at).getTime() <= Date.now() : false);
-
       if (!isClosed) continue;
 
       const entries = entriesByRound[r.id] || [];
       const ptsByUser = new Map(entries.map((e) => [e.user_id, Number(e.points_earned ?? 0)]));
 
-      const played = [];
-      const notPlayed = [];
+      // accumulate this round's points into current block sums
       for (const uid of activeSet) {
-        if (ptsByUser.has(uid)) played.push(uid);
-        else notPlayed.push(uid);
+        const prev = blockPoints.get(uid) ?? 0;
+        const add = ptsByUser.get(uid) ?? 0;
+        blockPoints.set(uid, prev + add);
       }
 
-      const eliminated = new Set();
-      for (const uid of notPlayed) eliminated.add(uid);
+      // decide if this is an elimination round
+      const isElimRound =
+        typeof r.is_elimination === "boolean"
+          ? r.is_elimination
+          : ((Number(r.round_number) || 0) % roundsToElim === 0);
 
-            if (played.length > 0) {
-        let minPts = Infinity;
-        let maxPts = -Infinity;
-        for (const uid of played) {
-          const v = Number(ptsByUser.get(uid));
-          if (v < minPts) minPts = v;
-          if (v > maxPts) maxPts = v;
-        }
-        const allTied = Number.isFinite(minPts) && minPts === maxPts;
-        if (!allTied && maxPts > minPts) {
-          // eliminate strictly-min scorers only if someone scored higher
-          for (const uid of played) {
-            if (Number(ptsByUser.get(uid)) === minPts) {
-              eliminated.add(uid);
-            }
-          }
-        }
-        // else: all tied → eliminate nobody
+      if (!isElimRound) continue;
+
+      // evaluate elimination by block sums
+      let minSum = Infinity;
+      let maxSum = -Infinity;
+      for (const uid of activeSet) {
+        const v = blockPoints.get(uid) ?? 0;
+        if (v < minSum) minSum = v;
+        if (v > maxSum) maxSum = v;
       }
 
-      for (const uid of eliminated) activeSet.delete(uid);
+      const allTied = Number.isFinite(minSum) && minSum === maxSum;
+      if (!allTied && maxSum > minSum) {
+        // eliminate all strictly minimum scorers
+        for (const uid of Array.from(activeSet)) {
+          const v = blockPoints.get(uid) ?? 0;
+          if (v === minSum) activeSet.delete(uid);
+        }
+      }
+
+      // reset block points for remaining active users
+      blockPoints = new Map([...activeSet].map((uid) => [uid, 0]));
     }
 
     return result;
-  }, [rounds, participants, entriesByRound]);
+  }, [rounds, participants, entriesByRound, roundsToElim]);
 
-  // ***** Winner + standings + stats for finished tournaments *****
+  /* ------------------------------------------------------------
+     UPDATED: Winner + standings + stats for finished tournaments
+     Uses the same block-sum elimination logic as above.
+  ------------------------------------------------------------ */
   const celebrationData = useMemo(() => {
     if (tournament.status !== "finished") return null;
     if (!rounds?.length || !participants?.length) return null;
@@ -937,7 +959,9 @@ function TournamentCard({
       null;
 
     let activeSet = new Set(participants.map((p) => p.id));
+    let blockPoints = new Map([...activeSet].map((uid) => [uid, 0]));
     const eliminatedRecords = [];
+
     const ordered = [...rounds].sort(
       (a, b) => (a.round_number || 0) - (b.round_number || 0)
     );
@@ -951,44 +975,50 @@ function TournamentCard({
       const entries = entriesByRound[r.id] || [];
       const ptsByUser = new Map(entries.map((e) => [e.user_id, Number(e.points_earned ?? 0)]));
 
-      const played = [];
-      const notPlayed = [];
+      // accumulate this round into blockPoints
       for (const uid of activeSet) {
-        if (ptsByUser.has(uid)) played.push(uid);
-        else notPlayed.push(uid);
+        const prev = blockPoints.get(uid) ?? 0;
+        const add = ptsByUser.get(uid) ?? 0;
+        blockPoints.set(uid, prev + add);
       }
 
-      const eliminated = new Set();
-      for (const uid of notPlayed) {
-        eliminated.add(uid);
-        eliminatedRecords.push({
-          userId: uid,
-          eliminatedAtRound: r.round_number,
-          lastPoints: null,
+      const isElimRound =
+        typeof r.is_elimination === "boolean"
+          ? r.is_elimination
+          : ((Number(r.round_number) || 0) % roundsToElim === 0);
+
+      if (!isElimRound) continue;
+
+      // evaluate block sums for elimination at this round
+      let minSum = Infinity;
+      let maxSum = -Infinity;
+      for (const uid of activeSet) {
+        const v = blockPoints.get(uid) ?? 0;
+        if (v < minSum) minSum = v;
+        if (v > maxSum) maxSum = v;
+      }
+
+      const allTied = Number.isFinite(minSum) && minSum === maxSum;
+      if (!allTied && maxSum > minSum) {
+        const eliminatedNow = [];
+        for (const uid of Array.from(activeSet)) {
+          const v = blockPoints.get(uid) ?? 0;
+          if (v === minSum) {
+            eliminatedNow.push(uid);
+          }
+        }
+        eliminatedNow.forEach((uid) => {
+          activeSet.delete(uid);
+          eliminatedRecords.push({
+            userId: uid,
+            eliminatedAtRound: r.round_number,
+            lastPoints: blockPoints.get(uid) ?? 0, // cumulative for block
+          });
         });
       }
 
-      if (played.length > 0) {
-        let minPts = Infinity;
-        let maxPts = -Infinity;
-        for (const uid of played) {
-          const v = Number(ptsByUser.get(uid));
-          if (v < minPts) minPts = v;
-          if (v > maxPts) maxPts = v;
-        }
-        const allTied = Number.isFinite(minPts) && minPts === maxPts;
-        if (!allTied && maxPts > minPts) {
-          // eliminate strictly-min scorers only if someone scored higher
-          for (const uid of played) {
-            if (Number(ptsByUser.get(uid)) === minPts) {
-              eliminated.add(uid);
-            }
-          }
-        }
-        // else: all tied → eliminate nobody
-      }
-
-      for (const uid of eliminated) activeSet.delete(uid);
+      // reset for next block (remaining actives)
+      blockPoints = new Map([...activeSet].map((uid) => [uid, 0]));
     }
 
     let computedWinner = winner;
@@ -1049,6 +1079,7 @@ function TournamentCard({
     participantsMap,
     rounds,
     entriesByRound,
+    roundsToElim,
   ]);
 
   // Play handler — sends a FLATTENED player payload
@@ -1091,97 +1122,95 @@ function TournamentCard({
   };
 
   // Auto-finalization (single latest open round only, idempotent)
-const finalizingRef = useRef(new Set());
-useEffect(() => {
-  let cancelled = false;
+  const finalizingRef = useRef(new Set());
+  useEffect(() => {
+    let cancelled = false;
 
-  (async () => {
-    if (!Array.isArray(rounds) || rounds.length === 0) return;
-    if (!Array.isArray(participants) || participants.length === 0) return;
+    (async () => {
+      if (!Array.isArray(rounds) || rounds.length === 0) return;
+      if (!Array.isArray(participants) || participants.length === 0) return;
 
-    // Pick the highest-numbered round that is still open
-    const open = rounds
-      .filter((r) => !r.closed_at)
-      .sort((a, b) => (b.round_number || 0) - (a.round_number || 0));
-    const r = open[0];
-    if (!r) return;
+      // Pick the highest-numbered round that is still open
+      const open = rounds
+        .filter((r) => !r.closed_at)
+        .sort((a, b) => (b.round_number || 0) - (a.round_number || 0));
+      const r = open[0];
+      if (!r) return;
 
-    // Compute how many *active* participants exist now
-    const activeCount =
-      participants.filter((p) => (p.state || "").toLowerCase() === "active")
-        .length || participants.length;
+      // Compute how many *active* participants exist now
+      const activeCount =
+        participants.filter((p) => (p.state || "").toLowerCase() === "active")
+          .length || participants.length;
 
-    // How many entries this round has
-    const entries = entriesByRound[r.id] || [];
-    const everyonePlayed = entries.length >= activeCount;
-    const timeUp = r.ends_at ? new Date(r.ends_at).getTime() <= Date.now() : false;
-    const shouldFinalize = !r.closed_at && (everyonePlayed || timeUp);
+      // How many entries this round has
+      const entries = entriesByRound[r.id] || [];
+      const everyonePlayed = entries.length >= activeCount;
+      const timeUp = r.ends_at ? new Date(r.ends_at).getTime() <= Date.now() : false;
+      const shouldFinalize = !r.closed_at && (everyonePlayed || timeUp);
 
-    if (!shouldFinalize) return;
-    if (finalizingRef.current.has(r.id)) return;
+      if (!shouldFinalize) return;
+      if (finalizingRef.current.has(r.id)) return;
 
-    finalizingRef.current.add(r.id);
-    try {
-      // Only pick a next player if there is no later round already
-      const laterRoundExists = rounds.some((x) => x.round_number > r.round_number);
+      finalizingRef.current.add(r.id);
+      try {
+        // Only pick a next player if there is no later round already
+        const laterRoundExists = rounds.some((x) => x.round_number > r.round_number);
 
-      let nextPlayerId = null;
-      if (!laterRoundExists) {
-        // Build used set only when needed
-        const usedPlayerIds = new Set(
-          (rounds || [])
-            .map((x) => x?.player_id)
-            .filter((v) => v !== null && v !== undefined)
-        );
-
-        const maxAttempts = 24;
-        for (let i = 0; i < maxAttempts; i++) {
-          const candidate = await getRandomPlayer(
-            {
-              ...(tournament.filters || {}),
-              userId,
-              excludePlayerIds: Array.from(usedPlayerIds),
-            },
-            userId
+        let nextPlayerId = null;
+        if (!laterRoundExists) {
+          // Build used set only when needed
+          const usedPlayerIds = new Set(
+            (rounds || [])
+              .map((x) => x?.player_id)
+              .filter((v) => v !== null && v !== undefined)
           );
-          const candId = candidate?.id || null;
-          if (candId && !usedPlayerIds.has(candId)) {
-            nextPlayerId = candId;
-            break;
+
+          const maxAttempts = 24;
+          for (let i = 0; i < maxAttempts; i++) {
+            const candidate = await getRandomPlayer(
+              {
+                ...(tournament.filters || {}),
+                userId,
+                excludePlayerIds: Array.from(usedPlayerIds),
+              },
+              userId
+            );
+            const candId = candidate?.id || null;
+            if (candId && !usedPlayerIds.has(candId)) {
+              nextPlayerId = candId;
+              break;
+            }
           }
         }
+
+        // Respect deadlines by default
+        const { error } = await supabase.rpc("finalize_round", { p_round_id: r.id });
+        if (error) {
+          const msg = String(error?.message || "").toLowerCase();
+          const isNotFound = msg.includes("not found") && msg.includes("round");
+          if (error.code === "P0001" && isNotFound) {
+            await finalizeLatestRoundForTournament(tournament.id);
+          } else if (error.code === "PGRST202") {
+            console.warn("[elim] finalize_round not in schema cache yet; will retry");
+          } else {
+            throw error;
+          }
+        }
+
+        if (onAdvanced) await onAdvanced();
+      } catch (e) {
+        console.error("[elim] auto-finalize error", e);
+      } finally {
+        finalizingRef.current.delete(r.id);
       }
+    })();
 
-      // Respect deadlines by default. Only force if you *explicitly* want to override.
-      // …inside the effect, after you detect shouldFinalize…
-const { error } = await supabase.rpc("finalize_round", { p_round_id: r.id });
-if (error) {
-  const msg = String(error?.message || "").toLowerCase();
-  const isNotFound = msg.includes("not found") && msg.includes("round");
-  if (error.code === "P0001" && isNotFound) {
-    await finalizeLatestRoundForTournament(tournament.id);
-  } else if (error.code === "PGRST202") {
-    console.warn("[elim] finalize_round not in schema cache yet; will retry");
-  } else {
-    throw error;
-  }
-}
-
-
-      if (onAdvanced) await onAdvanced();
-    } catch (e) {
-      console.error("[elim] auto-finalize error", e);
-    } finally {
-      finalizingRef.current.delete(r.id);
-    }
-  })();
-
-  return () => {
-    cancelled = true;
-  };
-  // keep deps minimal; parent state changes will retrigger naturally
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [rounds, entriesByRound, participants, tournament.id, userId, onAdvanced]);
+    return () => {
+      cancelled = true;
+    };
+    // keep deps minimal; parent state changes will retrigger naturally
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rounds, entriesByRound, participants, tournament.id, userId, onAdvanced]);
 
   return (
     <div className="rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md">
@@ -1201,14 +1230,19 @@ if (error) {
             {tournament.name}
           </h3>
         </div>
-        <span
-          className={classNames(
-            "shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold",
-            isLive ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-800"
-          )}
-        >
-          {isLive ? "Live" : "Finished"}
-        </span>
+        <div className="flex items-center gap-2">
+          <span
+            className={classNames(
+              "shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold",
+              isLive ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-800"
+            )}
+          >
+            {isLive ? "Live" : "Finished"}
+          </span>
+          <span className="shrink-0 rounded-full bg-rose-50 text-rose-700 ring-1 ring-rose-200 px-2 py-0.5 text-[11px]">
+            Eliminates every {roundsToElim} {roundsToElim === 1 ? "round" : "rounds"}
+          </span>
+        </div>
       </div>
 
       <p className="mt-2 text-xs text-gray-500">Created: {dateStr}</p>
@@ -1411,21 +1445,42 @@ if (error) {
                   return b.points - a.points;
                 });
 
+                // is this an elimination round? (prefer DB flag; fallback to modulo)
+                const isElimRound =
+                  typeof r.is_elimination === "boolean"
+                    ? r.is_elimination
+                    : ((Number(r.round_number) || 0) % roundsToElim === 0);
+
                 return (
-                  <div key={r.id} className="rounded-xl border bg-gray-50 p-3">
+                  <div
+                    key={r.id}
+                    className={classNames(
+                      "rounded-xl border p-3 transition",
+                      isElimRound
+                        ? "bg-red-50 border-red-200 ring-1 ring-red-200 animate-pulse"
+                        : "bg-gray-50"
+                    )}
+                  >
                     <div className="flex items-center justify-between">
                       <div className="font-semibold text-gray-800">
                         Round {r.round_number}
                       </div>
-                      <div
-                        className={classNames(
-                          "text-xs px-2 py-0.5 rounded-full",
-                          derivedActive
-                            ? "bg-emerald-100 text-emerald-700"
-                            : "bg-gray-200 text-gray-700"
+                      <div className="flex items-center gap-2">
+                        {isElimRound && (
+                          <span className="text-[11px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 ring-1 ring-rose-200">
+                            Elimination Round
+                          </span>
                         )}
-                      >
-                        {derivedActive ? "Active" : "Finished"}
+                        <span
+                          className={classNames(
+                            "text-xs px-2 py-0.5 rounded-full",
+                            derivedActive
+                              ? "bg-emerald-100 text-emerald-700"
+                              : "bg-gray-200 text-gray-700"
+                          )}
+                        >
+                          {derivedActive ? "Active" : "Finished"}
+                        </span>
                       </div>
                     </div>
 
@@ -1509,18 +1564,18 @@ if (error) {
 
                     {/* Actions (centered, bigger, and hidden if already played or eliminated) */}
                     {isLive && derivedActive && !iAmEliminated && !mePlayed && (
-  <div className="mt-4 flex items-center justify-center">
-    <button
-      type="button"
-      className="play-round-btn rounded-2xl bg-gradient-to-r from-green-600 via-green-400 to-green-600 px-8 py-4 text-lg md:text-xl font-bold text-white shadow-lg transition-all duration-200 transform hover:scale-105 hover:from-green-700 hover:to-green-500 hover:shadow-2xl hover:ring-4 hover:ring-green-300 focus:outline-none"
-      onClick={() => handlePlayRound(r)}
-      disabled={!r.player_id}
-      title="Play Round to Survive!"
-    >
-      🎯 Play Round to Survive!
-    </button>
-  </div>
-)}
+                      <div className="mt-4 flex items-center justify-center">
+                        <button
+                          type="button"
+                          className="play-round-btn rounded-2xl bg-gradient-to-r from-green-600 via-green-400 to-green-600 px-8 py-4 text-lg md:text-xl font-bold text-white shadow-lg transition-all duration-200 transform hover:scale-105 hover:from-green-700 hover:to-green-500 hover:shadow-2xl hover:ring-4 hover:ring-green-300 focus:outline-none"
+                          onClick={() => handlePlayRound(r)}
+                          disabled={!r.player_id}
+                          title="Play Round to Survive!"
+                        >
+                          🎯 Play Round to Survive!
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })
@@ -1576,7 +1631,7 @@ function ErrorCard({ title, message }) {
 
 /* ------------------------------------------------------------
    CreateTournamentModal
-   (CHANGED: adds keyboard navigation for invite results)
+   (CHANGED: adds keyboard navigation for invite results + rounds_to_elimination field)
 ------------------------------------------------------------ */
 function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   const dialogRef = useRef(null);
@@ -1627,6 +1682,9 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
 
   // Round time limit (minutes)
   const [roundTimeMinutes, setRoundTimeMinutes] = useState(5);
+
+  // NEW: Rounds to elimination (1–5)
+  const [roundsToElimination, setRoundsToElimination] = useState(1);
 
   // Submit
   const [submitting, setSubmitting] = useState(false);
@@ -1869,22 +1927,22 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
 
   // Invites helpers
   const addInvite = (u) => {
-  if (!u || u.id === currentUser?.id) return;
-  if (invites.find((x) => x.id === u.id)) return;
-  setInvites((prev) => [...prev, u]);
+    if (!u || u.id === currentUser?.id) return;
+    if (invites.find((x) => x.id === u.id)) return;
+    setInvites((prev) => [...prev, u]);
 
-  // clear results and re-focus for rapid entry
-  setSearchEmail("");
-  setEmailResults([]);
-  setInviteIndex(-1);
-  // focus next tick so DOM has updated
-  setTimeout(() => searchEmailRef.current?.focus(), 0);
-};
+    // clear results and re-focus for rapid entry
+    setSearchEmail("");
+    setEmailResults([]);
+    setInviteIndex(-1);
+    // focus next tick so DOM has updated
+    setTimeout(() => searchEmailRef.current?.focus(), 0);
+  };
 
   const removeInvite = (id) => {
-  setInvites((prev) => prev.filter((x) => x.id !== id));
-  setTimeout(() => searchEmailRef.current?.focus(), 0);
-};
+    setInvites((prev) => prev.filter((x) => x.id !== id));
+    setTimeout(() => searchEmailRef.current?.focus(), 0);
+  };
 
   /* ---------- validation ---------- */
   const validate = () => {
@@ -1893,6 +1951,10 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
     const mins = Math.floor(Number(roundTimeMinutes));
     if (!Number.isFinite(mins) || mins < 5 || mins > 1440) {
       next.roundTimeMinutes = "Round time must be between 5 and 1440 minutes.";
+    }
+    const r2e = Math.floor(Number(roundsToElimination));
+    if (!Number.isFinite(r2e) || r2e < 1 || r2e > 5) {
+      next.roundsToElimination = "Rounds to elimination must be between 1 and 5.";
     }
     if (!currentUser?.id) {
       next.user = "You must be logged in to create a tournament.";
@@ -1904,7 +1966,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
     return Object.keys(next).length === 0;
   };
 
-   /* ---------- submit ---------- */
+  /* ---------- submit ---------- */
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSubmitError("");
@@ -1918,28 +1980,63 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
         minMarketValue: Number(minMarketValue) || 0,
       };
 
-      // Call the server-side RPC that does everything atomically:
-      //  - creates the tournament (owner = currentUser.id)
-      //  - inserts participants (owner + invited users)
-      //  - creates round 1 with an eligible random player based on filters
-      const { data, error } = await supabase.rpc("create_elimination_tournament_full", {
+      const baseParams = {
         p_name: name.trim(),
         p_filters: filtersPayload,
         p_round_time_limit_seconds: Math.floor(Number(roundTimeMinutes) * 60),
         p_invited_user_ids: invites.map((u) => u.id),
-      });
+      };
 
-      if (error) {
-        throw new Error(error.message || "Failed to create tournament.");
+      // First try with p_rounds_to_elimination (new RPC signature)
+      let created = null;
+      let callErr = null;
+
+      {
+        const { data, error } = await supabase.rpc(
+          "create_elimination_tournament_full",
+          { ...baseParams, p_rounds_to_elimination: Math.floor(Number(roundsToElimination)) }
+        );
+        created = data || null;
+        callErr = error || null;
       }
 
-      // ✅ FIX: also insert notifications for each invited user
+      // If RPC isn't updated yet, retry without the param and then patch the value on the row
+      if (callErr) {
+        const msg = String(callErr.message || "").toLowerCase();
+        const looksLikeSigMismatch =
+          callErr.code === "42883" ||
+          msg.includes("no function matches") ||
+          msg.includes("unexpected key") ||
+          msg.includes("record") ||
+          msg.includes("parameter");
+
+        if (looksLikeSigMismatch) {
+          const { data, error } = await supabase.rpc(
+            "create_elimination_tournament_full",
+            baseParams
+          );
+          if (error) throw new Error(error.message || "Failed to create tournament.");
+
+          created = data || null;
+
+          if (created?.id) {
+            await supabase
+              .from("elimination_tournaments")
+              .update({ rounds_to_elimination: Math.floor(Number(roundsToElimination)) })
+              .eq("id", created.id);
+          }
+        } else {
+          throw new Error(callErr.message || "Failed to create tournament.");
+        }
+      }
+
+      // ✅ Notifications for each invited user
       if (invites.length > 0) {
         const notifRows = invites.map((u) => ({
-          user_id: u.id, // <-- FIXED: ensure not null
+          user_id: u.id, // ensure not null
           type: "elimination_invite",
           payload: {
-            tournament_id: data?.id || "unknown",
+            tournament_id: created?.id || "unknown",
             tournament_name: name.trim(),
             creator_name: currentUser?.full_name || currentUser?.email || "Someone",
             round_time_limit_minutes: roundTimeMinutes,
@@ -2060,7 +2157,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
 
                 <div className="flex gap-2">
                   <input
-                    ref={searchEmailRef}              // <-- add this
+                    ref={searchEmailRef}
                     type="text"
                     value={searchEmail}
                     onChange={(e) => setSearchEmail(e.target.value)}
@@ -2182,6 +2279,30 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                     {errors.roundTimeMinutes}
                   </p>
                 )}
+              </div>
+
+              {/* NEW: Rounds to Elimination */}
+              <div className="rounded-xl shadow-sm border bg.white p-4">
+                <label className="block text-sm font-semibold text-gray-700">
+                  Rounds to Elimination (1–5)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={5}
+                  step={1}
+                  value={roundsToElimination}
+                  onChange={(e) => setRoundsToElimination(e.target.value)}
+                  className="mt-1 w-44 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-700"
+                />
+                {errors.roundsToElimination && (
+                  <p className="mt-1 text-xs text-red-600">
+                    {errors.roundsToElimination}
+                  </p>
+                )}
+                <p className="mt-2 text-xs text-gray-600">
+                  Scores are summed across each block of rounds and eliminations occur at the end of those blocks (including the elimination round).
+                </p>
               </div>
 
               {submitError && (
