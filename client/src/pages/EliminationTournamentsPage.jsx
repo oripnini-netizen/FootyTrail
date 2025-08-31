@@ -153,7 +153,6 @@ export default function EliminationTournamentsPage() {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
         .select(
-          // ADDED: stake_points, min_participants, join_deadline, owner_id, rounds_to_elimination
           "id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id"
         )
         .eq("status", "live")
@@ -720,7 +719,7 @@ function LoserFinalCard({ tournamentName, winner, stats, ranking }) {
             . Train harder and return stronger.
           </p>
 
-          {/* Stats */}
+        {/* Stats */}
           <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
             <div className="rounded-lg bg-white border p-3">
               <div className="text-xs text-gray-500">Rounds</div>
@@ -811,10 +810,12 @@ function TournamentCard({
     (async () => {
       try {
         // participants + invite statuses + states
-        const { data: partRows } = await supabase
+        const { data: partRows, error: partErr } = await supabase
           .from("elimination_participants")
           .select("user_id, state, invite_status, accepted_at, declined_at")
           .eq("tournament_id", tournament.id);
+
+        if (partErr) console.error("[elim] participants load error", partErr);
 
         const idsFromParticipants = (partRows || []).map((r) => r.user_id);
         const stateByUserId = new Map(
@@ -826,19 +827,22 @@ function TournamentCard({
 
         let userRows = [];
         if (idsFromParticipants.length) {
-          const { data: usersRows } = await supabase
+          const { data: usersRows, error: usersErr } = await supabase
             .from("users")
             .select("id, full_name, email, profile_photo_url")
             .in("id", idsFromParticipants);
+          if (usersErr) console.error("[elim] users load error", usersErr);
           userRows = usersRows || [];
         }
 
         // rounds (incl. is_elimination)
-        const { data: roundRows } = await supabase
+        const { data: roundRows, error: roundErr } = await supabase
           .from("elimination_rounds")
           .select("id, round_number, started_at, ends_at, closed_at, player_id, is_elimination")
           .eq("tournament_id", tournament.id)
           .order("round_number", { ascending: true });
+
+        if (roundErr) console.error("[elim] rounds load error", roundErr);
 
         const roundsArr = Array.isArray(roundRows) ? roundRows : [];
         const entriesMap = {};
@@ -846,10 +850,11 @@ function TournamentCard({
         // entries per round
         const extraUserIds = new Set();
         for (const r of roundsArr) {
-          const { data: ent } = await supabase
+          const { data: ent, error: entErr } = await supabase
             .from("elimination_round_entries")
             .select("user_id, points_earned, finished_at")
             .eq("round_id", r.id);
+          if (entErr) console.error("[elim] entries load error", entErr);
           const e = Array.isArray(ent) ? ent : [];
           entriesMap[r.id] = e;
           for (const row of e) {
@@ -860,10 +865,11 @@ function TournamentCard({
         }
 
         if (extraUserIds.size) {
-          const { data: extraUsers } = await supabase
+          const { data: extraUsers, error: extraErr } = await supabase
             .from("users")
             .select("id, full_name, email, profile_photo_url")
             .in("id", Array.from(extraUserIds));
+          if (extraErr) console.error("[elim] extra users load error", extraErr);
           userRows = [...userRows, ...(extraUsers || [])];
         }
 
@@ -879,7 +885,8 @@ function TournamentCard({
           setRounds(roundsArr);
           setEntriesByRound(entriesMap);
         }
-      } catch {
+      } catch (e) {
+        console.error("[elim] load block error", e);
         if (!cancelled) {
           setParticipants([]);
           setRounds([]);
@@ -902,6 +909,7 @@ function TournamentCard({
         p_uid: userId,
       });
       if (!cancelled) {
+        if (error) console.error("[elim] pt_available_today error", error);
         setAvailableToday(error ? null : Number(data || 0));
       }
     })();
@@ -1270,6 +1278,7 @@ function TournamentCard({
       setAvailableToday(Number(data || 0));
       if (onAdvanced) await onAdvanced();
     } catch (e) {
+      console.error("[elim] accept invite error", e);
       alert(e.message || "Failed to accept invite.");
     } finally {
       setAccepting(false);
@@ -1287,31 +1296,56 @@ function TournamentCard({
       if (error) throw error;
       if (onAdvanced) await onAdvanced();
     } catch (e) {
+      console.error("[elim] decline invite error", e);
       alert(e.message || "Failed to decline invite.");
     } finally {
       setDeclining(false);
     }
   };
 
+  // CHANGED: isCreator uses owner_id
   const isCreator = userId && tournament.owner_id === userId;
   const joinDeadline = tournament.join_deadline || null;
   const canStartNow = isCreator && acceptedCount >= Math.max(2, Number(tournament.min_participants || 2));
 
+  // ====== CHANGED: instrumented Start Now, optimistic round fetch ======
   const handleStartNow = async () => {
     if (!canStartNow) return;
     setStartNowBusy(true);
     try {
-      const { error } = await supabase.rpc("start_elimination_tournament", {
+      console.log("[elim] Start Now RPC call", { tournamentId: tournament.id });
+      const { data, error } = await supabase.rpc("start_elimination_tournament", {
         p_tournament_id: tournament.id,
       });
-      if (error) throw error;
+      if (error) {
+        console.error("[elim] start_elimination_tournament error", error);
+        alert(error.message || "Failed to start the challenge.");
+        return;
+      }
+      console.log("[elim] Start Now RPC success", data);
+
+      // Optimistically load rounds so the card updates immediately
+      const { data: roundRows, error: rerr } = await supabase
+        .from("elimination_rounds")
+        .select("id, round_number, started_at, ends_at, closed_at, player_id, is_elimination")
+        .eq("tournament_id", tournament.id)
+        .order("round_number", { ascending: true });
+
+      if (rerr) {
+        console.warn("[elim] post-start rounds fetch error", rerr);
+      } else if (Array.isArray(roundRows)) {
+        setRounds(roundRows);
+      }
+
       if (onAdvanced) await onAdvanced();
     } catch (e) {
+      console.error("[elim] Start Now exception", e);
       alert(e.message || "Failed to start the challenge.");
     } finally {
       setStartNowBusy(false);
     }
   };
+  // ====== /CHANGED ======
 
   // UI bits for accept controls
   const needMore = Math.max(0, Number(tournament.stake_points || 0) - Number(availableToday || 0));
@@ -1797,8 +1831,8 @@ function TournamentCard({
                     </div>
 
                     {/* Actions */}
-                    {isLive && derivedActive && !iAmEliminated && !mePlayed && (
-                      <div className="mt-4 flex items-center justify-center">
+                    {isLive && derivedActive && !iAmEliminated && !entriesFor(r.id).some((e) => e.user_id === userId) && (
+                      <div className="mt-4 flex items-center justify=center">
                         <button
                           type="button"
                           className="play-round-btn rounded-2xl bg-gradient-to-r from-green-600 via-green-400 to-green-600 px-8 py-4 text-lg md:text-xl font-bold text-white shadow-lg transition-all duration-200 transform hover:scale-105 hover:from-green-700 hover:to-green-500 hover:shadow-2xl hover:ring-4 hover:ring-green-300 focus:outline-none"
@@ -2311,7 +2345,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
         }}
       >
         {/* Fixed-height panel with internal scrolling */}
-        <div className="w-full max-w-3xl max-h-[85vh] flex flex-col rounded-2xl border border-gray-200 bg-white p-0 shadow-xl">
+        <div className="w-full max-w-3xl max-h-[85vh] flex flex-col rounded-2xl border border-gray-200 bg.white p-0 shadow-xl">
           <div className="flex items-center justify-between border-b border-gray-200 p-4">
             <h2 className="text-lg font-semibold text-gray-900">
               Create Elimination Tournament
@@ -2518,7 +2552,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
 
               {/* Rounds to Elimination */}
               <div className="rounded-xl shadow-sm border bg.white p-4">
-                <label className="block text-sm font-semibold text-gray-700">
+                <label className="block text.sm font-semibold text-gray-700">
                   Rounds to Elimination (1–5)
                 </label>
                 <input
