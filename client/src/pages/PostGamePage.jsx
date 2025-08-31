@@ -602,6 +602,15 @@ export default function PostGamePage() {
           ? 'Great job! You guessed it!'
           : `Not quite! The player was ${player?.name}`));
 
+  // --- NEW: compute display age from player_dob_age (fallback to original age) ---
+  const displayAge = getDisplayedAge(player);
+
+  // --- NEW: helper for formatting earned points nicely ---
+  const formatPoints = (n) =>
+    new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(
+      Number(n || 0)
+    );
+
   return (
     <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
       <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
@@ -647,7 +656,8 @@ export default function PostGamePage() {
             <div>
               <h1 className="text-2xl font-bold mb-2">{player?.name}</h1>
               <div className="space-y-1 text-gray-600">
-                <p>Age: {player?.age}</p>
+                {/* NEW: use computed current age */}
+                <p>Age: {displayAge}</p>
                 <p>Nationality: {player?.nationality}</p>
                 <p>Position: {player?.position}</p>
               </div>
@@ -765,9 +775,10 @@ export default function PostGamePage() {
                 <div className="text-lg text-gray-700">
                   {didWin ? (
                     <>
+                      {/* NEW: show actual earned points instead of hard-coded 10,000 */}
                       Congratulations! You won the daily challenge and earned{' '}
                       <span className="font-bold text-green-700">
-                        10,000 points
+                        {formatPoints(stats?.pointsEarned)} points
                       </span>
                       !
                       <br />
@@ -776,6 +787,7 @@ export default function PostGamePage() {
                       </span>
                     </>
                   ) : (
+                    // Keep the "chance at 10,000 points" messaging for the *next* potential prize
                     'Better luck next time! Try again tomorrow for another chance at 10,000 points.'
                   )}
                 </div>
@@ -883,6 +895,83 @@ function computeGuessesUsed(stats) {
   return Number.isFinite(n) ? Math.max(0, n) : 0;
 }
 
+/* =========================
+   NEW: Current-age helpers
+   ========================= */
+
+/** Extract a Date from strings like "30.04.1992 (29)" or common date formats. Returns UTC Date or null. */
+function parseBirthDate(str) {
+  if (!str) return null;
+  const s = String(str);
+
+  // Prefer dd.mm.yyyy (ignores anything after, like "(29)")
+  let m = s.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+  if (m) {
+    const d = parseInt(m[1], 10);
+    const mo = parseInt(m[2], 10);
+    const y = parseInt(m[3], 10);
+    if (validYMD(y, mo, d)) return new Date(Date.UTC(y, mo - 1, d));
+  }
+
+  // dd/mm/yyyy or dd-mm-yyyy
+  m = s.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (m) {
+    const d = parseInt(m[1], 10);
+    const mo = parseInt(m[2], 10);
+    const y = parseInt(m[3], 10);
+    if (validYMD(y, mo, d)) return new Date(Date.UTC(y, mo - 1, d));
+  }
+
+  // yyyy-mm-dd
+  m = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) {
+    const y = parseInt(m[1], 10);
+    const mo = parseInt(m[2], 10);
+    const d = parseInt(m[3], 10);
+    if (validYMD(y, mo, d)) return new Date(Date.UTC(y, mo - 1, d));
+  }
+
+  return null;
+}
+
+function validYMD(y, m, d) {
+  if (y < 1900 || y > 2100) return false;
+  if (m < 1 || m > 12) return false;
+  if (d < 1 || d > 31) return false;
+  return true;
+}
+
+/** Compute age in full years as of "now" from a UTC birthdate */
+function computeAgeFromDate(birthDate) {
+  if (!(birthDate instanceof Date)) return null;
+  const now = new Date();
+  let age = now.getUTCFullYear() - birthDate.getUTCFullYear();
+  const m = now.getUTCMonth() - birthDate.getUTCMonth();
+  if (m < 0 || (m === 0 && now.getUTCDate() < birthDate.getUTCDate())) {
+    age--;
+  }
+  return Math.max(0, age);
+}
+
+/** Get display age for the player using player.player_dob_age; fallback to player.age */
+function getDisplayedAge(player) {
+  if (!player) return '—';
+  const dobAgeStr =
+    player.player_dob_age ||
+    player.dob_age ||
+    player.player_dob ||
+    player.dob ||
+    '';
+
+  const birthDate = parseBirthDate(dobAgeStr);
+  const computed = birthDate ? computeAgeFromDate(birthDate) : null;
+
+  const fallback =
+    player.age ?? player.player_age ?? '—';
+
+  return computed != null ? String(computed) : String(fallback);
+}
+
 function buildShareHTML({ didWin, outroLine, player, stats, aiGeneratedFact }) {
   const color = didWin ? '#166534' : '#991b1b';
   const badgeBG = didWin ? '#dcfce7' : '#fee2e2';
@@ -892,6 +981,9 @@ function buildShareHTML({ didWin, outroLine, player, stats, aiGeneratedFact }) {
          <div style="margin-top:6px;font-size:11px;color:#6b7280;">And now you'll have to google that to see if I made it all up...</div>
        </div>`
     : '';
+
+  // NEW: use the same computed age in shared HTML
+  const shareAge = getDisplayedAge(player);
 
   return `
   <div style="max-width:720px;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Helvetica,Arial,sans-serif;line-height:1.5;background:#ffffff;border-radius:12px;padding:16px;border:1px solid #e5e7eb;">
@@ -916,7 +1008,7 @@ function buildShareHTML({ didWin, outroLine, player, stats, aiGeneratedFact }) {
           player?.name || ''
         )}</div>
         <div style="color:#4b5563;font-size:14px;">Age: ${escapeHTML(
-          String(player?.age ?? '—')
+          String(shareAge ?? '—')
         )}</div>
         <div style="color:#4b5563;font-size:14px;">Nationality: ${escapeHTML(
           player?.nationality || '—'
