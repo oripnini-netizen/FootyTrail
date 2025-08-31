@@ -1308,44 +1308,48 @@ function TournamentCard({
   const joinDeadline = tournament.join_deadline || null;
   const canStartNow = isCreator && acceptedCount >= Math.max(2, Number(tournament.min_participants || 2));
 
-  // ====== CHANGED: instrumented Start Now, optimistic round fetch ======
-  const handleStartNow = async () => {
-    if (!canStartNow) return;
-    setStartNowBusy(true);
-    try {
-      console.log("[elim] Start Now RPC call", { tournamentId: tournament.id });
-      const { data, error } = await supabase.rpc("start_elimination_tournament", {
-        p_tournament_id: tournament.id,
-      });
-      if (error) {
-        console.error("[elim] start_elimination_tournament error", error);
-        alert(error.message || "Failed to start the challenge.");
-        return;
-      }
-      console.log("[elim] Start Now RPC success", data);
+  // ====== CHANGED: Start Now sends p_force_start and then hard-refreshes rounds ======
+const handleStartNow = async () => {
+  if (!canStartNow) return;
+  setStartNowBusy(true);
+  try {
+    console.log("[elim] Start Now RPC call", { tournamentId: tournament.id });
+    const { data, error } = await supabase.rpc("start_elimination_tournament", {
+      p_tournament_id: tournament.id,
+      p_force_start: true,           // <— important: bypass join window and actually start
+    });
+    if (error) {
+      console.error("[elim] start_elimination_tournament error", error);
+      alert(error.message || "Failed to start the challenge.");
+      return;
+    }
+    console.log("[elim] Start Now RPC success", data);
 
-      // Optimistically load rounds so the card updates immediately
+    // After starting, poll a few times for the first round to appear so UI updates right away.
+    const maxAttempts = 6; // ~3 seconds total
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const { data: roundRows, error: rerr } = await supabase
         .from("elimination_rounds")
         .select("id, round_number, started_at, ends_at, closed_at, player_id, is_elimination")
         .eq("tournament_id", tournament.id)
         .order("round_number", { ascending: true });
 
-      if (rerr) {
-        console.warn("[elim] post-start rounds fetch error", rerr);
-      } else if (Array.isArray(roundRows)) {
+      if (!rerr && Array.isArray(roundRows) && roundRows.length > 0) {
         setRounds(roundRows);
+        break;
       }
-
-      if (onAdvanced) await onAdvanced();
-    } catch (e) {
-      console.error("[elim] Start Now exception", e);
-      alert(e.message || "Failed to start the challenge.");
-    } finally {
-      setStartNowBusy(false);
+      await new Promise((res) => setTimeout(res, 500));
     }
-  };
-  // ====== /CHANGED ======
+
+    if (onAdvanced) await onAdvanced();
+  } catch (e) {
+    console.error("[elim] Start Now exception", e);
+    alert(e.message || "Failed to start the challenge.");
+  } finally {
+    setStartNowBusy(false);
+  }
+};
+// ====== /CHANGED ======
 
   // UI bits for accept controls
   const needMore = Math.max(0, Number(tournament.stake_points || 0) - Number(availableToday || 0));
