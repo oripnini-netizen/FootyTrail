@@ -44,7 +44,7 @@ export default function LeaderboardPage() {
       try {
         setLoading(true);
 
-        // Daily champs (today) — unaffected by elimination filter because it's strictly daily challenge winners
+        // ===== Daily Champions (today only) =====
         const todayStart = new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
         const { data: daily } = await supabase
           .from('games_records')
@@ -57,14 +57,13 @@ export default function LeaderboardPage() {
 
         if (daily?.length) {
           const ids = Array.from(new Set(daily.map(d => d.user_id)));
-          const { data: users } = await supabase
+          const { data: dailyUsers } = await supabase
             .from('users')
             .select('id, full_name, profile_photo_url, created_at')
             .in('id', ids);
 
           const map = {};
-          (users || []).forEach(u => { map[u.id] = u; });
-
+          (dailyUsers || []).forEach(u => { map[u.id] = u; });
           setDailyChampions(
             daily.map(d => ({
               ...d,
@@ -75,66 +74,98 @@ export default function LeaderboardPage() {
           setDailyChampions([]);
         }
 
-        // Leaderboard (BASE: EXCLUDING elimination games; PLUS: points_transactions)
+        // ===== Leaderboard (fast path) =====
         const now = new Date();
         const start = PERIOD_TO_START(now, tab);
         const startIso = start ? start.toISOString() : null;
 
-        const { data: users } = await supabase
-          .from('users')
-          .select('id, full_name, profile_photo_url, created_at');
+        // 1) Pull all relevant non-elimination games (single query)
+        let grQuery = supabase
+          .from('games_records')
+          .select('user_id, points_earned, time_taken_seconds, won, created_at')
+          .eq('is_elimination_game', false);
 
-        const rows = [];
-        for (const u of (users || [])) {
-          // base points from non-elimination games_records (keep your original leaderboard logic)
-          let q = supabase.from('games_records')
-            .select('won, points_earned, time_taken_seconds, created_at')
-            .eq('user_id', u.id)
-            .eq('is_elimination_game', false); // exclude elimination games
+        if (startIso) grQuery = grQuery.gte('created_at', startIso);
+        const { data: gamesRows, error: gamesErr } = await grQuery;
+        if (gamesErr) throw gamesErr;
 
-          if (startIso) q = q.gte('created_at', startIso);
-
-          const { data: games } = await q;
-          if (!games || games.length === 0) {
-            // even if no base games in window, we might still have transactions (stakes/pots). Check them too.
+        // Aggregate base (non-elimination) stats by user
+        const baseByUser = new Map();
+        for (const g of (gamesRows || [])) {
+          const uid = g.user_id;
+          let acc = baseByUser.get(uid);
+          if (!acc) {
+            acc = { gamesCount: 0, basePoints: 0, totalTime: 0, wins: 0 };
+            baseByUser.set(uid, acc);
           }
+          acc.gamesCount += 1;
+          acc.basePoints += (g.points_earned || 0);
+          acc.totalTime += (g.time_taken_seconds || 0);
+          if (g.won) acc.wins += 1;
+        }
 
-          const basePoints = (games || []).reduce((s, g) => s + (g.points_earned || 0), 0);
-          const gamesCount = (games || []).length;
-          const wins = (games || []).filter(g => g.won).length;
-          const totalTime = (games || []).reduce((s, g) => s + (g.time_taken_seconds || 0), 0);
+        // 2) Pull all relevant points_transactions (single query)
+        let txQuery = supabase
+          .from('points_transactions')
+          .select('user_id, amount, created_at');
+        if (startIso) txQuery = txQuery.gte('created_at', startIso);
+        const { data: txRows, error: txErr } = await txQuery;
+        if (txErr) throw txErr;
 
-          // NEW: add points from points_transactions (stakes/pots, bonuses, etc.)
-          // We treat points_transactions as net credits/debits to user's balance and include them in totals.
-          let tQuery = supabase
-            .from('points_transactions')
-            .select('amount, created_at')
-            .eq('user_id', u.id);
-          if (startIso) tQuery = tQuery.gte('created_at', startIso);
-          const { data: txs } = await tQuery;
+        // Aggregate transactions by user
+        const txByUser = new Map();
+        for (const t of (txRows || [])) {
+          const uid = t.user_id;
+          const amt = Number(t.amount || 0);
+          txByUser.set(uid, (txByUser.get(uid) || 0) + amt);
+        }
 
-          const txPoints = (txs || []).reduce((s, t) => s + Number(t.amount || 0), 0);
+        // Union of user IDs that appear in games or transactions
+        const involvedUserIds = Array.from(new Set([
+          ...baseByUser.keys(),
+          ...txByUser.keys(),
+        ]));
 
-          const totalPoints = basePoints + txPoints;
+        // 3) Fetch only these users for display (single query)
+        let users = [];
+        if (involvedUserIds.length > 0) {
+          const { data: usersData, error: usersErr } = await supabase
+            .from('users')
+            .select('id, full_name, profile_photo_url, created_at')
+            .in('id', involvedUserIds);
+          if (usersErr) throw usersErr;
+          users = usersData || [];
+        }
+
+        const userMap = new Map(users.map(u => [u.id, u]));
+
+        // Build rows
+        const rows = [];
+        for (const uid of involvedUserIds) {
+          const u = userMap.get(uid);
+          const base = baseByUser.get(uid) || { gamesCount: 0, basePoints: 0, totalTime: 0, wins: 0 };
+          const txSum = txByUser.get(uid) || 0;
+          const totalPoints = base.basePoints + txSum;
+
+          // Skip users with 0 games in timeframe (as requested previously)
+          if (base.gamesCount === 0) continue;
 
           rows.push({
-            userId: u.id,
-            name: u.full_name || 'Unknown Player',
-            profilePhoto: u.profile_photo_url || '',
-            memberSince: u.created_at ? new Date(u.created_at).toLocaleDateString() : '—',
+            userId: uid,
+            name: u?.full_name || 'Unknown Player',
+            profilePhoto: u?.profile_photo_url || '',
+            memberSince: u?.created_at ? new Date(u.created_at).toLocaleDateString() : '—',
             points: totalPoints,
-            gamesCount,
-            avgTime: gamesCount ? Math.round(totalTime / gamesCount) : 0,
-            successRate: gamesCount ? Math.round((wins / gamesCount) * 100) : 0,
-            avgPoints: gamesCount ? Math.round(totalPoints / gamesCount) : totalPoints // avoid div-by-zero
+            gamesCount: base.gamesCount,
+            avgTime: base.gamesCount ? Math.round(base.totalTime / base.gamesCount) : 0,
+            successRate: base.gamesCount ? Math.round((base.wins / base.gamesCount) * 100) : 0,
+            avgPoints: base.gamesCount ? Math.round(totalPoints / base.gamesCount) : totalPoints
           });
         }
 
-        // === NEW: hide users with 0 games in the selected timeframe ===
-        const filtered = rows.filter(r => r.gamesCount > 0);
-
-        filtered.sort((a, b) => (metric === 'Total Points' ? b.points - a.points : b.avgPoints - a.avgPoints));
-        setLeaderboard(filtered);
+        // Sort
+        rows.sort((a, b) => (metric === 'Total Points' ? b.points - a.points : b.avgPoints - a.avgPoints));
+        setLeaderboard(rows);
       } catch (e) {
         console.error('Error fetching leaderboard:', e);
         setLeaderboard([]);
@@ -445,7 +476,7 @@ export default function LeaderboardPage() {
                       <div key={g.id} className="rounded border p-3">
                         <div className="flex items-center justify-between">
                           <div>
-                            {/* CHANGE: add purple title when elimination (daily remains yellow) */}
+                            {/* add purple title when elimination (daily remains yellow) */}
                             <div className={`font-medium ${
                               g.is_daily_challenge
                                 ? 'font-semibold text-yellow-600'
