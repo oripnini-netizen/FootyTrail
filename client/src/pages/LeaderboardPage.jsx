@@ -130,8 +130,11 @@ export default function LeaderboardPage() {
           });
         }
 
-        rows.sort((a, b) => (metric === 'Total Points' ? b.points - a.points : b.avgPoints - a.avgPoints));
-        setLeaderboard(rows);
+        // === NEW: hide users with 0 games in the selected timeframe ===
+        const filtered = rows.filter(r => r.gamesCount > 0);
+
+        filtered.sort((a, b) => (metric === 'Total Points' ? b.points - a.points : b.avgPoints - a.avgPoints));
+        setLeaderboard(filtered);
       } catch (e) {
         console.error('Error fetching leaderboard:', e);
         setLeaderboard([]);
