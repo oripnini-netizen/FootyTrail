@@ -310,7 +310,7 @@ export default function EliminationTournamentsPage() {
           <p className="mt-2 text-sm text-gray-700">
             Create and follow elimination challenges with friends. Each round
             uses the same mystery player for everyone. Lowest score(s) are
-            eliminated until a single winner remains. Creators can now choose how often eliminations occur (every 1–5 rounds).
+            eliminated until a single winner remains. Creators choose how often eliminations occur (every 1–5 rounds).
           </p>
 
           {/* Notifications banner */}
@@ -2371,7 +2371,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
         }}
       >
         {/* Fixed-height panel with internal scrolling */}
-        <div className="w-full max-w-3xl max-h-[85vh] flex flex-col rounded-2xl border border-gray-200 bg.white p-0 shadow-xl">
+        <div className="w-full max-w-3xl max-h-[85vh] flex flex-col rounded-2xl border border-gray-200 bg-white p-0 shadow-xl">
           <div className="flex items-center justify-between border-b border-gray-200 p-4">
             <h2 className="text-lg font-semibold text-gray-900">
               Create Elimination Tournament
