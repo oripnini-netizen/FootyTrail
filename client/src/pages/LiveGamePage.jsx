@@ -166,7 +166,7 @@ export default function LiveGamePage() {
         data: { session },
       } = await supabase.auth.getSession();
 
-      const resp = await fetch(`${API_BASE}/ai/game-outro`, {
+    const resp = await fetch(`${API_BASE}/ai/game-outro`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -528,30 +528,39 @@ export default function LiveGamePage() {
         // front-end passes it to PostGame via navigation.state only.
       };
 
-      // If this is an elimination round, use the atomic RPC that writes both the game and the round entry
+      // If this is an elimination round: INSERT into games_records first, capture id, then RPC with game_record_id
       if (elimination?.roundId && elimination?.tournamentId && user?.id) {
+        const { data: grInsert, error: grErr } = await supabase
+          .from('games_records')
+          .insert([{
+            user_id: user.id,
+            player_id: playerIdNumeric,
+            player_name: gameData.name,
+            player_data: playerData,
+            is_daily_challenge: !!isDaily,
+            is_elimination_game: true,
+            guesses_attempted: gameStats.guessesAttempted,
+            time_taken_seconds: gameStats.timeTaken,
+            points_earned: gameStats.points,
+            potential_points: gameStats.potentialPoints,
+            hints_used: gameStats.hintsUsed,
+            completed: true,
+            won: gameStats.won,
+          }])
+          .select('id')
+          .single();
+
+        if (grErr) {
+          console.error('[games_records insert] error:', grErr);
+          return null;
+        }
+
+        const gameRecordId = grInsert.id;
+
         const { data, error } = await supabase.rpc('play_elimination_round', {
           p_round_id: elimination.roundId,
           p_user_id: user.id,
-          p_game: {
-            won: gameStats.won,
-            points: gameStats.points,
-            potentialPoints: gameStats.potentialPoints,
-            timeTaken: gameStats.timeTaken,
-            guessesAttempted: gameStats.guessesAttempted,
-            hintsUsed: gameStats.hintsUsed,
-            isDaily: !!isDaily,
-            is_elimination_game: true,
-            playerName: gameData.name,            
-            playerData: {                     // ⬅️ send FULL player_data (fixes NOT NULL)
-              id: gameData.id,
-              name: gameData.name,
-              nationality: gameData.nationality,
-              position: gameData.position,
-              age: gameData.age,
-              photo: gameData.photo,
-            },
-          },
+          p_game: { game_record_id: gameRecordId }, // <-- strict RPC contract
         });
         if (error) {
           console.error('[play_elimination_round] error:', error);
