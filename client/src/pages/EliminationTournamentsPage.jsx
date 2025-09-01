@@ -716,7 +716,7 @@ function LoserFinalCard({ tournamentName, winner, stats, ranking, stakePoints })
             <span className="font-semibold">
               {winner?.full_name || winner?.email || "the victor"}
             </span>
-            . Train harder and return stronger. You lost <span className=\"font-semibold\">{stakePoints} pts</span>.
+            . Train harder and return stronger. You lost <span className="font-semibold">{stakePoints} pts</span>.
           </p>
 
         {/* Stats */}
