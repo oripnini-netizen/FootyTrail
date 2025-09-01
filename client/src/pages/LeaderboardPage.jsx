@@ -105,9 +105,9 @@ export default function LeaderboardPage() {
           if (g.won) acc.wins += 1;
         }
 
-        // 2) Pull all relevant points_transactions (single query)
+        // 2) Pull all relevant point_transactions (single query)
         let txQuery = supabase
-          .from('points_transactions')
+          .from('point_transactions')
           .select('user_id, amount, created_at');
         if (startIso) txQuery = txQuery.gte('created_at', startIso);
         const { data: txRows, error: txErr } = await txQuery;
@@ -207,9 +207,9 @@ export default function LeaderboardPage() {
       const wins = (allGames || []).filter(g => g.won).length;
       const time = (allGames || []).reduce((s, g) => s + (g.time_taken_seconds || 0), 0);
 
-      // Lifetime net from points_transactions
+      // Lifetime net from point_transactions
       const { data: txs } = await supabase
-        .from('points_transactions')
+        .from('point_transactions')
         .select('amount')
         .eq('user_id', player.userId);
 
