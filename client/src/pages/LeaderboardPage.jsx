@@ -80,10 +80,11 @@ export default function LeaderboardPage() {
         const startIso = start ? start.toISOString() : null;
 
         // 1) Pull all relevant non-elimination games (single query)
+        // IMPORTANT: treat NULL as non-elimination too.
         let grQuery = supabase
           .from('games_records')
           .select('user_id, points_earned, time_taken_seconds, won, created_at')
-          .eq('is_elimination_game', false);
+          .or('is_elimination_game.is.null,is_elimination_game.eq.false');
 
         if (startIso) grQuery = grQuery.gte('created_at', startIso);
         const { data: gamesRows, error: gamesErr } = await grQuery;
@@ -139,7 +140,7 @@ export default function LeaderboardPage() {
 
         const userMap = new Map(users.map(u => [u.id, u]));
 
-        // Build rows
+        // Build rows (and hide users with 0 games in timeframe)
         const rows = [];
         for (const uid of involvedUserIds) {
           const u = userMap.get(uid);
@@ -147,8 +148,7 @@ export default function LeaderboardPage() {
           const txSum = txByUser.get(uid) || 0;
           const totalPoints = base.basePoints + txSum;
 
-          // Skip users with 0 games in timeframe (as requested previously)
-          if (base.gamesCount === 0) continue;
+          if (base.gamesCount === 0) continue; // keep the "no 0-games users" rule
 
           rows.push({
             userId: uid,
@@ -195,19 +195,19 @@ export default function LeaderboardPage() {
 
       setUserGames(games || []);
 
-      // ALL games for stats — EXCLUDE elimination games for the base portion (as before)
+      // ALL games for stats — EXCLUDE elimination games for base portion (NULL treated as non-elim)
       const { data: allGames } = await supabase
         .from('games_records')
         .select('won, points_earned, time_taken_seconds')
         .eq('user_id', player.userId)
-        .eq('is_elimination_game', false);
+        .or('is_elimination_game.is.null,is_elimination_game.eq.false');
 
       const total = allGames?.length || 0;
       const basePts = (allGames || []).reduce((s, g) => s + (g.points_earned || 0), 0);
       const wins = (allGames || []).filter(g => g.won).length;
       const time = (allGames || []).reduce((s, g) => s + (g.time_taken_seconds || 0), 0);
 
-      // NEW: add lifetime net from points_transactions
+      // Lifetime net from points_transactions
       const { data: txs } = await supabase
         .from('points_transactions')
         .select('amount')
