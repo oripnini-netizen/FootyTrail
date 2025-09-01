@@ -205,16 +205,6 @@ export default function EliminationTournamentsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
-  // Auto-reload every 30s ONLY if there is a live challenge
-  useEffect(() => {
-    if (!live || live.length === 0) return;
-    const id = setInterval(() => {
-      reloadLists();
-    }, 30_000);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live.length]);
-
   // Realtime subscriptions: reload on any change in elim tables
   useEffect(() => {
     const ch = supabase
@@ -1518,7 +1508,7 @@ const handleStartNow = async () => {
                   winner={celebrationData.winner}
                   stats={celebrationData.stats}
                   ranking={celebrationData.ranking}
-                  potPoints={pot}
+                  stakePoints={tournament.stake_points}
                 />
               )}
             </div>
@@ -1766,27 +1756,34 @@ for (const e of currentEntries) {
 // For each ACTIVE user in this round, sum their points across the block
 const cumRows = [];
 for (const uid of activeIdsForRound) {
+  // played current round?
+  const playedCurrent = entryByUser.has(uid);
   let sum = 0;
   for (const pr of prevBlockRounds) {
     const m = pointsByRound.get(pr.id);
     const v = m ? m.get(uid) ?? 0 : 0;
     sum += v;
   }
-  // ✅ Add the CURRENT round points
-  sum += currentPointsMap.get(uid) ?? 0;
+  // ✅ Add the CURRENT round points only if the user has actually played it;
+  // otherwise we will display "-" to distinguish "not played yet".
+  if (playedCurrent) {
+    sum += currentPointsMap.get(uid) ?? 0;
+  }
 
   const u = participants.find((p) => p.id === uid);
-  if (u) cumRows.push({ user: u, points: sum });
+  if (u) cumRows.push({ user: u, points: playedCurrent ? sum : null, playedCurrent });
 }
 
-// Highlight logic
-const playedPoints = cumRows.map((row) => Number(row.points ?? 0));
+// Highlight logic (consider only those who have played the CURRENT round)
+const playedPoints = cumRows
+  .filter((row) => row.playedCurrent && Number.isFinite(row.points))
+  .map((row) => Number(row.points));
 const hasAnyPlayed = playedPoints.length > 0;
 const maxPts = hasAnyPlayed ? Math.max(...playedPoints) : null;
 const minPts = hasAnyPlayed ? Math.min(...playedPoints) : null;
 const singleValueOnly = hasAnyPlayed && maxPts === minPts;
 
-// Sort display by points desc
+// Sort display by points desc; users who haven't played current round appear last
 const unifiedRows = [...cumRows].sort((a, b) => {
   const ap = Number.isFinite(a.points) ? Number(a.points) : -Infinity;
   const bp = Number.isFinite(b.points) ? Number(b.points) : -Infinity;
@@ -1877,7 +1874,7 @@ const unifiedRows = [...cumRows].sort((a, b) => {
                         <div className="text-xs text-gray-500">No participants.</div>
                       ) : (
                         <ul className="space-y-1">
-                          {unifiedRows.map(({ user: u, points }, idx) => {
+                          {unifiedRows.map(({ user: u, points, playedCurrent }, idx) => {
                             const isMax =
                               points !== null && maxPts !== null && points === maxPts;
                             const isMin =
@@ -1901,7 +1898,7 @@ const unifiedRows = [...cumRows].sort((a, b) => {
                                   {u.full_name || u.email}
                                 </span>
                                 <span className={scoreClass}>
-                                  {Number.isFinite(points) ? `${points} pts` : "0 pts"}
+                                  {playedCurrent ? (Number.isFinite(points) ? `${points} pts` : "0 pts") : "-"}
                                 </span>
                               </li>
                             );
