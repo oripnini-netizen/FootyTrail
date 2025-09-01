@@ -247,7 +247,7 @@ export default function EliminationTournamentsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Load unread elimination notifications ON FIRST VISIT, then mark as read (existing)
+  // Load unread elimination notifications ON FIRST VISIT, then mark as read
   useEffect(() => {
     if (!user?.id) return;
     let cancelled = false;
@@ -255,7 +255,7 @@ export default function EliminationTournamentsPage() {
     async function loadAndMark() {
       const { data: unread } = await supabase
         .from("notifications")
-        .select("id, payload, created_at")
+        .select("id, type, payload, created_at") // <-- IMPORTANT: include type so we can render details
         .eq("user_id", user.id)
         .in("type", [
           "elimination_invite",
@@ -273,8 +273,8 @@ export default function EliminationTournamentsPage() {
           unread.map((n) => ({
             id: n.id,
             created_at: n.created_at,
-            ...n.payload,
-            type: n.type,
+            type: n.type,           // now present
+            ...n.payload,           // flatten payload for convenient access
           }))
         );
 
@@ -329,15 +329,52 @@ export default function EliminationTournamentsPage() {
                       <li key={n.id} className="text-sm text-amber-900">
                         {n.type === "elimination_invite" && (
                           <>
-                            You were added to{" "}
-                            <span className="font-medium">{n.tournament_name}</span>{" "}
-                            by <span className="font-medium">{n.creator_name}</span>
+                            You were invited to{" "}
+                            <span className="font-medium">{n.tournament_name || "a challenge"}</span>{" "}
+                            {n.creator_name ? (
+                              <>
+                                by{" "}
+                                <span className="font-medium">{n.creator_name}</span>
+                              </>
+                            ) : null}
                             {typeof n.round_time_limit_minutes === "number" ? (
                               <>
                                 {" "}
-                                — round time limit{" "}
+                                — round limit{" "}
                                 <span className="font-medium">
                                   {n.round_time_limit_minutes} min
+                                </span>
+                              </>
+                            ) : null}
+                            {Number.isFinite(Number(n.stake_points)) && Number(n.stake_points) > 0 ? (
+                              <>
+                                {" • "}stake{" "}
+                                <span className="font-medium">{Number(n.stake_points)} pts</span>
+                              </>
+                            ) : null}
+                            {Number.isFinite(Number(n.rounds_to_elimination)) && Number(n.rounds_to_elimination) > 0 ? (
+                              <>
+                                {" • "}eliminates every{" "}
+                                <span className="font-medium">
+                                  {Number(n.rounds_to_elimination)}
+                                </span>{" "}
+                                {Number(n.rounds_to_elimination) === 1 ? "round" : "rounds"}
+                              </>
+                            ) : null}
+                            {Number.isFinite(Number(n.min_participants)) && Number(n.min_participants) > 0 ? (
+                              <>
+                                {" • "}min{" "}
+                                <span className="font-medium">
+                                  {Number(n.min_participants)}
+                                </span>{" "}
+                                players
+                              </>
+                            ) : null}
+                            {n.join_deadline ? (
+                              <>
+                                {" • "}join by{" "}
+                                <span className="font-medium">
+                                  {new Date(n.join_deadline).toLocaleString()}
                                 </span>
                               </>
                             ) : null}
@@ -365,13 +402,31 @@ export default function EliminationTournamentsPage() {
                         {n.type === "elim_tournament_started" && (
                           <>
                             <span className="font-medium">{n.tournament_name}</span>{" "}
-                            has started — pot {n.pot} pts.
+                            has started
+                            {Number.isFinite(Number(n.pot)) && Number(n.pot) > 0 ? (
+                              <>
+                                {" — "}pot <span className="font-medium">{Number(n.pot)} pts</span>
+                              </>
+                            ) : null}
+                            {Number.isFinite(Number(n.stake_points)) && Number(n.stake_points) > 0 ? (
+                              <>
+                                {" • "}stake{" "}
+                                <span className="font-medium">{Number(n.stake_points)} pts</span>
+                              </>
+                            ) : null}
                           </>
                         )}
                         {n.type === "elim_tournament_canceled_refund" && (
                           <>
                             <span className="font-medium">{n.tournament_name}</span>{" "}
-                            was canceled, your stake was refunded.
+                            was canceled, your stake was refunded
+                            {Number.isFinite(Number(n.stake_points)) && Number(n.stake_points) > 0 ? (
+                              <>
+                                {" "}
+                                (<span className="font-medium">{Number(n.stake_points)} pts</span>)
+                              </>
+                            ) : null}
+                            .
                           </>
                         )}
                       </li>
@@ -1665,7 +1720,6 @@ const handleStartNow = async () => {
                     : false;
 
                 // -------- ACCUMULATION & RESET FIX (begin) --------
-// Identify the last elimination round BEFORE this one.
 const isElimRoundCheck = (roundObj) =>
   typeof roundObj?.is_elimination === "boolean"
     ? roundObj.is_elimination
