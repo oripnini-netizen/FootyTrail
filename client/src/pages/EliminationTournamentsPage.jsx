@@ -1664,75 +1664,81 @@ const handleStartNow = async () => {
                     ? entryByUser.has(userId)
                     : false;
 
-                const isElimRoundCheck = (roundObj) =>
-                  typeof roundObj?.is_elimination === "boolean"
-                    ? roundObj.is_elimination
-                    : ((Number(roundObj?.round_number) || 0) % roundsToElim === 0);
+                // -------- ACCUMULATION & RESET FIX (begin) --------
+// Identify the last elimination round BEFORE this one.
+const isElimRoundCheck = (roundObj) =>
+  typeof roundObj?.is_elimination === "boolean"
+    ? roundObj.is_elimination
+    : ((Number(roundObj?.round_number) || 0) % roundsToElim === 0);
 
-                const earlierRounds = rounds.filter(
-                  (rr) => (rr.round_number || 0) < (r.round_number || 0)
-                );
+const earlierRounds = rounds.filter(
+  (rr) => (rr.round_number || 0) < (r.round_number || 0)
+);
 
-                const lastElimBefore = [...earlierRounds]
-                  .reverse()
-                  .find((rr) => isElimRoundCheck(rr));
+const lastElimBefore = [...earlierRounds]
+  .reverse()
+  .find((rr) => isElimRoundCheck(rr));
 
-                const blockStartNumber = lastElimBefore
-                  ? (lastElimBefore.round_number || 0) + 1
-                  : 1;
+// A block starts at round 1 or immediately after the last elimination
+const blockStartNumber = lastElimBefore
+  ? (lastElimBefore.round_number || 0) + 1
+  : 1;
 
-                const prevBlockRounds = earlierRounds.filter(
-                  (rr) =>
-                    (rr.round_number || 0) >= blockStartNumber &&
-                    (rr.round_number || 0) < (r.round_number || 0)
-                );
+// All previous rounds in the block
+const prevBlockRounds = earlierRounds.filter(
+  (rr) =>
+    (rr.round_number || 0) >= blockStartNumber &&
+    (rr.round_number || 0) < (r.round_number || 0)
+);
 
-                const pointsByRound = new Map();
-                for (const pr of prevBlockRounds) {
-                  const ents = entriesByRound[pr.id] || [];
-                  const m = new Map();
-                  for (const e of ents) {
-                    m.set(e.user_id, Number(e.points_earned ?? 0));
-                  }
-                  
-                // Include CURRENT round points so each card shows accumulated points up to and including this round
-                const currentEntries = entriesByRound[r.id] || [];
-                const currentPointsMap = new Map();
-                for (const e of currentEntries) {
-                  currentPointsMap.set(e.user_id, Number(e.points_earned ?? 0));
-                }
-pointsByRound.set(pr.id, m);
-                }
+// Build a per-round map of user -> points for previous rounds in the block
+const pointsByRound = new Map();
+for (const pr of prevBlockRounds) {
+  const ents = entriesByRound[pr.id] || [];
+  const m = new Map();
+  for (const e of ents) {
+    m.set(e.user_id, Number(e.points_earned ?? 0));
+  }
+  pointsByRound.set(pr.id, m);
+}
 
-                const cumRows = [];
-                for (const uid of activeIdsForRound) {
-                  let sum = 0;
-                  for (const pr of prevBlockRounds) {
-                    const m = pointsByRound.get(pr.id);
-                    const v = m ? m.get(uid) ?? 0 : 0;
-                    sum += v;
-                  }
-                  
-                  // Add points for the CURRENT round (if any)
-                  {
-                    const vCur = currentPointsMap ? (currentPointsMap.get(uid) ?? 0) : 0;
-                    sum += vCur;
-                  }
-const u = participants.find((p) => p.id === uid);
-                  if (u) cumRows.push({ user: u, points: sum });
-                }
+// ✅ Include CURRENT round points so each card shows accumulated points
+const currentEntries = entriesByRound[r.id] || [];
+const currentPointsMap = new Map();
+for (const e of currentEntries) {
+  currentPointsMap.set(e.user_id, Number(e.points_earned ?? 0));
+}
 
-                const playedPoints = cumRows.map((row) => Number(row.points ?? 0));
-                const hasAnyPlayed = playedPoints.length > 0;
-                const maxPts = hasAnyPlayed ? Math.max(...playedPoints) : null;
-                const minPts = hasAnyPlayed ? Math.min(...playedPoints) : null;
-                const singleValueOnly = hasAnyPlayed && maxPts === minPts;
+// For each ACTIVE user in this round, sum their points across the block
+const cumRows = [];
+for (const uid of activeIdsForRound) {
+  let sum = 0;
+  for (const pr of prevBlockRounds) {
+    const m = pointsByRound.get(pr.id);
+    const v = m ? m.get(uid) ?? 0 : 0;
+    sum += v;
+  }
+  // ✅ Add the CURRENT round points
+  sum += currentPointsMap.get(uid) ?? 0;
 
-                const unifiedRows = [...cumRows].sort((a, b) => {
-                  const ap = Number.isFinite(a.points) ? Number(a.points) : -Infinity;
-                  const bp = Number.isFinite(b.points) ? Number(b.points) : -Infinity;
-                  return bp - ap;
-                });
+  const u = participants.find((p) => p.id === uid);
+  if (u) cumRows.push({ user: u, points: sum });
+}
+
+// Highlight logic
+const playedPoints = cumRows.map((row) => Number(row.points ?? 0));
+const hasAnyPlayed = playedPoints.length > 0;
+const maxPts = hasAnyPlayed ? Math.max(...playedPoints) : null;
+const minPts = hasAnyPlayed ? Math.min(...playedPoints) : null;
+const singleValueOnly = hasAnyPlayed && maxPts === minPts;
+
+// Sort display by points desc
+const unifiedRows = [...cumRows].sort((a, b) => {
+  const ap = Number.isFinite(a.points) ? Number(a.points) : -Infinity;
+  const bp = Number.isFinite(b.points) ? Number(b.points) : -Infinity;
+  return bp - ap;
+});
+// -------- ACCUMULATION & RESET FIX (end) --------
 
                 const isElimRound =
                   typeof r.is_elimination === "boolean"
