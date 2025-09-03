@@ -96,9 +96,10 @@ export default function EliminationTournamentsPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
 
   const [live, setLive] = useState([]);
+  const [lobby, setLobby] = useState([]);
   const [finished, setFinished] = useState([]);
-  const [loading, setLoading] = useState({ live: true, finished: true });
-  const [error, setError] = useState({ live: "", finished: "" });
+  const [loading, setLoading] = useState({ lobby: true, live: true, finished: true });
+  const [error, setError] = useState({ lobby: "", live: "", finished: "" });
 
   // Notifications banner (existing)
   const [notifBanner, setNotifBanner] = useState([]);
@@ -140,12 +141,38 @@ export default function EliminationTournamentsPage() {
   // Reload both lists (used on mount and after create || advance)
   const reloadLists = async () => {
     if (!user?.id) {
+      setLobby([]);
       setLive([]);
       setFinished([]);
-      setLoading({ live: false, finished: false });
-      setError({ live: "", finished: "" });
+      setLoading({ lobby: false, live: false, finished: false });
+      setError({ lobby: "", live: "", finished: "" });
       return;
     }
+
+    
+// Lobby
+setLoading((s) => ({ ...s, lobby: true }));
+setError((e) => ({ ...e, lobby: "" }));
+try {
+  const { data, error: err } = await supabase
+    .from("elimination_tournaments")
+    .select(
+      "id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id"
+    )
+    .eq("status", "lobby")
+    .order("created_at", { ascending: false });
+  if (err) {
+    setError((e) => ({ ...e, lobby: err.message || "Failed to load." }));
+    setLobby([]);
+  } else {
+    setLobby(Array.isArray(data) ? data : []);
+  }
+} catch {
+  setError((e) => ({ ...e, lobby: "Failed to load." }));
+  setLobby([]);
+} finally {
+  setLoading((s) => ({ ...s, lobby: false }));
+}
 
     // Live
     setLoading((s) => ({ ...s, live: true }));
@@ -469,8 +496,37 @@ export default function EliminationTournamentsPage() {
         <section
           className="grid grid-cols-1 gap-4 sm:grid-cols-1 lg:grid-cols-1"
           aria-live="polite"
-          aria-busy={loading.live || loading.finished}
+          aria-busy={loading.lobby || loading.live || loading.finished}
         >
+
+{/* Lobby */}
+{loading.lobby ? (
+  <>
+    <SkeletonCard />
+    <SkeletonCard />
+    <SkeletonCard />
+  </>
+) : error.lobby ? (
+  <ErrorCard
+    title="Couldn't load lobby tournaments"
+    message={error.lobby}
+  />
+) : (
+  <>
+    {lobby.map((t) => (
+      <TournamentCard
+        key={t.id}
+        tournament={t}
+        compIdToLabel={compIdToLabel}
+        onAdvanced={reloadLists}
+        defaultCollapsed={false}
+        refreshToken={refreshTick}
+        hardRefreshToken={hardRefreshTick}
+      />
+    ))}
+  </>
+)}
+
           {/* Live */}
           {loading.live ? (
             <>
