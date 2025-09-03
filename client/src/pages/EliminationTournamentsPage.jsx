@@ -2983,8 +2983,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
               </div>
               )}
 
-              {)}
-/* Round time */}
+{/* Round time */}
               <div className="rounded-xl shadow-sm border bg-white p-4">
                 <label className="block text-sm font-semibold text-gray-700">
                   Round Time Limit (minutes)
