@@ -1692,7 +1692,7 @@ const handleStartNow = async () => {
           </div>
 
           {/* NEW: Invite status + Accept/Decline */}
-          {isLive && (
+          {(isLobby || isLive) && (
             <div className="mt-3 rounded-lg border bg-slate-50 p-3">
               <div className="flex items-center gap-3 flex-wrap">
                 <div className="text-xs font-semibold text-gray-700">Invites</div>
