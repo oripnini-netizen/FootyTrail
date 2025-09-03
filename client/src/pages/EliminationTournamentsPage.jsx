@@ -1508,8 +1508,7 @@ const handleStartNow = async () => {
   // UI bits for accept controls
   const needMore = Math.max(0, Number(tournament.stake_points || 0) - Number(availableToday || 0));
   const canAfford = availableToday === null ? true : needMore <= 0;
-  const showAcceptControls =
-    isLobby && myInviteStatus === "pending" && (!!joinDeadline ? new Date(joinDeadline).getTime() > Date.now() : true);
+  const showAcceptControls = isLobby && myInviteStatus === "pending";
 
   return (
     <div className="rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md">
@@ -1692,7 +1691,7 @@ const handleStartNow = async () => {
           </div>
 
           {/* NEW: Invite status + Accept/Decline */}
-          {(isLobby || isLive) && (
+          {isLobby && (
             <div className="mt-3 rounded-lg border bg-slate-50 p-3">
               <div className="flex items-center gap-3 flex-wrap">
                 <div className="text-xs font-semibold text-gray-700">Invites</div>
