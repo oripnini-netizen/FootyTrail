@@ -105,6 +105,7 @@ export default function EliminationTournamentsPage() {
 
   // Force children to refetch on page reloads / realtime updates
   const [refreshTick, setRefreshTick] = useState(0);
+  const [hardRefreshTick, setHardRefreshTick] = useState(0);
 
   // For pretty filter chips on cards
   const [groupedCompetitions, setGroupedCompetitions] = useState({});
@@ -217,7 +218,15 @@ export default function EliminationTournamentsPage() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "elimination_rounds" },
-        () => reloadLists()
+        (payload) => {
+          const wasOpen = payload?.old?.closed_at == null;
+          const nowClosed = payload?.new?.closed_at != null;
+          const isInsert = payload?.eventType === "INSERT";
+          if ((wasOpen && nowClosed) || isInsert) {
+            setHardRefreshTick((t) => t + 1);
+            reloadLists();
+          }
+        }
       )
       .on(
         "postgres_changes",
@@ -472,7 +481,7 @@ export default function EliminationTournamentsPage() {
                   compIdToLabel={compIdToLabel}
                   onAdvanced={reloadLists}
                   defaultCollapsed={false}
-                  refreshToken={refreshTick}
+                  refreshToken={refreshTick} hardRefreshToken={hardRefreshTick}
                 />
               ))}
             </>
@@ -499,7 +508,7 @@ export default function EliminationTournamentsPage() {
                   compIdToLabel={compIdToLabel}
                   onAdvanced={reloadLists}
                   defaultCollapsed={t.id === mostRecentFinishedId ? false : true}
-                  refreshToken={refreshTick}
+                  refreshToken={refreshTick} hardRefreshToken={hardRefreshTick}
                 />
               ))}
             </>
@@ -952,7 +961,7 @@ function TournamentCard({
     return () => {
       cancelled = true;
     };
-  }, [tournament.id, refreshToken, rtTick]);
+  }, [tournament.id, refreshToken, rtTick, hardRefreshToken]);
 
   
   // Realtime: update this card when its round entries change
@@ -2455,6 +2464,13 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
       if (error) throw new Error(error.message || "Failed to create tournament.");
       const createdId = data || null;
 
+      // Ensure a true "friendly" (0 stake) even if server defaults to 1
+      if (createdId && Math.floor(Number(stakePoints)) === 0) {
+        await supabase
+          .from("elimination_tournaments")
+          .update({ stake_points: 0 })
+          .eq("id", createdId);
+      }
       // Notify invitees (existing behavior — complements DB lifecycle notifications)
       if (invites.length > 0) {
         const notifRows = invites.map((u) => ({
