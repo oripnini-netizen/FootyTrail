@@ -1176,7 +1176,28 @@ useEffect(() => {
     return m;
   }, [participants]);
 
-  const isPublic = ((tournament?.filters || {}).visibility || "private") === "public";
+  
+  // Display users for a given round: if tournament is finished, show all users who posted an entry;
+  // otherwise show currently active users for that round. Each item includes user meta + points for that round.
+  const getDisplayUsersForRound = (round) => {
+    if (!round?.id) return [];
+    const entries = entriesByRound[round.id] || [];
+    const pointsMap = new Map(entries.map(e => [e.user_id, Number(e.points_earned ?? 0)]));
+    if (isFinished) {
+      const ids = Array.from(new Set(entries.map(e => e.user_id)));
+      return ids.map(uid => ({
+        ...(participantsMap.get(uid) || { id: uid }),
+        points: pointsMap.get(uid) ?? null,
+      }));
+    } else {
+      const ids = Array.from(activeUsersByRound.get(round.id) || []);
+      return ids.map(uid => ({
+        ...(participantsMap.get(uid) || { id: uid }),
+        points: pointsMap.get(uid) ?? null,
+      }));
+    }
+  };
+const isPublic = ((tournament?.filters || {}).visibility || "private") === "public";
   const amParticipant = participantsMap.has(userId);
 
 
@@ -2034,7 +2055,7 @@ const handleStartNow = async () => {
 
                 const activeCount = (isFinished ? entries.length : activeIdsForRound.size);
 
-                const entriesFromActive = isFinished ? entries : entries.filter((e) => displayIdsForRound.has(e.user_id));
+                const entriesFromActive = isFinished ? entries : entries.filter((e) => (activeUsersByRound.get(r.id) || new Set()).has(e.user_id));
 
                 const now = Date.now();
                 const endsAt = r.ends_at ? new Date(r.ends_at).getTime() : null;
@@ -2094,7 +2115,7 @@ for (const e of currentEntries) {
 
 // For each ACTIVE user in this round, sum their points across the block
 const cumRows = [];
-for (const uid of displayIdsForRound) {
+for (const uid of (isFinished ? new Set(entries.map(e => e.user_id)) : (activeUsersByRound.get(r.id) || new Set()))) {
   const playedCurrent = entryByUser.has(uid);
   let sumPrev = 0;
   for (const pr of prevBlockRounds) {
