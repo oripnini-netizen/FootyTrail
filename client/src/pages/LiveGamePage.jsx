@@ -1,4 +1,3 @@
-// src/pages/LiveGamePage.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { suggestNames, saveGameCompleted, fetchTransfers, API_BASE } from '../api';
@@ -1228,10 +1227,22 @@ function TransfersList({ transfers }) {
     <ul className="space-y-3">
       {transfers.map((t, idx) => {
         const fee = t.valueRaw ?? '';
+        // ✅ Detect future-dated transfers; highlight card + chip
+        const isFuture = (() => {
+          if (!t?.date) return false;
+          const d = new Date(t.date);
+          if (isNaN(d.getTime())) return false;
+          const now = new Date();
+          return d > now;
+        })();
+
         return (
           <li
             key={`${t.date || t.season || 'row'}-${idx}`}
-            className="grid grid-cols-12 gap-3 items-center border rounded-lg p-3"
+            className={classNames(
+              'grid grid-cols-12 gap-3 items-center border rounded-lg p-3',
+              isFuture && 'bg-gray-50'
+            )}
           >
             {/* Season + Date (centered vertical stack) */}
             <div className="col-span-12 md:col-span-3 flex flex-col items-center text-center gap-1">
@@ -1256,6 +1267,7 @@ function TransfersList({ transfers }) {
                 <span>{formatFee(fee)}</span>
               </Chip>
               {t.type ? <Chip tone="amber">{t.type}</Chip> : null}
+              {isFuture ? <Chip tone="blue">Future Transfer</Chip> : null}
             </div>
           </li>
         );
