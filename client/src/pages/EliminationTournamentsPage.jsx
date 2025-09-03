@@ -1013,6 +1013,7 @@ function TournamentCard({
   const dateStr = createdAt.toLocaleString();
   const isLobby = tournament.status === "lobby";
   const isLive = tournament.status === "live";
+  const isFinished = tournament.status === "finished";
   const timeLimitMin = Math.round(
     (tournament.round_time_limit_seconds || 0) / 60
   );
@@ -1692,7 +1693,7 @@ const handleStartNow = async () => {
     ) && (!!joinDeadline ? new Date(joinDeadline).getTime() > Date.now() : true);
 
   return (
-    <div className="rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md r
+    <div className= relative"rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md rrelative">
         {toast && (
           <div className="pointer-events-none absolute right-3 top-3 z-20">
             <div className="rounded-md bg-emerald-600/95 text-white px-3 py-2 text-xs shadow-lg">
@@ -1700,7 +1701,7 @@ const handleStartNow = async () => {
             </div>
           </div>
         )}
-elative">
+relative">
       {/* Card header with collapse toggle */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -2033,11 +2034,9 @@ elative">
                   activeUsersByRound.get(r.id) ||
                   new Set(participants.filter(p => ((p.invite_status || '').toLowerCase() === 'accepted') && (p.state || 'active') !== 'eliminated').map(p => p.id));
 
-                const activeCount = activeIdsForRound.size;
+                const activeCount = (isFinished ? entries.length : activeIdsForRound.size);
 
-                const entriesFromActive = entries.filter((e) =>
-                  activeIdsForRound.has(e.user_id)
-                );
+                const entriesFromActive = isFinished ? entries : entries.filter((e) => displayIdsForRound.has(e.user_id));
 
                 const now = Date.now();
                 const endsAt = r.ends_at ? new Date(r.ends_at).getTime() : null;
@@ -2047,7 +2046,7 @@ elative">
                   entriesFromActive.length < activeCount;
 
                 const mePlayed =
-                  userId && activeIdsForRound.has(userId)
+                  userId && (isFinished ? entries.some(e=>e.user_id===userId) : activeIdsForRound.has(userId))
                     ? entryByUser.has(userId)
                     : false;
 
@@ -2097,7 +2096,7 @@ for (const e of currentEntries) {
 
 // For each ACTIVE user in this round, sum their points across the block
 const cumRows = [];
-for (const uid of activeIdsForRound) {
+for (const uid of displayIdsForRound) {
   const playedCurrent = entryByUser.has(uid);
   let sumPrev = 0;
   for (const pr of prevBlockRounds) {
