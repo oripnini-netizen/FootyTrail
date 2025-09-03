@@ -2801,7 +2801,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="e.g., Friday Night Knockout"
-                  className="mt-1 w-full rounded-md border border-gray-300 bg.white px-3 py-2 text-sm text-gray-900 outline-none focus:ring-2 focus:ring-green-700"
+                  className="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:ring-2 focus:ring-green-700"
                 />
                 {errors.name && (
                   <p className="mt-1 text-xs text-red-600">{errors.name}</p>
@@ -2848,9 +2848,8 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                 totalCount={totalCount}
               />
 
-              {             {visibility === "private" && (
- {/* Visibility */}
-              <div className="rounded-xl shadow-sm border bg.white p-4">
+              {/* Visibility */}
+              <div className="rounded-xl shadow-sm border bg-white p-4">
                 <label className="block text-sm font-semibold text-gray-700 mb-2">Challenge Type</label>
                 <div className="flex items-center gap-4 text-sm">
                   <label className="inline-flex items-center gap-2">
@@ -2865,8 +2864,8 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                 <p className="mt-2 text-xs text-gray-600">Public challenges appear to all users in the lobby. Private challenges are visible only to invited users.</p>
               </div>
 
-/* Invites */}
-              <div className="rounded-xl shadow-sm border bg.white p-4">
+              {/* Invites */}
+              <div className="rounded-xl shadow-sm border bg-white p-4">
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
                   Invite users (by email)
                 </label>
@@ -2974,10 +2973,8 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                   <p className="mt-2 text-xs text-red-600">{errors.invites}</p>
                 )}
               </div>
-
-              {)}
-/* Round time */}
-              <div className="rounded-xl shadow-sm border bg.white p-4">
+              {/* Round time */}
+              <div className="rounded-xl shadow-sm border bg-white p-4">
                 <label className="block text-sm font-semibold text-gray-700">
                   Round Time Limit (minutes)
                 </label>
@@ -2998,8 +2995,8 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
               </div>
 
               {/* Rounds to Elimination */}
-              <div className="rounded-xl shadow-sm border bg.white p-4">
-                <label className="block text.sm font-semibold text-gray-700">
+              <div className="rounded-xl shadow-sm border bg-white p-4">
+                <label className="block text-sm font-semibold text-gray-700">
                   Rounds to Elimination (1–5)
                 </label>
                 <input
@@ -3022,7 +3019,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
               </div>
 
               {/* NEW: Stake & Lobby settings */}
-              <div className="rounded-xl shadow-sm border bg.white p-4">
+              <div className="rounded-xl shadow-sm border bg-white p-4">
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
                     <label className="block text-sm font-semibold text-gray-700">
@@ -3128,7 +3125,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
 /* ----------------- Difficulty Filters section (reused) ----------------- */
 function Section({ title, icon, collapsed, onToggle, actions, children }) {
   return (
-    <div className="rounded-lg border bg.white/60">
+    <div className="rounded-lg border bg-white/60">
       <div className="flex items-center justify-between px-3 py-2">
         <button
           type="button"
@@ -3200,7 +3197,7 @@ function SelectedChipsRow({
         {selectedSeasons?.map((s) => (
           <span
             key={`season-${s}`}
-            className="inline-flex items.center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800"
+            className="inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800"
           >
             {String(s)}
             {onRemoveSeason && (
@@ -3358,7 +3355,7 @@ function DifficultyFilters(props) {
                     e.stopPropagation();
                     selectAllCompetitions();
                   }}
-                  className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg.white hover:bg-gray-50"
+                  className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
                 >
                   <CheckSquare className="h-3 w-3" /> Select All
                 </button>
