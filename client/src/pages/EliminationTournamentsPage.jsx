@@ -834,13 +834,7 @@ function LoserFinalCard({ tournamentName, winner, stats, ranking, stakePoints })
 /* ------------------------------------------------------------
    Tournament Card
 ------------------------------------------------------------ */
-function TournamentCard({
-  tournament,
-  compIdToLabel,
-  onAdvanced,
-  defaultCollapsed = false,
-  refreshToken,
-}) {
+function TournamentCard({tournament,compIdToLabel,onAdvanced,defaultCollapsed = false,refreshToken,hardRefreshToken}) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const userId = user?.id || null;
