@@ -2043,7 +2043,7 @@ const handleStartNow = async () => {
           {/* Rounds list (unchanged except cosmetics) */}
           <div className="mt-4 space-y-3">
             {rounds.length === 0 ? (
-              <div className="text-sm text-gray-500">No rounds yet.</div>
+              <div className="text-sm text-gray-500">Waiting for creator to start the challenge...</div>
             ) : (
               rounds.map((r) => {
                 const entries = entriesFor(r.id);
