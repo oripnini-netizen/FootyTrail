@@ -1028,7 +1028,8 @@ function TournamentCard({
 // NEW
 
   // NEW: card collapse, filters collapse
-  const [cardCollapsed, setCardCollapsed] = useState(Boolean(defaultCollapsed));
+    const [toast, setToast] = useState(null);
+const [cardCollapsed, setCardCollapsed] = useState(Boolean(defaultCollapsed));
   const [filtersCollapsed, setFiltersCollapsed] = useState(true);
 
   // Fetch participants + rounds + entries
@@ -1609,7 +1610,6 @@ try {
   }, [rounds, entriesByRound, participants, tournament.id, userId, onAdvanced]);
 
   // NEW: Accept / Decline handlers
-    const [toast, setToast] = useState(null);
 const [accepting, setAccepting] = useState(false);
   const [declining, setDeclining] = useState(false);
   const [startNowBusy, setStartNowBusy] = useState(false);
