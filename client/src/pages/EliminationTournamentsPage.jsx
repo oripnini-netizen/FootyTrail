@@ -232,6 +232,15 @@ try {
     reloadLists();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
+  // Auto-refresh every 30s ONLY when there are lobby/live tournaments
+  useEffect(() => {
+    if ((live.length || lobby.length) === 0) return;
+    const id = setInterval(() => {
+      reloadLists();
+    }, 30000);
+    return () => clearInterval(id);
+  }, [live.length, lobby.length]);
+
 
   // Realtime subscriptions: reload on any change in elim tables
   useEffect(() => {
@@ -575,7 +584,7 @@ try {
                   tournament={t}
                   compIdToLabel={compIdToLabel}
                   onAdvanced={reloadLists}
-                  defaultCollapsed={true}
+                  defaultCollapsed={!(lobby.length === 0 && live.length === 0 && t.id === mostRecentFinishedId)}
                   refreshToken={refreshTick}
                   hardRefreshToken={hardRefreshTick}
                 />
