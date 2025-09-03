@@ -1289,9 +1289,11 @@ function TournamentCard({
       const r = open[0];
       if (!r) return;
 
-      const activeCount =
-        participants.filter((p) => (p.state || "").toLowerCase() === "active")
-          .length || participants.length;
+      const activeCount = participants.filter(
+  (p) =>
+    ((p.invite_status || "").toLowerCase() === "accepted") &&
+    (p.state || "active") !== "eliminated"
+).length;
 
       const entries = entriesByRound[r.id] || [];
       const everyonePlayed = entries.length >= activeCount;
@@ -1332,6 +1334,76 @@ function TournamentCard({
         }
 
         const { error } = await supabase.rpc("finalize_round", { p_round_id: r.id });
+if (error) {
+  const msg = String(error?.message || "").toLowerCase();
+  const isNotFound = msg.includes("not found") && msg.includes("round");
+  if (error.code === "P0001" && isNotFound) {
+    await finalizeLatestRoundForTournament(tournament.id);
+  } else if (error.code === "PGRST202") {
+    console.warn("[elim] finalize_round not in schema cache yet; will retry");
+  } else {
+    throw error;
+  }
+}
+// Fallback to spawn next round if none exists (e.g., all no-shows -> tie)
+try {
+  if (!laterRoundExists) {
+    const openIdAfter = await getLatestOpenRoundIdForTournament(tournament.id);
+    if (!openIdAfter) {
+      if (!nextPlayerId) {
+        const usedIds = new Set((rounds || []).map((x) => x?.player_id).filter(Boolean));
+        const maxAttempts2 = 24;
+        for (let i = 0; i < maxAttempts2; i++) {
+          const candidate2 = await getRandomPlayer(
+            {
+              ...(tournament.filters || {}),
+              userId,
+              excludePlayerIds: Array.from(usedIds),
+            },
+            userId
+          );
+          const cand2 = candidate2?.id || null;
+          if (cand2 && !usedIds.has(cand2)) {
+            nextPlayerId = cand2;
+            break;
+          }
+        }
+      }
+      if (nextPlayerId) {
+        const nextNumber = (r.round_number || 0) + 1;
+        const isElimNext = (nextNumber % roundsToElim === 0);
+        const endsAtIso =
+          Number(tournament.round_time_limit_seconds || 0) > 0
+            ? new Date(Date.now() + Number(tournament.round_time_limit_seconds) * 1000).toISOString()
+            : null;
+        const insertRes = await supabase
+          .from("elimination_rounds")
+          .insert([{
+            tournament_id: tournament.id,
+            round_number: nextNumber,
+            started_at: new Date().toISOString(),
+            ends_at: endsAtIso,
+            player_id: nextPlayerId,
+            is_elimination: isElimNext,
+          }])
+          .select("id");
+        if (insertRes.error) {
+          console.warn("[elim] next round insert failed (likely RLS)", insertRes.error);
+        } else {
+          const { data: roundRows2 } = await supabase
+            .from("elimination_rounds")
+            .select("id, round_number, started_at, ends_at, closed_at, player_id, is_elimination")
+            .eq("tournament_id", tournament.id)
+            .order("round_number", { ascending: true });
+          if (Array.isArray(roundRows2)) setRounds(roundRows2);
+        }
+      }
+    }
+  }
+} catch (spawnErr) {
+  console.warn("[elim] next-round spawn attempt failed", spawnErr);
+}
+
         if (error) {
           const msg = String(error?.message || "").toLowerCase();
           const isNotFound = msg.includes("not found") && msg.includes("round");
@@ -1520,7 +1592,7 @@ const handleStartNow = async () => {
           <span className="text-gray-400">/</span>
           <span>Min required: {Math.max(2, Number(tournament.min_participants || 2))}</span>
 
-          {canStartNow && (
+          {canStartNow && rounds.length === 0 && (
             <button
               type="button"
               onClick={handleStartNow}
@@ -1854,40 +1926,40 @@ for (const e of currentEntries) {
 // For each ACTIVE user in this round, sum their points across the block
 const cumRows = [];
 for (const uid of activeIdsForRound) {
-  // played current round?
   const playedCurrent = entryByUser.has(uid);
-  let sum = 0;
+  let sumPrev = 0;
   for (const pr of prevBlockRounds) {
     const m = pointsByRound.get(pr.id);
     const v = m ? m.get(uid) ?? 0 : 0;
-    sum += v;
+    sumPrev += v;
   }
-  // ✅ Add the CURRENT round points only if the user has actually played it;
-  // otherwise we will display "-" to distinguish "not played yet".
-  if (playedCurrent) {
-    sum += currentPointsMap.get(uid) ?? 0;
-  }
+  const currentPts = currentPointsMap.get(uid) ?? 0;
+  const displayPoints = playedCurrent ? (sumPrev + currentPts) : null; // show '-' if not played
+  const pointsForElim = sumPrev + (playedCurrent ? currentPts : 0);    // treat no-show as 0
 
   const u = participants.find((p) => p.id === uid);
-  if (u) cumRows.push({ user: u, points: playedCurrent ? sum : null, playedCurrent });
+  if (u) cumRows.push({ user: u, points: displayPoints, pointsForElim, playedCurrent });
 }
 
-// Highlight logic (consider only those who have played the CURRENT round)
-const playedPoints = cumRows
-  .filter((row) => row.playedCurrent && Number.isFinite(row.points))
-  .map((row) => Number(row.points));
-const hasAnyPlayed = playedPoints.length > 0;
-const maxPts = hasAnyPlayed ? Math.max(...playedPoints) : null;
-const minPts = hasAnyPlayed ? Math.min(...playedPoints) : null;
-const singleValueOnly = hasAnyPlayed && maxPts === minPts;
+// Highlight min/max based on elimination totals (include zeros for no-shows)
+const elimValues = cumRows.map((row) => Number(row.pointsForElim ?? 0));
+const hasAnyValues = elimValues.length > 0;
+const maxPts = hasAnyValues ? Math.max(...elimValues) : null;
+const minPts = hasAnyValues ? Math.min(...elimValues) : null;
+const singleValueOnly = hasAnyValues && maxPts === minPts;
 
-// Sort display by points desc; users who haven't played current round appear last
+// Sort primarily by elimination totals (desc), then those who played current round first
 const unifiedRows = [...cumRows].sort((a, b) => {
-  const ap = Number.isFinite(a.points) ? Number(a.points) : -Infinity;
-  const bp = Number.isFinite(b.points) ? Number(b.points) : -Infinity;
-  return bp - ap;
+  const ap = Number(a.pointsForElim ?? 0);
+  const bp = Number(b.pointsForElim ?? 0);
+  if (bp !== ap) return bp - ap;
+  if (a.playedCurrent !== b.playedCurrent) return a.playedCurrent ? -1 : 1;
+  const an = (a.user.full_name || a.user.email || "").toLowerCase();
+  const bn = (b.user.full_name || b.user.email || "").toLowerCase();
+  return an.localeCompare(bn);
 });
 // -------- ACCUMULATION & RESET FIX (end) --------
+
 
                 const isElimRound =
                   typeof r.is_elimination === "boolean"
@@ -1972,11 +2044,9 @@ const unifiedRows = [...cumRows].sort((a, b) => {
                         <div className="text-xs text-gray-500">No participants.</div>
                       ) : (
                         <ul className="space-y-1">
-                          {unifiedRows.map(({ user: u, points, playedCurrent }, idx) => {
-                            const isMax =
-                              points !== null && maxPts !== null && points === maxPts;
-                            const isMin =
-                              points !== null && minPts !== null && points === minPts;
+                          {unifiedRows.map(({ user: u, points, pointsForElim, playedCurrent }, idx) => {
+                            const isMax = maxPts !== null && pointsForElim === maxPts;
+                            const isMin = minPts !== null && pointsForElim === minPts;
 
                             const scoreClass =
                               points === null
