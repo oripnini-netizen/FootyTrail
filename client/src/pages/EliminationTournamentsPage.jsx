@@ -136,7 +136,7 @@ export default function EliminationTournamentsPage() {
 
   const handleOpenCreate = () => setShowCreateModal(true);
 
-  // Reload both lists (used on mount and after create or advance)
+  // Reload both lists (used on mount and after create || advance)
   const reloadLists = async () => {
     if (!user?.id) {
       setLive([]);
@@ -227,6 +227,12 @@ export default function EliminationTournamentsPage() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "elimination_participants" },
+        () => reloadLists()
+      )
+      
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "point_transactions" },
         () => reloadLists()
       )
       .subscribe();
@@ -1533,8 +1539,52 @@ const handleStartNow = async () => {
 
             {!filtersCollapsed && (
               <div className="mt-2">
-                {/* competitions, seasons, mv */}
-                {/* (unchanged chips rendering below) */}
+                {(() => {
+                  const f = tournament.filters || {};
+                  const compIds = Array.isArray(f.competitions) ? f.competitions : [];
+                  const seasons = Array.isArray(f.seasons) ? f.seasons : [];
+                  const mv = Number(f.minMarketValue || 0);
+
+                  const hasAny =
+                    (compIds.length || 0) + (seasons.length || 0) + (mv > 0 ? 1 : 0) > 0;
+
+                  if (!hasAny) {
+                    return (
+                      <div className="rounded-md border border-dashed p-3 text-xs text-gray-600 bg-white">
+                        No filters (all players).
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="rounded-md border p-3 bg-white">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {compIds.map((id) => (
+                          <span
+                            key={`comp-${id}`}
+                            className="inline-flex items-center gap-2 px-2 py-1 rounded-full text-[11px] bg-green-100 text-green-800"
+                            title={compIdToLabel?.[String(id)] || `Competition ${id}`}
+                          >
+                            {compIdToLabel?.[String(id)] || `Competition ${id}`}
+                          </span>
+                        ))}
+                        {seasons.map((s) => (
+                          <span
+                            key={`season-${s}`}
+                            className="inline-flex items-center gap-2 px-2 py-1 rounded-full text-[11px] bg-green-100 text-green-800"
+                          >
+                            {String(s)}
+                          </span>
+                        ))}
+                        {mv > 0 && (
+                          <span className="inline-flex items-center gap-2 px-2 py-1 rounded-full text-[11px] bg-green-100 text-green-800">
+                            Min MV: €{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(Number(mv)).replace('€', '').trim()}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>
@@ -1723,7 +1773,7 @@ const lastElimBefore = [...earlierRounds]
   .reverse()
   .find((rr) => isElimRoundCheck(rr));
 
-// A block starts at round 1 or immediately after the last elimination
+// A block starts at round 1 || immediately after the last elimination
 const blockStartNumber = lastElimBefore
   ? (lastElimBefore.round_number || 0) + 1
   : 1;
@@ -2029,7 +2079,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   const [roundsToElimination, setRoundsToElimination] = useState(1);
 
   // NEW: Stakes & lobby settings
-  const [stakePoints, setStakePoints] = useState(50);
+  const [stakePoints, setStakePoints] = useState(0);
   const [minParticipants, setMinParticipants] = useState(2);
   const [joinWindowMinutes, setJoinWindowMinutes] = useState(60);
 
@@ -2328,9 +2378,9 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
       next.invites = "Invite at least one other user (minimum 2 participants).";
     }
     const stake = Math.floor(Number(stakePoints));
-    if (!Number.isFinite(stake) || stake <= 0) {
-      next.stakePoints = "Stake must be a positive integer.";
-    }
+    if (!Number.isFinite(stake) || stake < 0):
+      next.stakePoints = "Stake must be 0 || a positive integer.";
+
     const minP = Math.floor(Number(minParticipants));
     if (!Number.isFinite(minP) || minP < 2) {
       next.minParticipants = "Minimum participants must be at least 2.";
@@ -3018,7 +3068,7 @@ function DifficultyFilters(props) {
                   onChange={(e) => setCompSearch(e.target.value)}
                   onFocus={() => setCompSugOpen(compSug.length > 0)}
                   onKeyDown={handleCompSearchKeyDown}
-                  placeholder="Search country or competition…"
+                  placeholder="Search country || competition…"
                   className="w-full outline-none text-sm"
                 />
               </div>
