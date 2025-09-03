@@ -519,7 +519,6 @@ try {
                                 (<span className="font-medium">{Number(n.stake_points)} pts</span>)
                               </>
                             ) : null}
-                            .
                           </>
                         )}
                       </li>
