@@ -825,7 +825,7 @@ function WinnerCelebrationCard({ tournamentName, winner, stats, ranking, potPoin
               <div className="text-xs text-gray-500">Time Played</div>
               <div className="text-lg font-semibold text-gray-900">{stats.timePlayed}</div>
             </div>
-            <div className="rounded-lg bg.white border p-3">
+            <div className="rounded-lg bg-white border p-3">
               <div className="text-xs text-gray-500">Participants</div>
               <div className="text-lg font-semibold text-gray-900">{stats.participants}</div>
             </div>
