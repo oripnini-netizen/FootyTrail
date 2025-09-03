@@ -2688,7 +2688,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
     if (!currentUser?.id) {
       next.user = "You must be logged in to create a tournament.";
     }
-    if ((invites || []).length < 1) {
+    if (visibility === "private" && (invites || []).length < 1) {
       next.invites = "Invite at least one other user (minimum 2 participants).";
     }
     const stake = Math.floor(Number(stakePoints));
@@ -2722,14 +2722,15 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
         competitions: selectedCompetitionIds,
         seasons: selectedSeasons,
         minMarketValue: Number(minMarketValue) || 0,
-      visibility: visibility};
+        visibility: visibility // Make sure visibility is included in filters
+      };
 
       // NEW: use the stakes RPC
       const { data, error } = await supabase.rpc(
         "create_elimination_tournament_with_stakes",
         {
           p_filters: filtersPayload,
-          p_invited_user_ids: invites.map((u) => u.id),
+          p_invited_user_ids: visibility === "public" ? [] : invites.map((u) => u.id),
           p_name: name.trim(),
           p_round_time_limit_seconds: Math.floor(Number(roundTimeMinutes) * 60),
           p_rounds_to_elimination: Math.floor(Number(roundsToElimination)),
@@ -2751,7 +2752,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
       try { onCreated && (await onCreated()); } catch (e) { /* ignore */ }
       }
       // Notify invitees (existing behavior — complements DB lifecycle notifications)
-      if (invites.length > 0) {
+      if (visibility === "private" && invites.length > 0) {
         const notifRows = invites.map((u) => ({
           user_id: u.id,
           type: "elimination_invite",
