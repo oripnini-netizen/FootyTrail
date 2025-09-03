@@ -848,7 +848,10 @@ function TournamentCard({
   const [participants, setParticipants] = useState([]); // {id, full_name, email, profile_photo_url, state, invite_status}
   const [rounds, setRounds] = useState([]);
   const [entriesByRound, setEntriesByRound] = useState({});
-  const [availableToday, setAvailableToday] = useState(null); // NEW
+  const [availableToday, setAvailableToday] = useState(null); 
+  // Realtime bump for this card
+  const [rtTick, setRtTick] = useState(0);
+// NEW
 
   // NEW: card collapse, filters collapse
   const [cardCollapsed, setCardCollapsed] = useState(Boolean(defaultCollapsed));
@@ -949,9 +952,31 @@ function TournamentCard({
     return () => {
       cancelled = true;
     };
-  }, [tournament.id, refreshToken]);
+  }, [tournament.id, refreshToken, rtTick]);
 
-  // Load my available "today" (for Accept button enable/disable)
+  
+  // Realtime: update this card when its round entries change
+  useEffect(() => {
+    const roundIds = new Set((rounds || []).map(r => r.id));
+    const ch = supabase
+      .channel(`elim-card-${tournament.id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "elimination_round_entries" },
+        (payload) => {
+          const rid = payload?.new?.round_id ?? payload?.old?.round_id;
+          if (rid && roundIds.has(rid)) {
+            setRtTick((t) => t + 1);
+          }
+        }
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(ch);
+    };
+    // Recreate when the set of rounds for this tournament changes
+  }, [tournament.id, rounds]);
+// Load my available "today" (for Accept button enable/disable)
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -2086,7 +2111,10 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   // Available today
   const [availableToday, setAvailableToday] = useState(null);
 
-  // Submit
+  
+  // Realtime bump for this card
+  const [rtTick, setRtTick] = useState(0);
+// Submit
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [errors, setErrors] = useState({});
@@ -2710,7 +2738,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                     </label>
                     <input
                       type="number"
-                      min={1}
+                      min={0}
                       step={1}
                       value={stakePoints}
                       onChange={(e) => setStakePoints(e.target.value)}
