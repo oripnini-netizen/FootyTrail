@@ -2926,6 +2926,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                         setEmailResults([]);
                         setInviteIndex(-1);
                       }
+                    }}
                     placeholder="Type an email to search…"
                     className="flex-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-700"
                     aria-autocomplete="list"
@@ -2936,8 +2937,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                     }
                   />
                 </div>
-              )}
-
+              
                 {/* search results with keyboard nav */}
                 {emailResults.length > 0 && (
                   <div
