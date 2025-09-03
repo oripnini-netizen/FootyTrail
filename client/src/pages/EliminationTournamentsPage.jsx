@@ -1509,7 +1509,7 @@ const handleStartNow = async () => {
   const needMore = Math.max(0, Number(tournament.stake_points || 0) - Number(availableToday || 0));
   const canAfford = availableToday === null ? true : needMore <= 0;
   const showAcceptControls =
-    isLive && myInviteStatus === "pending" && (!!joinDeadline ? new Date(joinDeadline).getTime() > Date.now() : true);
+    isLobby && myInviteStatus === "pending" && (!!joinDeadline ? new Date(joinDeadline).getTime() > Date.now() : true);
 
   return (
     <div className="rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md">
