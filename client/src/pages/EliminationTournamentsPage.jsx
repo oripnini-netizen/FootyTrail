@@ -165,7 +165,26 @@ try {
     setError((e) => ({ ...e, lobby: err.message || "Failed to load." }));
     setLobby([]);
   } else {
-    setLobby(Array.isArray(data) ? data : []);
+    
+    // Apply visibility filtering for Lobby
+    try {
+      const all = Array.isArray(data) ? data : [];
+      const pub = all.filter(t => ((t?.filters || {}).visibility || 'private') === 'public');
+      const priv = all.filter(t => ((t?.filters || {}).visibility || 'private') !== 'public');
+      let canSeePriv = [];
+      if (priv.length && user?.id) {
+        const ids = priv.map(t => t.id);
+        const { data: mine } = await supabase
+          .from('elimination_participants')
+          .select('tournament_id, invite_status')
+          .eq('user_id', user.id)
+          .in('tournament_id', ids);
+        const setIds = new Set((mine || []).map(r => r.tournament_id));
+        canSeePriv = priv.filter(t => t.owner_id === user.id || setIds.has(t.id));
+      }
+      setLobby([...pub, ...canSeePriv].sort((a,b)=> new Date(b.created_at)-new Date(a.created_at)));
+    } catch { setLobby(Array.isArray(data) ? data : []); }
+
   }
 } catch {
   setError((e) => ({ ...e, lobby: "Failed to load." }));
@@ -189,7 +208,24 @@ try {
         setError((e) => ({ ...e, live: err.message || "Failed to load." }));
         setLive([]);
       } else {
-        setLive(Array.isArray(data) ? data : []);
+        
+    // Apply visibility filtering for Live
+    try {
+      const all = Array.isArray(data) ? data : [];
+      if (user?.id) {
+        const ids = all.map(t => t.id);
+        const { data: mine } = await supabase
+          .from('elimination_participants')
+          .select('tournament_id, invite_status')
+          .eq('user_id', user.id)
+          .in('tournament_id', ids);
+        const accepted = new Set((mine || []).filter(r => (r.invite_status||'').toLowerCase()==='accepted').map(r => r.tournament_id));
+        setLive(all.filter(t => accepted.has(t.id)).sort((a,b)=> new Date(b.created_at)-new Date(a.created_at)));
+      } else {
+        setLive([]);
+      }
+    } catch { setLive([]); }
+
       }
     } catch {
       setError((e) => ({ ...e, live: "Failed to load." }));
@@ -364,6 +400,11 @@ try {
             uses the same mystery player for everyone. Lowest score(s) are
             eliminated until a single winner remains. Creators choose how often eliminations occur (every 1–5 rounds).
           </p>
+          {/* User Stats */}
+          {user?.id && (
+            <UserElimStats userId={user.id} />
+          )}
+
 
           {/* Notifications banner */}
           {notifBanner.length > 0 && (
@@ -909,6 +950,50 @@ function LoserFinalCard({ tournamentName, winner, stats, ranking, stakePoints })
   );
 }
 
+
+/* ------------------------------------------------------------
+   UserElimStats: small KPIs row
+------------------------------------------------------------ */
+function UserElimStats({ userId }) {
+  const [stats, setStats] = useState({ participated: 0, wins: 0, created: 0 });
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [p1, p2, p3] = await Promise.all([
+          supabase.from('elimination_participants').select('tournament_id', { count: 'exact', head: true }).eq('user_id', userId).eq('invite_status', 'accepted'),
+          supabase.from('elimination_tournaments').select('id', { count: 'exact', head: true }).eq('winner_user_id', userId),
+          supabase.from('elimination_tournaments').select('id', { count: 'exact', head: true }).eq('owner_id', userId),
+        ]);
+        if (!cancelled) {
+          setStats({
+            participated: p1.count || 0,
+            wins: p2.count || 0,
+            created: p3.count || 0,
+          });
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [userId]);
+
+  return (
+    <div className="mt-4 grid grid-cols-3 gap-3 max-w-md mx-auto">
+      <div className="rounded-lg border bg-white p-3 text-center shadow-sm">
+        <div className="text-xs text-gray-500">Participated</div>
+        <div className="text-xl font-bold text-gray-900">{stats.participated}</div>
+      </div>
+      <div className="rounded-lg border bg-white p-3 text-center shadow-sm">
+        <div className="text-xs text-gray-500">Wins</div>
+        <div className="text-xl font-bold text-gray-900">{stats.wins}</div>
+      </div>
+      <div className="rounded-lg border bg-white p-3 text-center shadow-sm">
+        <div className="text-xs text-gray-500">Created</div>
+        <div className="text-xl font-bold text-gray-900">{stats.created}</div>
+      </div>
+    </div>
+  );
+}
 /* ------------------------------------------------------------
    Tournament Card
 ------------------------------------------------------------ */
@@ -1088,6 +1173,10 @@ function TournamentCard({
     for (const p of participants) m.set(p.id, p);
     return m;
   }, [participants]);
+
+  const isPublic = ((tournament?.filters || {}).visibility || "private") === "public";
+  const amParticipant = participantsMap.has(userId);
+
 
   const entriesFor = (roundId) => entriesByRound[roundId] || [];
 
@@ -1592,8 +1681,10 @@ const handleStartNow = async () => {
   // UI bits for accept controls
   const needMore = Math.max(0, Number(tournament.stake_points || 0) - Number(availableToday || 0));
   const canAfford = availableToday === null ? true : needMore <= 0;
-  const showAcceptControls =
-    (isLobby || isLive) && myInviteStatus === "pending" && (!!joinDeadline ? new Date(joinDeadline).getTime() > Date.now() : true);
+    const showAcceptControls =
+    (isLobby || isLive) && (
+      (myInviteStatus === "pending") || (isPublic && !amParticipant)
+    ) && (!!joinDeadline ? new Date(joinDeadline).getTime() > Date.now() : true);
 
   return (
     <div className="rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md">
@@ -2267,7 +2358,10 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
   const [minParticipants, setMinParticipants] = useState(2);
   const [joinWindowMinutes, setJoinWindowMinutes] = useState(60);
 
-  // Available today
+    // Visibility (Public / Private)
+  const [visibility, setVisibility] = useState("private");
+
+// Available today
   const [availableToday, setAvailableToday] = useState(null);
 
   
@@ -2595,6 +2689,8 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
         competitions: selectedCompetitionIds,
         seasons: selectedSeasons,
         minMarketValue: Number(minMarketValue) || 0,
+      ,
+        visibility: visibility
       };
 
       // NEW: use the stakes RPC
@@ -2742,7 +2838,24 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                 totalCount={totalCount}
               />
 
-              {/* Invites */}
+              {             {visibility === "private" && (
+ {/* Visibility */}
+              <div className="rounded-xl shadow-sm border bg.white p-4">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Challenge Type</label>
+                <div className="flex items-center gap-4 text-sm">
+                  <label className="inline-flex items-center gap-2">
+                    <input type="radio" name="visibility" value="private" checked={visibility === "private"} onChange={() => setVisibility("private")} />
+                    <span>Private (invite-only)</span>
+                  </label>
+                  <label className="inline-flex items-center gap-2">
+                    <input type="radio" name="visibility" value="public" checked={visibility === "public"} onChange={() => setVisibility("public")} />
+                    <span>Public (anyone can join)</span>
+                  </label>
+                </div>
+                <p className="mt-2 text-xs text-gray-600">Public challenges appear to all users in the lobby. Private challenges are visible only to invited users.</p>
+              </div>
+
+/* Invites */}
               <div className="rounded-xl shadow-sm border bg.white p-4">
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
                   Invite users (by email)
@@ -2852,7 +2965,8 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                 )}
               </div>
 
-              {/* Round time */}
+              {)}
+/* Round time */}
               <div className="rounded-xl shadow-sm border bg.white p-4">
                 <label className="block text-sm font-semibold text-gray-700">
                   Round Time Limit (minutes)
