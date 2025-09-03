@@ -213,7 +213,14 @@ export default function EliminationTournamentsPage() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "elimination_tournaments" },
-        () => reloadLists()
+        (payload) => {
+          const isInsert = payload?.eventType === "INSERT";
+          const stakeChanged = (payload?.old?.stake_points ?? null) !== (payload?.new?.stake_points ?? null);
+          if (isInsert || stakeChanged) {
+            setHardRefreshTick((t) => t + 1);
+          }
+          reloadLists();
+        }
       )
       .on(
         "postgres_changes",
@@ -236,7 +243,11 @@ export default function EliminationTournamentsPage() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "elimination_participants" },
-        () => reloadLists()
+        (payload) => {
+          const isInsert = payload?.eventType === "INSERT";
+          if (isInsert) setHardRefreshTick((t) => t + 1);
+          reloadLists();
+        }
       )
       
       .on(
@@ -834,7 +845,13 @@ function LoserFinalCard({ tournamentName, winner, stats, ranking, stakePoints })
 /* ------------------------------------------------------------
    Tournament Card
 ------------------------------------------------------------ */
-function TournamentCard({tournament,compIdToLabel,onAdvanced,defaultCollapsed = false,refreshToken,hardRefreshToken}) {
+function TournamentCard({
+  tournament,
+  compIdToLabel,
+  onAdvanced,
+  defaultCollapsed = false,
+  refreshToken,
+}) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const userId = user?.id || null;
@@ -2462,7 +2479,10 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
       if (createdId && Math.floor(Number(stakePoints)) === 0) {
         await supabase
           .from("elimination_tournaments")
-          .update({ stake_points: 0 })
+          .update({ stake_points: 0 }
+      // After ensuring friendly stake=0, refresh lists for the creator immediately
+      try { onCreated && (await onCreated()); } catch (e) { /* ignore */ }
+)
           .eq("id", createdId);
       }
       // Notify invitees (existing behavior — complements DB lifecycle notifications)
