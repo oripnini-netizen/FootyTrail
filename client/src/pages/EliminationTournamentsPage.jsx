@@ -2479,10 +2479,10 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
       if (createdId && Math.floor(Number(stakePoints)) === 0) {
         await supabase
           .from("elimination_tournaments")
-          .update({ stake_points: 0 }
+          .update({ stake_points: 0 })
+          .eq("id", createdId);
       // After ensuring friendly stake=0, refresh lists for the creator immediately
       try { onCreated && (await onCreated()); } catch (e) { /* ignore */ }
-          .eq("id", createdId);
       }
       // Notify invitees (existing behavior — complements DB lifecycle notifications)
       if (invites.length > 0) {
