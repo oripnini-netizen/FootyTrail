@@ -917,6 +917,7 @@ function TournamentCard({
 
   const createdAt = new Date(tournament.created_at);
   const dateStr = createdAt.toLocaleString();
+  const isLobby = tournament.status === "lobby";
   const isLive = tournament.status === "live";
   const timeLimitMin = Math.round(
     (tournament.round_time_limit_seconds || 0) / 60
@@ -1583,7 +1584,7 @@ const handleStartNow = async () => {
   const needMore = Math.max(0, Number(tournament.stake_points || 0) - Number(availableToday || 0));
   const canAfford = availableToday === null ? true : needMore <= 0;
   const showAcceptControls =
-    isLive && myInviteStatus === "pending" && (!!joinDeadline ? new Date(joinDeadline).getTime() > Date.now() : true);
+    (isLobby || isLive) && myInviteStatus === "pending" && (!!joinDeadline ? new Date(joinDeadline).getTime() > Date.now() : true);
 
   return (
     <div className="rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md">
@@ -1607,10 +1608,10 @@ const handleStartNow = async () => {
           <span
             className={classNames(
               "shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold",
-              isLive ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-800"
+              isLive ? "bg-green-100 text-green-800" : (isLobby ? "bg-blue-100 text-blue-800" : "bg-gray-100 text-gray-800")
             )}
           >
-            {isLive ? "Live" : "Finished"}
+            {isLive ? "Live" : (isLobby ? "Lobby" : "Finished")}
           </span>
 
           {/* NEW: Stake per player */}
@@ -1638,7 +1639,7 @@ const handleStartNow = async () => {
       <p className="mt-2 text-xs text-gray-500">Created: {dateStr}</p>
 
       {/* NEW: Join window countdown + Start Now (creator) */}
-      {isLive && !!joinDeadline && (
+      {isLobby && !!joinDeadline && (
         <div className="mt-1 text-xs text-gray-700 flex items-center gap-2 flex-wrap">
           <span className="rounded bg-orange-50 text-orange-700 ring-1 ring-orange-200 px-1.5 py-0.5">
             Join closes in <Countdown endsAt={joinDeadline} />
@@ -1766,7 +1767,7 @@ const handleStartNow = async () => {
           </div>
 
           {/* NEW: Invite status + Accept/Decline */}
-          {isLive && (
+          {(isLobby || isLive) && (
             <div className="mt-3 rounded-lg border bg-slate-50 p-3">
               <div className="flex items-center gap-3 flex-wrap">
                 <div className="text-xs font-semibold text-gray-700">Invites</div>
