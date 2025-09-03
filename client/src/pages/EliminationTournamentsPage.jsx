@@ -2853,18 +2853,25 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                 <label className="block text-sm font-semibold text-gray-700 mb-2">Challenge Type</label>
                 <div className="flex items-center gap-4 text-sm">
                   <label className="inline-flex items-center gap-2">
-                    <input type="radio" name="visibility" value="private" checked={visibility === "private"} onChange={() => setVisibility("private")} />
+                    <input type="radio" name="visibility" value="private"
+                      checked={visibility === "private"}
+                      onChange={() => setVisibility("private")}
+                    />
                     <span>Private (invite-only)</span>
                   </label>
                   <label className="inline-flex items-center gap-2">
-                    <input type="radio" name="visibility" value="public" checked={visibility === "public"} onChange={() => setVisibility("public")} />
+                    <input type="radio" name="visibility" value="public"
+                      checked={visibility === "public"}
+                      onChange={() => setVisibility("public")}
+                    />
                     <span>Public (anyone can join)</span>
                   </label>
                 </div>
                 <p className="mt-2 text-xs text-gray-600">Public challenges appear to all users in the lobby. Private challenges are visible only to invited users.</p>
               </div>
 
-              {/* Invites */}
+/* Invites */
+              {visibility === "private" && (
               <div className="rounded-xl shadow-sm border bg-white p-4">
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
                   Invite users (by email)
@@ -2909,6 +2916,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                     }
                   />
                 </div>
+              )}
 
                 {/* search results with keyboard nav */}
                 {emailResults.length > 0 && (
@@ -2973,7 +2981,10 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                   <p className="mt-2 text-xs text-red-600">{errors.invites}</p>
                 )}
               </div>
-              {/* Round time */}
+              )}
+
+              {)}
+/* Round time */}
               <div className="rounded-xl shadow-sm border bg-white p-4">
                 <label className="block text-sm font-semibold text-gray-700">
                   Round Time Limit (minutes)
@@ -2996,7 +3007,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
 
               {/* Rounds to Elimination */}
               <div className="rounded-xl shadow-sm border bg-white p-4">
-                <label className="block text-sm font-semibold text-gray-700">
+                <label className="block text.sm font-semibold text-gray-700">
                   Rounds to Elimination (1–5)
                 </label>
                 <input
@@ -3197,7 +3208,7 @@ function SelectedChipsRow({
         {selectedSeasons?.map((s) => (
           <span
             key={`season-${s}`}
-            className="inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800"
+            className="inline-flex items.center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800"
           >
             {String(s)}
             {onRemoveSeason && (
