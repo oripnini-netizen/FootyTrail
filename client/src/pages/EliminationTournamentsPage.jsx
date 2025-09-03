@@ -2891,7 +2891,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                 <p className="mt-2 text-xs text-gray-600">Public challenges appear to all users in the lobby. Private challenges are visible only to invited users.</p>
               </div>
 
-/* Invites */
+              {/* Invites */}
               {visibility === "private" && (
               <div className="rounded-xl shadow-sm border bg-white p-4">
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
