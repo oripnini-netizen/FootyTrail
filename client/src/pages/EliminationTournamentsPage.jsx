@@ -2378,9 +2378,9 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
       next.invites = "Invite at least one other user (minimum 2 participants).";
     }
     const stake = Math.floor(Number(stakePoints));
-    if (!Number.isFinite(stake) || stake < 0):
+    if (!Number.isFinite(stake) || stake < 0) {
       next.stakePoints = "Stake must be 0 || a positive integer.";
-
+    }
     const minP = Math.floor(Number(minParticipants));
     if (!Number.isFinite(minP) || minP < 2) {
       next.minParticipants = "Minimum participants must be at least 2.";
