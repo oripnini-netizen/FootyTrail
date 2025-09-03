@@ -2482,7 +2482,6 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
           .update({ stake_points: 0 }
       // After ensuring friendly stake=0, refresh lists for the creator immediately
       try { onCreated && (await onCreated()); } catch (e) { /* ignore */ }
-)
           .eq("id", createdId);
       }
       // Notify invitees (existing behavior — complements DB lifecycle notifications)
