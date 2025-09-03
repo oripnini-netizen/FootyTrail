@@ -95,11 +95,10 @@ export default function EliminationTournamentsPage() {
   const { user } = useAuth();
   const [showCreateModal, setShowCreateModal] = useState(false);
 
-  const [lobby, setLobby] = useState([]);
   const [live, setLive] = useState([]);
   const [finished, setFinished] = useState([]);
-  const [loading, setLoading] = useState({ lobby: true, live: true, finished: true });
-  const [error, setError] = useState({ lobby: "", live: "", finished: "" });
+  const [loading, setLoading] = useState({ live: true, finished: true });
+  const [error, setError] = useState({ live: "", finished: "" });
 
   // Notifications banner (existing)
   const [notifBanner, setNotifBanner] = useState([]);
@@ -141,40 +140,14 @@ export default function EliminationTournamentsPage() {
   // Reload both lists (used on mount and after create || advance)
   const reloadLists = async () => {
     if (!user?.id) {
-      setLobby([]);
       setLive([]);
       setFinished([]);
-      setLoading({ lobby: false, live: false, finished: false });
-      setError({ lobby: "", live: "", finished: "" });
+      setLoading({ live: false, finished: false });
+      setError({ live: "", finished: "" });
       return;
     }
 
-    
-    // Lobby
-    setLoading((s) => ({ ...s, lobby: true }));
-    setError((e) => ({ ...e, lobby: "" }));
-    try {
-      const { data, error: err } = await supabase
-        .from("elimination_tournaments")
-        .select(
-          "id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id"
-        )
-        .eq("status", "lobby")
-        .order("created_at", { ascending: false });
-      if (err) {
-        setError((e) => ({ ...e, lobby: err.message || "Failed to load." }));
-        setLobby([]);
-      } else {
-        setLobby(Array.isArray(data) ? data : []);
-      }
-    } catch {
-      setError((e) => ({ ...e, lobby: "Failed to load." }));
-      setLobby([]);
-    } finally {
-      setLoading((s) => ({ ...s, lobby: false }));
-    }
-
-// Live
+    // Live
     setLoading((s) => ({ ...s, live: true }));
     setError((e) => ({ ...e, live: "" }));
     try {
@@ -337,7 +310,9 @@ export default function EliminationTournamentsPage() {
     };
   }, [user?.id]);
 
-  
+  // Identify the most recent finished tournament (created_at desc)
+  const mostRecentFinishedId = finished?.[0]?.id || null;
+
   return (
     <div className="relative min-h-screen bg-gradient-to-b from-green-50 to-transparent">
       <div className="fixed inset-0 -z-10 bg-gradient-to-b from-green-50 to-transparent" />
@@ -494,37 +469,9 @@ export default function EliminationTournamentsPage() {
         <section
           className="grid grid-cols-1 gap-4 sm:grid-cols-1 lg:grid-cols-1"
           aria-live="polite"
-          aria-busy={loading.lobby || loading.live || loading.finished}
+          aria-busy={loading.live || loading.finished}
         >
-          {/* Lobby */}
-          {loading.lobby ? (
-            <>
-              <SkeletonCard />
-              <SkeletonCard />
-            </>
-          ) : error.lobby ? (
-            <ErrorCard
-              title="Couldn't load lobby tournaments"
-              message={error.lobby}
-            />
-          ) : (
-            <>
-              {lobby.map((t) => (
-                <TournamentCard
-                  key={t.id}
-                  tournament={t}
-                  compIdToLabel={compIdToLabel}
-                  onAdvanced={reloadLists}
-                  defaultCollapsed={false}
-                  refreshToken={refreshTick}
-                  hardRefreshToken={hardRefreshTick}
-                />
-              ))}
-            </>
-          )}
-
           {/* Live */}
-{/* Live */}
           {loading.live ? (
             <>
               <SkeletonCard />
@@ -572,7 +519,7 @@ export default function EliminationTournamentsPage() {
                   tournament={t}
                   compIdToLabel={compIdToLabel}
                   onAdvanced={reloadLists}
-                  defaultCollapsed={true}
+                  defaultCollapsed={t.id === mostRecentFinishedId ? false : true}
                   refreshToken={refreshTick}
                   hardRefreshToken={hardRefreshTick}
                 />
@@ -914,7 +861,6 @@ function TournamentCard({
 
   const createdAt = new Date(tournament.created_at);
   const dateStr = createdAt.toLocaleString();
-  const isLobby = tournament.status === "lobby";
   const isLive = tournament.status === "live";
   const timeLimitMin = Math.round(
     (tournament.round_time_limit_seconds || 0) / 60
@@ -1106,7 +1052,7 @@ function TournamentCard({
     if (!Array.isArray(rounds) || rounds.length === 0) return result;
     if (!Array.isArray(participants) || participants.length === 0) return result;
 
-    let activeSet = new Set(participants.map((p) => p.id));
+    let activeSet = new Set(participants.filter(p => ((p.invite_status || '').toLowerCase() === 'accepted') && (p.state || 'active') !== 'eliminated').map(p => p.id));
     let blockPoints = new Map([...activeSet].map((uid) => [uid, 0]));
 
     const ordered = [...rounds].sort((a, b) => (a.round_number || 0) - (b.round_number || 0));
@@ -1168,7 +1114,7 @@ function TournamentCard({
       (tournament.winner_user_id && participantsMap.get(tournament.winner_user_id)) ||
       null;
 
-    let activeSet = new Set(participants.map((p) => p.id));
+    let activeSet = new Set(participants.filter(p => ((p.invite_status || '').toLowerCase() === 'accepted') && (p.state || 'active') !== 'eliminated').map(p => p.id));
     let blockPoints = new Map([...activeSet].map((uid) => [uid, 0]));
     const eliminatedRecords = [];
 
@@ -1508,7 +1454,8 @@ const handleStartNow = async () => {
   // UI bits for accept controls
   const needMore = Math.max(0, Number(tournament.stake_points || 0) - Number(availableToday || 0));
   const canAfford = availableToday === null ? true : needMore <= 0;
-  const showAcceptControls = isLobby && myInviteStatus === "pending";
+  const showAcceptControls =
+    isLive && myInviteStatus === "pending" && (!!joinDeadline ? new Date(joinDeadline).getTime() > Date.now() : true);
 
   return (
     <div className="rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md">
@@ -1532,10 +1479,10 @@ const handleStartNow = async () => {
           <span
             className={classNames(
               "shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold",
-              isLobby ? "bg-blue-100 text-blue-800" : isLive ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-800"
+              isLive ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-800"
             )}
           >
-            {isLobby ? "Lobby" : isLive ? "Live" : "Finished"}
+            {isLive ? "Live" : "Finished"}
           </span>
 
           {/* NEW: Stake per player */}
@@ -1563,7 +1510,7 @@ const handleStartNow = async () => {
       <p className="mt-2 text-xs text-gray-500">Created: {dateStr}</p>
 
       {/* NEW: Join window countdown + Start Now (creator) */}
-      {isLobby && !!joinDeadline && (
+      {isLive && !!joinDeadline && (
         <div className="mt-1 text-xs text-gray-700 flex items-center gap-2 flex-wrap">
           <span className="rounded bg-orange-50 text-orange-700 ring-1 ring-orange-200 px-1.5 py-0.5">
             Join closes in <Countdown endsAt={joinDeadline} />
@@ -1691,7 +1638,7 @@ const handleStartNow = async () => {
           </div>
 
           {/* NEW: Invite status + Accept/Decline */}
-          {isLobby && (
+          {isLive && (
             <div className="mt-3 rounded-lg border bg-slate-50 p-3">
               <div className="flex items-center gap-3 flex-wrap">
                 <div className="text-xs font-semibold text-gray-700">Invites</div>
@@ -1840,7 +1787,7 @@ const handleStartNow = async () => {
 
                 const activeIdsForRound =
                   activeUsersByRound.get(r.id) ||
-                  new Set(participants.map((p) => p.id));
+                  new Set(participants.filter(p => ((p.invite_status || '').toLowerCase() === 'accepted') && (p.state || 'active') !== 'eliminated').map(p => p.id));
 
                 const activeCount = activeIdsForRound.size;
 
