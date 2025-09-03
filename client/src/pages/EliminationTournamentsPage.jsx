@@ -575,7 +575,7 @@ try {
                   tournament={t}
                   compIdToLabel={compIdToLabel}
                   onAdvanced={reloadLists}
-                  defaultCollapsed={t.id === mostRecentFinishedId ? false : true}
+                  defaultCollapsed={true}
                   refreshToken={refreshTick}
                   hardRefreshToken={hardRefreshTick}
                 />
