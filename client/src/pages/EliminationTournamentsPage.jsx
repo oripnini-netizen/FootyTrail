@@ -492,7 +492,8 @@ export default function EliminationTournamentsPage() {
                   compIdToLabel={compIdToLabel}
                   onAdvanced={reloadLists}
                   defaultCollapsed={false}
-                  refreshToken={refreshTick} hardRefreshToken={hardRefreshTick}
+                  refreshToken={refreshTick}
+                  hardRefreshToken={hardRefreshTick}
                 />
               ))}
             </>
@@ -519,7 +520,8 @@ export default function EliminationTournamentsPage() {
                   compIdToLabel={compIdToLabel}
                   onAdvanced={reloadLists}
                   defaultCollapsed={t.id === mostRecentFinishedId ? false : true}
-                  refreshToken={refreshTick} hardRefreshToken={hardRefreshTick}
+                  refreshToken={refreshTick}
+                  hardRefreshToken={hardRefreshTick}
                 />
               ))}
             </>
@@ -851,6 +853,7 @@ function TournamentCard({
   onAdvanced,
   defaultCollapsed = false,
   refreshToken,
+  hardRefreshToken,
 }) {
   const navigate = useNavigate();
   const { user } = useAuth();
