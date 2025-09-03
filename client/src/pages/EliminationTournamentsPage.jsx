@@ -1032,7 +1032,9 @@ function TournamentCard({
   const [filtersCollapsed, setFiltersCollapsed] = useState(true);
 
   // Fetch participants + rounds + entries
-  useEffect(() => {
+  
+  useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 2500); return () => clearTimeout(id); }, [toast]);
+useEffect(() => {
     let cancelled = false;
 
     (async () => {
@@ -1586,20 +1588,23 @@ try {
   }, [rounds, entriesByRound, participants, tournament.id, userId, onAdvanced]);
 
   // NEW: Accept / Decline handlers
-  const [accepting, setAccepting] = useState(false);
+    const [toast, setToast] = useState(null);
+const [accepting, setAccepting] = useState(false);
   const [declining, setDeclining] = useState(false);
   const [startNowBusy, setStartNowBusy] = useState(false);
 
   const handleAccept = async () => {
     if (!userId) return;
-    if (myInviteStatus !== "pending") return;
     setAccepting(true);
     try {
       const { error } = await supabase.rpc("accept_tournament_invite", {
         p_tournament_id: tournament.id,
       });
       if (error) throw error;
-      // refresh points + participants
+      
+      // Snack: joined successfully
+      setToast({ kind: "success", message: `Joined!${(Number(tournament.stake_points)||0)>0? " Stake hold placed: " + Number(tournament.stake_points) + " pts" : ""}` });
+// refresh points + participants
       const { data } = await supabase.rpc("pt_available_today", { p_uid: userId });
       setAvailableToday(Number(data || 0));
       if (onAdvanced) await onAdvanced();
@@ -1687,7 +1692,15 @@ const handleStartNow = async () => {
     ) && (!!joinDeadline ? new Date(joinDeadline).getTime() > Date.now() : true);
 
   return (
-    <div className="rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md">
+    <div className="rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md r
+        {toast && (
+          <div className="pointer-events-none absolute right-3 top-3 z-20">
+            <div className="rounded-md bg-emerald-600/95 text-white px-3 py-2 text-xs shadow-lg">
+              {toast.message}
+            </div>
+          </div>
+        )}
+elative">
       {/* Card header with collapse toggle */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -1903,7 +1916,8 @@ const handleStartNow = async () => {
                       <Check className="h-3.5 w-3.5" />
                       {accepting ? "Accepting…" : `Accept (${tournament.stake_points} pts)`}
                     </button>
-                    <button
+                    {myInviteStatus === "pending" && (
+<button
                       type="button"
                       onClick={handleDecline}
                       disabled={declining}
@@ -1913,6 +1927,7 @@ const handleStartNow = async () => {
                       <XIcon className="h-3.5 w-3.5" />
                       {declining ? "Declining…" : "Decline"}
                     </button>
+)}
                   </div>
                 )}
 
@@ -2689,9 +2704,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
         competitions: selectedCompetitionIds,
         seasons: selectedSeasons,
         minMarketValue: Number(minMarketValue) || 0,
-      ,
-        visibility: visibility
-      };
+      visibility: visibility};
 
       // NEW: use the stakes RPC
       const { data, error } = await supabase.rpc(
