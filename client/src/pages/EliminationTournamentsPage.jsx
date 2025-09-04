@@ -1031,33 +1031,20 @@ function UserElimStats({ userId }) {
             .eq("owner_id", userId),
         ]);
 
-        // Pull recent point transactions and compute a *net* total related to elimination.
-        // We don't rely on a specific column name; instead, we:
-        //  - Probe common numeric fields (amount / points / delta)
-        //  - Treat a transaction as "elimination-related" if ANY stringified field includes "elimination"
-        // This keeps the client robust even if the exact PT schema shifts slightly.
+        // Sum elimination net points directly from point_transactions.amount
         let net = 0;
         try {
-          const { data: txRows, error: txErr } = await supabase
+          const { data: sumRows, error: sumErr } = await supabase
             .from("point_transactions")
-            .select("id, amount, points, delta, category, source, meta, metadata, description, created_at, user_id")
-            .eq("user_id", userId)
-            .order("created_at", { ascending: false })
-            .limit(5000);
+            .select("sum:amount.sum()", { head: false })
+            .eq("user_id", userId);
 
-          if (!txErr && Array.isArray(txRows)) {
-            for (const row of txRows) {
-              const hay = JSON.stringify(row || {}).toLowerCase();
-              const looksElim = hay.includes("elimination") || hay.includes("elim_");
-              if (!looksElim) continue;
-              const val = Number(
-                (row && (row.amount ?? row.points ?? row.delta)) ?? 0
-              );
-              if (Number.isFinite(val)) net += val;
-            }
+          if (!sumErr && Array.isArray(sumRows) && sumRows.length) {
+            net = Number(sumRows[0]?.sum ?? 0);
+            if (!Number.isFinite(net)) net = 0;
           }
         } catch (e) {
-          // If PT fetch fails for any reason, we simply leave net=0 (non-fatal for the page)
+          // leave net=0 on error
         }
 
         if (!cancelled) {
