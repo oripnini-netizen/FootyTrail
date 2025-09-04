@@ -1050,7 +1050,7 @@ supabase
             .eq("owner_id", userId),
           supabase
             .from("elimination_round_entries")
-            .select("id", { count: "exact", head: true })
+            .select("round_id", { count: "exact", head: true })
             .eq("user_id", userId),
         ]);
 
