@@ -98,6 +98,7 @@ export default function EliminationTournamentsPage() {
   const [live, setLive] = useState([]);
   const [lobby, setLobby] = useState([]);
   const [finished, setFinished] = useState([]);
+  const [showAllFinished, setShowAllFinished] = useState(false);
   const [loading, setLoading] = useState({ lobby: true, live: true, finished: true });
   const [error, setError] = useState({ lobby: "", live: "", finished: "" });
 
@@ -183,7 +184,39 @@ try {
         canSeePriv = priv.filter(t => t.owner_id === user.id || setIds.has(t.id));
       }
       setLobby([...pub, ...canSeePriv].sort((a,b)=> new Date(b.created_at)-new Date(a.created_at)));
+
+      // Opportunistic auto-start of due lobby tournaments (join_deadline passed)
+      try {
+        const dueLobbies = ([...pub, ...canSeePriv] || []).filter(t => {
+          const dl = t?.join_deadline ? new Date(t.join_deadline) : null;
+          return t?.status === 'lobby' && dl && dl <= new Date();
+        });
+        if (dueLobbies.length) {
+          await Promise.allSettled(
+            dueLobbies.map(t => supabase.rpc('start_elimination_tournament', { p_tournament_id: t.id }))
+          );
+        }
+      } catch (e) {
+        console.warn('[elim] opportunistic autostart failed', e);
+      }
+
     } catch { setLobby(Array.isArray(data) ? data : []); }
+
+  // Opportunistic auto-start (fallback branch)
+  try {
+    const allLobbies = (Array.isArray(data) ? data : []).filter(t => {
+      const dl = t?.join_deadline ? new Date(t.join_deadline) : null;
+      return t?.status === 'lobby' && dl && dl <= new Date();
+    });
+    if (allLobbies.length) {
+      await Promise.allSettled(
+        allLobbies.map(t => supabase.rpc('start_elimination_tournament', { p_tournament_id: t.id }))
+      );
+    }
+  } catch (e) {
+    console.warn('[elim] opportunistic autostart (fallback) failed', e);
+  }
+
 
   }
 } catch {
@@ -618,18 +651,35 @@ try {
             />
           ) : (
             <>
-              {finished.map((t) => (
-                <TournamentCard
-                  key={t.id}
-                  tournament={t}
-                  compIdToLabel={compIdToLabel}
-                  onAdvanced={reloadLists}
-                  defaultCollapsed={!(lobby.length === 0 && live.length === 0 && t.id === mostRecentFinishedId)}
-                  refreshToken={refreshTick}
-                  hardRefreshToken={hardRefreshTick}
-                />
-              ))}
-            </>
+              {(() => {
+                const visibleFinished = showAllFinished ? finished : finished.slice(0, 1);
+                return (
+                  <>
+                    {visibleFinished.map((t) => (
+                      <TournamentCard
+                        key={t.id}
+                        tournament={t}
+                        compIdToLabel={compIdToLabel}
+                        onAdvanced={reloadLists}
+                        defaultCollapsed={!(lobby.length === 0 && live.length === 0 && t.id === mostRecentFinishedId)}
+                        refreshToken={refreshTick}
+                        hardRefreshToken={hardRefreshToken}
+                      />
+                    ))}
+                    {finished.length > 1 && (
+                      <div className="mt-2 flex justify-center">
+                        <button
+                          type="button"
+                          onClick={() => setShowAllFinished(v => !v)}
+                          className="inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium shadow-sm bg-white hover:bg-gray-50"
+                        >
+                          {showAllFinished ? 'Hide previous finished challenges' : `Show previous finished challenges (${finished.length - 1})`}
+                        </button>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}</>
           )}
         </section>
       </div>
@@ -1833,11 +1883,7 @@ const handleStartNow = async () => {
 
           {/* Difficulty Filters as grouped chips */}
           <div className="mt-3">
-            <div className="flex items-center justify-between">
-              <div className="text-xs font-semibold text-gray-700">
-                Difficulty Filters
-              </div>
-              <button
+            <div className="flex items-center gap-2"><div className="text-xs font-semibold text-gray-700">Difficulty Filters</div><button
                 type="button"
                 onClick={() => setFiltersCollapsed((v) => !v)}
                 className="text-xs text-gray-600 hover:text-gray-800"
