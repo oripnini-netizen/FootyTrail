@@ -98,6 +98,7 @@ export default function EliminationTournamentsPage() {
   const [live, setLive] = useState([]);
   const [lobby, setLobby] = useState([]);
   const [finished, setFinished] = useState([]);
+  const autoStartTriedRef = useRef(new Set());
   const [showAllFinished, setShowAllFinished] = useState(false);
   const [loading, setLoading] = useState({ lobby: true, live: true, finished: true });
   const [error, setError] = useState({ lobby: "", live: "", finished: "" });
@@ -189,9 +190,13 @@ try {
       try {
         const dueLobbies = ([...pub, ...canSeePriv] || []).filter(t => {
           const dl = t?.join_deadline ? new Date(t.join_deadline) : null;
-          return t?.status === 'lobby' && dl && dl <= new Date();
+          const isLobby = t?.status === 'lobby';
+          const isDue = !!dl && dl <= new Date();
+          const notTried = !autoStartTriedRef.current.has(t?.id);
+          return isLobby && isDue && notTried;
         });
         if (dueLobbies.length) {
+          dueLobbies.forEach(t => autoStartTriedRef.current.add(t.id));
           await Promise.allSettled(
             dueLobbies.map(t => supabase.rpc('start_elimination_tournament', { p_tournament_id: t.id }))
           );
@@ -206,9 +211,13 @@ try {
   try {
     const allLobbies = (Array.isArray(data) ? data : []).filter(t => {
       const dl = t?.join_deadline ? new Date(t.join_deadline) : null;
-      return t?.status === 'lobby' && dl && dl <= new Date();
+      const isLobby = t?.status === 'lobby';
+      const isDue = !!dl && dl <= new Date();
+      const notTried = !autoStartTriedRef.current.has(t?.id);
+      return isLobby && isDue && notTried;
     });
     if (allLobbies.length) {
+      allLobbies.forEach(t => autoStartTriedRef.current.add(t.id));
       await Promise.allSettled(
         allLobbies.map(t => supabase.rpc('start_elimination_tournament', { p_tournament_id: t.id }))
       );
