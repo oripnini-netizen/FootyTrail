@@ -707,17 +707,27 @@ try {
 /* ------------------------------------------------------------
    Cards & helpers
 ------------------------------------------------------------ */
-function Countdown({ endsAt }) {
+function Countdown({ endsAt, onEnd }) {
   const [left, setLeft] = useState(() => format(endsAt));
+  const endedRef = useRef(false);
 
   useEffect(() => {
+  setLeft(format(endsAt));
+  endedRef.current = false;
+  if (!endsAt) return;
+  const id = setInterval(() => {
+    // compute remaining ms to trigger onEnd once
+    const endMs = new Date(endsAt).getTime();
+    const diff = endMs - Date.now();
+    if (diff <= 0 && !endedRef.current) {
+      endedRef.current = true;
+      try { onEnd && onEnd(); } catch (_) {}
+    }
     setLeft(format(endsAt));
-    if (!endsAt) return;
-    const id = setInterval(() => setLeft(format(endsAt)), 1000);
-    return () => clearInterval(id);
-  }, [endsAt]);
-
-  function format(endIso) {
+  }, 1000);
+  return () => clearInterval(id);
+}, [endsAt, onEnd]);
+function format(endIso) {
     if (!endIso) return "—";
     const end = new Date(endIso).getTime();
     const now = Date.now();
@@ -1017,15 +1027,15 @@ function LoserFinalCard({ tournamentName, winner, stats, ranking, stakePoints })
    UserElimStats: small KPIs row (+ net elimination points)
 ------------------------------------------------------------ */
 function UserElimStats({ userId }) {
-  const [stats, setStats] = useState({ participated: 0, wins: 0, created: 0, pointsNet: 0 });
+  const [stats, setStats] = useState({ created: 0, participated: 0, wins: 0, roundsSurvived: 0, pointsNet: 0 });
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         // Basic counts
-        const [p1, p2, p3] = await Promise.all([
-          supabase
+        const [p1, p2, p3, p4] = await Promise.all([
+supabase
             .from("elimination_participants")
             .select("tournament_id", { count: "exact", head: true })
             .eq("user_id", userId)
@@ -1038,6 +1048,10 @@ function UserElimStats({ userId }) {
             .from("elimination_tournaments")
             .select("id", { count: "exact", head: true })
             .eq("owner_id", userId),
+          supabase
+            .from("elimination_round_entries")
+            .select("id", { count: "exact", head: true })
+            .eq("user_id", userId),
         ]);
 
         // Sum elimination net points directly from point_transactions.amount (client-side sum to avoid PostgREST aggregate quirks)
@@ -1058,9 +1072,10 @@ function UserElimStats({ userId }) {
 
         if (!cancelled) {
           setStats({
+            created: p3?.count || 0,
             participated: p1?.count || 0,
             wins: p2?.count || 0,
-            created: p3?.count || 0,
+            roundsSurvived: p4?.count || 0,
             pointsNet: net,
           });
         }
@@ -1084,26 +1099,30 @@ function UserElimStats({ userId }) {
     stats.pointsNet > 0 ? `+${stats.pointsNet}` : `${stats.pointsNet}`;
 
   return (
-    <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-2xl mx-auto">
+    <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-3 max-w-2xl mx-auto">
       <div className="rounded-lg border bg-white p-3 text-center shadow-sm">
-        <div className="text-xs text-gray-500">Participated</div>
-        <div className="text-xl font-bold text-gray-900">{stats.participated}</div>
-      </div>
-      <div className="rounded-lg border bg-white p-3 text-center shadow-sm">
-        <div className="text-xs text-gray-500">Wins</div>
-        <div className="text-xl font-bold text-gray-900">{stats.wins}</div>
-      </div>
-      <div className="rounded-lg border bg-white p-3 text-center shadow-sm">
-        <div className="text-xs text-gray-500">Created</div>
-        <div className="text-xl font-bold text-gray-900">{stats.created}</div>
-      </div>
-      <div className="rounded-lg border bg-white p-3 text-center shadow-sm">
-        <div className="flex items-center justify-center gap-1 text-xs text-gray-500">
-          <Coins className="w-3.5 h-3.5" />
-          <span>Elim Points (net)</span>
-        </div>
-        <div className={`text-xl font-bold ${netColor}`}>{netLabel}</div>
-      </div>
+  <div className="text-xs text-gray-500">Created</div>
+  <div className="text-xl font-bold text-gray-900">{stats.created}</div>
+</div>
+<div className="rounded-lg border bg-white p-3 text-center shadow-sm">
+  <div className="text-xs text-gray-500">Participated</div>
+  <div className="text-xl font-bold text-gray-900">{stats.participated}</div>
+</div>
+<div className="rounded-lg border bg-white p-3 text-center shadow-sm">
+  <div className="text-xs text-gray-500">Wins</div>
+  <div className="text-xl font-bold text-gray-900">{stats.wins}</div>
+</div>
+<div className="rounded-lg border bg-white p-3 text-center shadow-sm">
+  <div className="text-xs text-gray-500">Rounds Survived</div>
+  <div className="text-xl font-bold text-gray-900">{stats.roundsSurvived}</div>
+</div>
+<div className="rounded-lg border bg-white p-3 text-center shadow-sm">
+  <div className="flex items-center justify-center gap-1 text-xs text-gray-500">
+    <Coins className="w-3.5 h-3.5" />
+    <span>Elim Points (net)</span>
+  </div>
+  <div className={`text-xl font-bold ${netColor}`}>{netLabel}</div>
+</div>
     </div>
   );
 }
@@ -1889,7 +1908,7 @@ const handleStartNow = async () => {
       {isLobby && !!joinDeadline && (
         <div className="mt-1 text-xs text-gray-700 flex items-center gap-2 flex-wrap">
           <span className="rounded bg-orange-50 text-orange-700 ring-1 ring-orange-200 px-1.5 py-0.5">
-            Join closes in <Countdown endsAt={joinDeadline} />
+            Join closes in <Countdown endsAt={joinDeadline} onEnd={() => window.location.reload()} />
           </span>
           <span className="text-gray-400">•</span>
           <span>Accepted: {acceptedCount}</span>
@@ -2304,7 +2323,7 @@ const unifiedRows = [...cumRows].sort((a, b) => {
                         <>
                           Ends in:{" "}
                           <span className="font-semibold">
-                            <Countdown endsAt={r.ends_at || null} />
+                            <Countdown endsAt={r.ends_at || null} onEnd={() => window.location.reload()} />
                           </span>{" "}
                           {timeLimitMin ? `• Limit: ${timeLimitMin} min` : null}
                         </>
