@@ -1050,7 +1050,7 @@ supabase
             .eq("owner_id", userId),
           supabase
             .from("elimination_round_entries")
-            .select("round_id", { count: "exact", head: true })
+            .select("id", { count: "exact", head: true })
             .eq("user_id", userId),
         ]);
 
@@ -1119,7 +1119,7 @@ supabase
 <div className="rounded-lg border bg-white p-3 text-center shadow-sm">
   <div className="flex items-center justify-center gap-1 text-xs text-gray-500">
     <Coins className="w-3.5 h-3.5" />
-    <span>Points</span>
+    <span>Elim Points (net)</span>
   </div>
   <div className={`text-xl font-bold ${netColor}`}>{netLabel}</div>
 </div>
@@ -2172,7 +2172,7 @@ const handleStartNow = async () => {
           {/* Rounds list (unchanged except cosmetics) */}
           <div className="mt-4 space-y-3">
             {rounds.length === 0 ? (
-              <div className="text-sm text-gray-500">Waiting for creator to start the challenge...</div>
+              <div className="text-sm text-gray-500">Waiting for challenge to start...</div>
             ) : (
               rounds.map((r) => {
                 const entries = entriesFor(r.id);
