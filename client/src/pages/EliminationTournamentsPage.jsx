@@ -663,7 +663,7 @@ try {
                         onAdvanced={reloadLists}
                         defaultCollapsed={!(lobby.length === 0 && live.length === 0 && t.id === mostRecentFinishedId)}
                         refreshToken={refreshTick}
-                        hardRefreshToken={hardRefreshToken}
+                        hardRefreshToken={hardRefreshTick}
                       />
                     ))}
                     {finished.length > 1 && (
