@@ -1031,17 +1031,17 @@ function UserElimStats({ userId }) {
             .eq("owner_id", userId),
         ]);
 
-        // Sum elimination net points directly from point_transactions.amount
+        // Sum elimination net points directly from point_transactions.amount (client-side sum to avoid PostgREST aggregate quirks)
         let net = 0;
         try {
-          const { data: sumRows, error: sumErr } = await supabase
+          const { data: tx, error: txErr } = await supabase
             .from("point_transactions")
-            .select("sum:amount.sum()", { head: false })
-            .eq("user_id", userId);
+            .select("amount")
+            .eq("user_id", userId)
+            .limit(10000);
 
-          if (!sumErr && Array.isArray(sumRows) && sumRows.length) {
-            net = Number(sumRows[0]?.sum ?? 0);
-            if (!Number.isFinite(net)) net = 0;
+          if (!txErr && Array.isArray(tx)) {
+            net = tx.reduce((acc, r) => acc + (Number(r?.amount) || 0), 0);
           }
         } catch (e) {
           // leave net=0 on error
