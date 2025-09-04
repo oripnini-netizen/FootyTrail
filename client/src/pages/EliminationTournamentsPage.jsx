@@ -1741,7 +1741,6 @@ try {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rounds, entriesByRound, participants, tournament.id, userId, onAdvanced]);
-
 // Safety net: if no open rounds but tournament is still live and the last round already ended,
 // ask the server to advance, then refresh rounds.
 const lateAdvanceRef = useRef(false);
@@ -1766,7 +1765,6 @@ useEffect(() => {
   lateAdvanceRef.current = true;
   (async () => {
     try {
-      // Let the server spawn the next round if the tournament isn't finished
       const { error } = await supabase.rpc("advance_elimination_tournament", {
         p_tournament_id: tournament.id,
       });
@@ -1774,7 +1772,6 @@ useEffect(() => {
         console.warn("[elim] late-advance rpc error", error);
       }
 
-      // Refresh rounds
       const { data: roundRows2 } = await supabase
         .from("elimination_rounds")
         .select("id, round_number, started_at, ends_at, closed_at, player_id, is_elimination")
@@ -1786,7 +1783,6 @@ useEffect(() => {
     } catch (e) {
       console.warn("[elim] late-advance exception", e);
     } finally {
-      // allow future checks if needed
       lateAdvanceRef.current = false;
     }
   })();
@@ -1907,8 +1903,7 @@ const handleJoinCountdownEnd = async () => {
 
     if (cntErr) {
       console.error("[elim] accepted-count error", cntErr);
-      // Fallback: one refresh to let server-side logic settle
-      window.location.reload();
+      // Fallback: avoid reload loop; just return and let realtime or next fetch reflect state
       return;
     }
 
@@ -1928,8 +1923,18 @@ const handleJoinCountdownEnd = async () => {
       }
     }
 
-    // Reflect the final state (either finished or started elsewhere)
-    window.location.reload();
+// Reflect the final state (either finished or started elsewhere) without a hard reload
+try {
+  const { data: roundRows2 } = await supabase
+    .from("elimination_rounds")
+    .select("id, round_number, started_at, ends_at, closed_at, player_id, is_elimination")
+    .eq("tournament_id", tournament.id)
+    .order("round_number", { ascending: true });
+  if (Array.isArray(roundRows2)) setRounds(roundRows2);
+  if (onAdvanced) await onAdvanced();
+} catch (e) {
+  console.warn("[elim] post-join-finalize refresh failed", e);
+}
   } catch (e) {
     console.error("[elim] handleJoinCountdownEnd fatal", e);
   }
@@ -2429,22 +2434,21 @@ const unifiedRows = [...cumRows].sort((a, b) => {
                             endsAt={r.ends_at || null}
                             onEnd={async () => {
                               try {
-                                // Finalize the latest open round (this will also advance if needed)
-                                await finalizeLatestRoundForTournament(tournament.id);
-
-                                // Re-fetch rounds so the new round appears immediately
+                                const openRoundId = await getLatestOpenRoundIdForTournament(tournament.id);
+                                if (openRoundId) {
+                                  await supabase.rpc("finalize_round", { p_round_id: openRoundId });
+                                }
+                                // refresh rounds regardless so UI moves forward if server already advanced
                                 const { data: roundRows2 } = await supabase
                                   .from("elimination_rounds")
                                   .select("id, round_number, started_at, ends_at, closed_at, player_id, is_elimination")
                                   .eq("tournament_id", tournament.id)
                                   .order("round_number", { ascending: true });
-
                                 if (Array.isArray(roundRows2)) setRounds(roundRows2);
-
                                 if (onAdvanced) await onAdvanced();
                               } catch (e) {
-                                console.warn("[elim] countdown finalize failed, hard reloading", e);
-                                window.location.reload(); // fallback
+                                console.warn("[elim] countdown finalize failed", e);
+                                // no reload here to avoid loops when endsAt is in the past
                               }
                             }}
                           />
