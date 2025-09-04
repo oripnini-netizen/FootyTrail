@@ -1003,31 +1003,92 @@ function LoserFinalCard({ tournamentName, winner, stats, ranking, stakePoints })
 /* ------------------------------------------------------------
    UserElimStats: small KPIs row
 ------------------------------------------------------------ */
+
+/* ------------------------------------------------------------
+   UserElimStats: small KPIs row (+ net elimination points)
+------------------------------------------------------------ */
 function UserElimStats({ userId }) {
-  const [stats, setStats] = useState({ participated: 0, wins: 0, created: 0 });
+  const [stats, setStats] = useState({ participated: 0, wins: 0, created: 0, pointsNet: 0 });
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
+        // Basic counts
         const [p1, p2, p3] = await Promise.all([
-          supabase.from('elimination_participants').select('tournament_id', { count: 'exact', head: true }).eq('user_id', userId).eq('invite_status', 'accepted'),
-          supabase.from('elimination_tournaments').select('id', { count: 'exact', head: true }).eq('winner_user_id', userId),
-          supabase.from('elimination_tournaments').select('id', { count: 'exact', head: true }).eq('owner_id', userId),
+          supabase
+            .from("elimination_participants")
+            .select("tournament_id", { count: "exact", head: true })
+            .eq("user_id", userId)
+            .eq("invite_status", "accepted"),
+          supabase
+            .from("elimination_tournaments")
+            .select("id", { count: "exact", head: true })
+            .eq("winner_user_id", userId),
+          supabase
+            .from("elimination_tournaments")
+            .select("id", { count: "exact", head: true })
+            .eq("owner_id", userId),
         ]);
+
+        // Pull recent point transactions and compute a *net* total related to elimination.
+        // We don't rely on a specific column name; instead, we:
+        //  - Probe common numeric fields (amount / points / delta)
+        //  - Treat a transaction as "elimination-related" if ANY stringified field includes "elimination"
+        // This keeps the client robust even if the exact PT schema shifts slightly.
+        let net = 0;
+        try {
+          const { data: txRows, error: txErr } = await supabase
+            .from("point_transactions")
+            .select("id, amount, points, delta, category, source, meta, metadata, description, created_at, user_id")
+            .eq("user_id", userId)
+            .order("created_at", { ascending: false })
+            .limit(5000);
+
+          if (!txErr && Array.isArray(txRows)) {
+            for (const row of txRows) {
+              const hay = JSON.stringify(row || {}).toLowerCase();
+              const looksElim = hay.includes("elimination") || hay.includes("elim_");
+              if (!looksElim) continue;
+              const val = Number(
+                (row && (row.amount ?? row.points ?? row.delta)) ?? 0
+              );
+              if (Number.isFinite(val)) net += val;
+            }
+          }
+        } catch (e) {
+          // If PT fetch fails for any reason, we simply leave net=0 (non-fatal for the page)
+        }
+
         if (!cancelled) {
           setStats({
-            participated: p1.count || 0,
-            wins: p2.count || 0,
-            created: p3.count || 0,
+            participated: p1?.count || 0,
+            wins: p2?.count || 0,
+            created: p3?.count || 0,
+            pointsNet: net,
           });
         }
-      } catch {}
+      } catch {
+        // ignore
+      }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [userId]);
 
+  const netColor =
+    stats.pointsNet > 0
+      ? "text-emerald-700"
+      : stats.pointsNet < 0
+      ? "text-rose-700"
+      : "text-gray-900";
+
+  const netLabel =
+    stats.pointsNet > 0 ? `+${stats.pointsNet}` : `${stats.pointsNet}`;
+
   return (
-    <div className="mt-4 grid grid-cols-3 gap-3 max-w-md mx-auto">
+    <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-2xl mx-auto">
       <div className="rounded-lg border bg-white p-3 text-center shadow-sm">
         <div className="text-xs text-gray-500">Participated</div>
         <div className="text-xl font-bold text-gray-900">{stats.participated}</div>
@@ -1039,6 +1100,13 @@ function UserElimStats({ userId }) {
       <div className="rounded-lg border bg-white p-3 text-center shadow-sm">
         <div className="text-xs text-gray-500">Created</div>
         <div className="text-xl font-bold text-gray-900">{stats.created}</div>
+      </div>
+      <div className="rounded-lg border bg-white p-3 text-center shadow-sm">
+        <div className="flex items-center justify-center gap-1 text-xs text-gray-500">
+          <Coins className="w-3.5 h-3.5" />
+          <span>Elim Points (net)</span>
+        </div>
+        <div className={`text-xl font-bold ${netColor}`}>{netLabel}</div>
       </div>
     </div>
   );
