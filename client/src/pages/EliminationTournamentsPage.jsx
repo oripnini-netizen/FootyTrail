@@ -1119,7 +1119,7 @@ supabase
 <div className="rounded-lg border bg-white p-3 text-center shadow-sm">
   <div className="flex items-center justify-center gap-1 text-xs text-gray-500">
     <Coins className="w-3.5 h-3.5" />
-    <span>Elim Points (net)</span>
+    <span>Points</span>
   </div>
   <div className={`text-xl font-bold ${netColor}`}>{netLabel}</div>
 </div>
