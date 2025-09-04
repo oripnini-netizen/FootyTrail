@@ -1050,7 +1050,7 @@ supabase
             .eq("owner_id", userId),
           supabase
             .from("elimination_round_entries")
-            .select("round_id", { count: "exact", head: true })
+            .select("id", { count: "exact", head: true })
             .eq("user_id", userId),
         ]);
 
@@ -1833,7 +1833,57 @@ const handleStartNow = async () => {
   } finally {
     setStartNowBusy(false);
   }
+}
+
+// Prevent duplicate processing per tournament when the join countdown ends
+const processedJoinEndRef = useRef(new Set());
+
+// When the lobby join window ends: if accepted < min participants, finish with no winner; then hard refresh.
+const handleJoinCountdownEnd = async () => {
+  try {
+    if (tournament.status !== "lobby") return;
+    if (!joinDeadline) return;
+    if (processedJoinEndRef.current.has(tournament.id)) return;
+    processedJoinEndRef.current.add(tournament.id);
+
+    // Count accepted participants from DB (authoritative)
+    const { count: acceptedCountNow, error: cntErr } = await supabase
+      .from("elimination_participants")
+      .select("user_id", { count: "exact", head: true })
+      .eq("tournament_id", tournament.id)
+      .eq("invite_status", "accepted");
+
+    if (cntErr) {
+      console.error("[elim] accepted-count error", cntErr);
+      // Fallback: one refresh to let server-side logic settle
+      window.location.reload();
+      return;
+    }
+
+    const minRequired = Math.max(2, Number(tournament.min_participants || 2));
+
+    if ((acceptedCountNow || 0) < minRequired) {
+      // Not enough participants — finish without a winner
+      const { error: updErr } = await supabase
+        .from("elimination_tournaments")
+        .update({ status: "finished", finished_at: new Date().toISOString() })
+        .eq("id", tournament.id);
+
+      if (updErr) {
+        console.error("[elim] finish (insufficient participants) failed", updErr);
+        // Avoid reload loop if update failed
+        return;
+      }
+    }
+
+    // Reflect the final state (either finished or started elsewhere)
+    window.location.reload();
+  } catch (e) {
+    console.error("[elim] handleJoinCountdownEnd fatal", e);
+  }
 };
+
+;
 // ====== /CHANGED ======
 
 
@@ -1908,7 +1958,7 @@ const handleStartNow = async () => {
       {isLobby && !!joinDeadline && (
         <div className="mt-1 text-xs text-gray-700 flex items-center gap-2 flex-wrap">
           <span className="rounded bg-orange-50 text-orange-700 ring-1 ring-orange-200 px-1.5 py-0.5">
-            Join closes in <Countdown endsAt={joinDeadline} onEnd={() => window.location.reload()} />
+            {new Date(joinDeadline).getTime() > Date.now() ? (<>Join closes in <Countdown endsAt={joinDeadline} onEnd={handleJoinCountdownEnd} /></>) : (<span>Join closed</span>)}
           </span>
           <span className="text-gray-400">•</span>
           <span>Accepted: {acceptedCount}</span>
@@ -2172,7 +2222,7 @@ const handleStartNow = async () => {
           {/* Rounds list (unchanged except cosmetics) */}
           <div className="mt-4 space-y-3">
             {rounds.length === 0 ? (
-              <div className="text-sm text-gray-500">Waiting for creator to start the challenge...</div>
+              <div className="text-sm text-gray-500">Waiting for challenge to start...</div>
             ) : (
               rounds.map((r) => {
                 const entries = entriesFor(r.id);
