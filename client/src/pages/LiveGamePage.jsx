@@ -55,7 +55,92 @@ export default function LiveGamePage() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  // Boot payload: either daily (from GamePage) or normal
+  
+  // On hard refresh: if a game was in progress, auto-lose (no cheating)
+  useEffect(() => {
+    try {
+      const nav = performance.getEntriesByType('navigation')[0];
+      const navigationTypeIsReload = nav && (nav.type === 'reload' || nav.type === 'back_forward');
+      const inProgress = sessionStorage.getItem('ft_game_in_progress') === '1';
+      const raw = sessionStorage.getItem('ft_game_payload');
+      if (navigationTypeIsReload && inProgress && raw && !endedRef.current) {
+        const payload = JSON.parse(raw);
+        // Best-effort: write a loss record using payload, then go to postgame
+        (async () => {
+          try {
+            const playerIdNumeric = Number(payload?.id);
+            if (!Number.isNaN(playerIdNumeric)) {
+              // Insert minimal games_records directly (mirrors saveGameRecord(false))
+              const { data: grInsert, error: grErr } = await supabase
+                .from('games_records')
+                .insert([{
+                  user_id: user?.id || null,
+                  player_id: playerIdNumeric,
+                  player_name: payload?.name || null,
+                  player_data: {
+                    id: playerIdNumeric,
+                    name: payload?.name,
+                    nationality: payload?.nationality,
+                    position: payload?.position,
+                    age: payload?.age,
+                    photo: payload?.photo,
+                  },
+                  is_daily_challenge: !!payload?.isDaily,
+                  is_elimination_game: !!payload?.elimination,
+                  guesses_attempted: 3,
+                  time_taken_seconds: 0,
+                  points_earned: 0,
+                  potential_points: Number(payload?.potentialPoints || 0),
+                  hints_used: 0,
+                  completed: true,
+                  won: false,
+                }])
+                .select('id')
+                .maybeSingle();
+              if (grErr) {
+                console.error('[reload auto-lose] insert games_records error:', grErr);
+              }
+              // For elimination, try to advance
+              if (payload?.elimination?.tournamentId) {
+                const { error: rpcErr } = await supabase.rpc('advance_elimination_tournament', {
+                  p_tournament_id: payload.elimination.tournamentId,
+                });
+                if (rpcErr) console.error('[reload auto-lose] advance RPC error:', rpcErr);
+              }
+            }
+          } catch (e) {
+            console.error('[reload auto-lose] exception:', e);
+          } finally {
+            try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
+            navigate('/postgame', {
+              state: {
+                didWin: false,
+                player: payload ? {
+                  id: payload.id,
+                  name: payload.name,
+                  age: payload.age,
+                  nationality: payload.nationality,
+                  position: payload.position,
+                  photo: payload.photo,
+                  potentialPoints: payload.potentialPoints,
+                } : null,
+                stats: { pointsEarned: 0, timeSec: 0, guessesUsed: 3, usedHints: {} },
+                filters: payload?.filters || { potentialPoints: 0 },
+                isDaily: !!payload?.isDaily,
+                potentialPoints: Number(payload?.potentialPoints || 0),
+                outroLine: null,
+                elimination: payload?.elimination || null,
+              },
+              replace: true,
+            });
+          }
+        })();
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, []);
+// Boot payload: either daily (from GamePage) or normal
   const isDaily = !!location.state?.isDaily;
   const gameData = location.state
     ? {
@@ -204,6 +289,23 @@ export default function LiveGamePage() {
       try {
         // If navigated with a prepared card in state
         if (location.state && location.state.id && location.state.name) {
+          // persist "game in progress" + payload for hard-refresh detection
+          try {
+            const payload = {
+              id: location.state.id,
+              name: location.state.name,
+              age: location.state.age,
+              nationality: location.state.nationality,
+              position: location.state.position,
+              photo: location.state.photo,
+              potentialPoints: location.state.potentialPoints ?? 10000,
+              isDaily: !!location.state.isDaily,
+              filters: location.state.filters || { potentialPoints: 0 },
+              elimination: location.state.elimination || null,
+            };
+            sessionStorage.setItem('ft_game_in_progress', '1');
+            sessionStorage.setItem('ft_game_payload', JSON.stringify(payload));
+          } catch {}
           // kick off timer
           timerRef.current = setInterval(() => {
             setTimeSec((t) => {
@@ -221,7 +323,8 @@ export default function LiveGamePage() {
                       3,
                       INITIAL_TIME /* user ran out of time */
                     );
-                    navigate('/postgame', {
+                    try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
+        navigate('/postgame', {
                       state: {
                         didWin: false,
                         player: gameData,
@@ -466,6 +569,7 @@ export default function LiveGamePage() {
           3,
           INITIAL_TIME - timeSec
         );
+        try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
         navigate('/postgame', {
           state: {
             didWin: false,
@@ -697,7 +801,8 @@ export default function LiveGamePage() {
       const guessesUsed = 3 - guessesLeft + 1;
       const outroLine = await generateOutro(true, points, guessesUsed, elapsed);
 
-      navigate('/postgame', {
+      try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
+        navigate('/postgame', {
         state: {
           didWin: true,
           player: {
@@ -740,7 +845,8 @@ export default function LiveGamePage() {
       const elapsed = INITIAL_TIME - timeSec;
       const outroLine = await generateOutro(false, 0, 3, elapsed);
 
-      navigate('/postgame', {
+      try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
+        navigate('/postgame', {
         state: {
           didWin: false,
           player: {
@@ -871,7 +977,8 @@ export default function LiveGamePage() {
                       3,
                       INITIAL_TIME - timeSec
                     );
-                    navigate('/postgame', {
+                    try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
+        navigate('/postgame', {
                       state: {
                         didWin: false,
                         player: gameData,
@@ -1082,7 +1189,8 @@ export default function LiveGamePage() {
             3,
             INITIAL_TIME - timeSec
           );
-          navigate('/postgame', {
+          try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
+        navigate('/postgame', {
             state: {
               didWin: false,
               player: gameData,
