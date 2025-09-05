@@ -868,111 +868,107 @@ export default function LiveGamePage() {
             }}
             className="space-y-4"
           >
-            {/* INPUT + LOADING SPINNER */}
-            <div className="relative">
-              <input
-                type="text"
-                value={guess}
-                onChange={(e) => {
-                  setGuess(typeof e.target.value === 'string' ? e.target.value : String(e.target.value ?? ''));
-                  setHighlightIndex(-1);
-                }}
-                onKeyDown={(e) => {
-                  if (!suggestions.length) return;
-                  if (e.key === 'ArrowDown') {
-                    e.preventDefault();
-                    setHighlightIndex((i) => (i + 1) % suggestions.length);
-                  } else if (e.key === 'ArrowUp') {
-                    e.preventDefault();
-                    setHighlightIndex((i) => (i - 1 + suggestions.length) % suggestions.length);
-                  } else if (e.key === 'Escape') {
-                    setSuggestions([]);
-                    setHighlightIndex(-1);
-                  }
-                }}
-                placeholder="Type a player's name"
-                className="w-full px-4 pr-10 py-3 rounded border"
-                autoFocus
-                aria-busy={isLoadingSuggestions}
-                aria-describedby="name-suggest-loading"
-              />
-              {isLoadingSuggestions && (
-                <div
-                  id="name-suggest-loading"
-                  className="absolute inset-y-0 right-3 flex items-center"
-                  aria-hidden="true"
-                >
-                  {/* Simple Tailwind/inline SVG spinner */}
-                  <svg
-                    className="h-5 w-5 animate-spin text-gray-400"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                  >
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    />
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-                    />
-                  </svg>
-                </div>
-              )}
-            </div>
+            {/* INPUT + LOADING SPINNER */}{/* STICKY input row on mobile: input + "Give up" (no Submit button) */}
+<div className="md:static sticky top-28 z-30 bg-white">
+  <div className="flex items-stretch gap-3">
+    <div className="relative flex-1">
+      <input
+        type="text"
+        value={guess}
+        onChange={(e) => {
+          setGuess(typeof e.target.value === 'string' ? e.target.value : String(e.target.value ?? ''));
+          setHighlightIndex(-1);
+        }}
+        onKeyDown={(e) => {
+          if (!suggestions.length) return;
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            setHighlightIndex((i) => (i + 1) % suggestions.length);
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setHighlightIndex((i) => (i - 1 + suggestions.length) % suggestions.length);
+          } else if (e.key === 'Escape') {
+            setSuggestions([]);
+            setHighlightIndex(-1);
+          }
+        }}
+        placeholder="Type a player's name"
+        className="w-full px-4 pr-10 py-3 rounded border"
+        autoFocus
+        aria-busy={isLoadingSuggestions}
+        aria-describedby="name-suggest-loading"
+      />
+      {isLoadingSuggestions && (
+        <div
+          id="name-suggest-loading"
+          className="absolute inset-y-0 right-3 flex items-center"
+          aria-hidden="true"
+        >
+          {/* Simple Tailwind/inline SVG spinner */}
+          <svg
+            className="h-5 w-5 animate-spin text-gray-400"
+            viewBox="0 0 24 24"
+            fill="none"
+          >
+            <circle
+              className="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              strokeWidth="4"
+            />
+            <path
+              className="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+            />
+          </svg>
+        </div>
+      )}
+    </div>
 
-            <div className="flex gap-3">
-              <button
-                type="submit"
-                className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded font-medium"
-              >
-                Submit Guess
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (endedRef.current) return;
-                  endedRef.current = true;
-                  clearInterval(timerRef.current);
-                  (async () => {
-                    await saveGameRecord(false);
-                    await writeElimEntryAndAdvance(false, 0); // NEW
-                    const outroLine = await generateOutro(
-                      false,
-                      0,
-                      3,
-                      INITIAL_TIME - timeSec
-                    );
-                    navigate('/postgame', {
-                      state: {
-                        didWin: false,
-                        player: gameData,
-                        stats: {
-                          pointsEarned: 0,
-                          timeSec: INITIAL_TIME - timeSec,
-                          guessesUsed: 3,
-                          usedHints,
-                        },
-                        filters,
-                        isDaily,
-                        potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
-                        outroLine: outroLine || null,
-                        elimination, // pass through if present
-                      },
-                      replace: true,
-                    });
-                  })();
-                }}
-                className="px-4 py-2 rounded bg-red-600 hover:bg-red-700 text-white"
-              >
-                Give up
-              </button>
-            </div>
+    <button
+      type="button"
+      onClick={() => {
+        if (endedRef.current) return;
+        endedRef.current = true;
+        clearInterval(timerRef.current);
+        (async () => {
+          await saveGameRecord(false);
+          await writeElimEntryAndAdvance(false, 0); // NEW
+          const outroLine = await generateOutro(
+            false,
+            0,
+            3,
+            INITIAL_TIME - timeSec
+          );
+          navigate('/postgame', {
+            state: {
+              didWin: false,
+              player: gameData,
+              stats: {
+                pointsEarned: 0,
+                timeSec: INITIAL_TIME - timeSec,
+                guessesUsed: 3,
+                usedHints,
+              },
+              filters,
+              isDaily,
+              potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
+              outroLine: outroLine || null,
+              elimination, // pass through if present
+            },
+            replace: true,
+          });
+        })();
+      }}
+      className="px-4 py-2 rounded bg-red-600 hover:bg-red-700 text-white whitespace-nowrap"
+    >
+      Give up
+    </button>
+  </div>
+</div>
           </form>
 
           {suggestions?.length ? (
