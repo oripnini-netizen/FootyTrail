@@ -1855,7 +1855,8 @@ const handleJoinCountdownEnd = async () => {
 
     if (cntErr) {
       console.error("[elim] accepted-count error", cntErr);
-      // Avoid reload loop: just exit; safety net effect will recover
+      // Fallback: one refresh to let server-side logic settle
+      window.location.reload();
       return;
     }
 
@@ -1875,19 +1876,9 @@ const handleJoinCountdownEnd = async () => {
       }
     }
 
-  // Reflect the final state (either finished or started elsewhere) — soft refresh
-  try {
-    const { data: roundRows2 } = await supabase
-      .from("elimination_rounds")
-      .select("id, round_number, started_at, ends_at, closed_at, player_id, is_elimination")
-      .eq("tournament_id", tournament.id)
-      .order("round_number", { ascending: true });
-    if (Array.isArray(roundRows2)) setRounds(roundRows2);
-    if (onAdvanced) await onAdvanced();
-  } catch (refreshErr) {
-    console.warn("[elim] soft refresh after join-end failed", refreshErr);
-  }
-} catch (e) {
+    // Reflect the final state (either finished or started elsewhere)
+    window.location.reload();
+  } catch (e) {
     console.error("[elim] handleJoinCountdownEnd fatal", e);
   }
 };
@@ -2233,7 +2224,7 @@ const handleJoinCountdownEnd = async () => {
             {rounds.length === 0 ? (
               <div className="text-sm text-gray-500">Waiting for challenge to start...</div>
             ) : (
-              rounds.map((r) => {
+              [...rounds].sort((a,b)=>(b.round_number||0)-(a.round_number||0)).map((r) => {
                 const entries = entriesFor(r.id);
                 const entryByUser = new Map(entries.map((e) => [e.user_id, e]));
 
@@ -2241,9 +2232,9 @@ const handleJoinCountdownEnd = async () => {
                   activeUsersByRound.get(r.id) ||
                   new Set(participants.filter(p => ((p.invite_status || '').toLowerCase() === 'accepted') && (p.state || 'active') !== 'eliminated').map(p => p.id));
 
-                const activeCount = (isFinished ? entries.length : activeIdsForRound.size);
+                const activeCount = activeIdsForRound.size;
 
-                const entriesFromActive = isFinished ? entries : entries.filter((e) => (activeUsersByRound.get(r.id) || new Set()).has(e.user_id));
+                const entriesFromActive = entries.filter((e) => (activeUsersByRound.get(r.id) || new Set()).has(e.user_id));
 
                 const now = Date.now();
                 const endsAt = r.ends_at ? new Date(r.ends_at).getTime() : null;
@@ -2252,10 +2243,7 @@ const handleJoinCountdownEnd = async () => {
                   (!!endsAt ? endsAt > now : true) &&
                   entriesFromActive.length < activeCount;
 
-                const mePlayed =
-                  userId && (isFinished ? entries.some(e=>e.user_id===userId) : activeIdsForRound.has(userId))
-                    ? entryByUser.has(userId)
-                    : false;
+                const mePlayed = userId ? entryByUser.has(userId) : false;
 
                 // -------- ACCUMULATION & RESET FIX (begin) --------
 const isElimRoundCheck = (roundObj) =>
@@ -2303,7 +2291,7 @@ for (const e of currentEntries) {
 
 // For each ACTIVE user in this round, sum their points across the block
 const cumRows = [];
-for (const uid of (isFinished ? new Set(entries.map(e => e.user_id)) : (activeUsersByRound.get(r.id) || new Set()))) {
+for (const uid of (activeUsersByRound.get(r.id) || new Set())) {
   const playedCurrent = entryByUser.has(uid);
   let sumPrev = 0;
   for (const pr of prevBlockRounds) {
@@ -2382,26 +2370,7 @@ const unifiedRows = [...cumRows].sort((a, b) => {
                         <>
                           Ends in:{" "}
                           <span className="font-semibold">
-                            <Countdown
-                            endsAt={r.ends_at || null}
-                            onEnd={async () => {
-                              try {
-                                // Finalize the latest open round (this will also advance if needed)
-                                await finalizeLatestRoundForTournament(tournament.id);
-                                // Soft refresh: fetch rounds instead of hard reload
-                                const { data: roundRows2 } = await supabase
-                                  .from("elimination_rounds")
-                                  .select("id, round_number, started_at, ends_at, closed_at, player_id, is_elimination")
-                                  .eq("tournament_id", tournament.id)
-                                  .order("round_number", { ascending: true });
-                                if (Array.isArray(roundRows2)) setRounds(roundRows2);
-                                if (onAdvanced) await onAdvanced();
-                              } catch (e) {
-                                console.warn("[elim] countdown finalize failed", e);
-                                // no hard reload to avoid loops
-                              }
-                            }}
-                          />
+                            <Countdown endsAt={r.ends_at || null} onEnd={() => window.location.reload()} />
                           </span>{" "}
                           {timeLimitMin ? `• Limit: ${timeLimitMin} min` : null}
                         </>
