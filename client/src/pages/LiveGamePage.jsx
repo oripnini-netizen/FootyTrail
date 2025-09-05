@@ -55,8 +55,7 @@ export default function LiveGamePage() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  
-  // On hard refresh: if a game was in progress, auto-lose (no cheating)
+  // On hard refresh/back-forward: if a game was in progress, auto-lose and (in elimination) write the round entry via RPC
   useEffect(() => {
     try {
       const nav = performance.getEntriesByType('navigation')[0];
@@ -65,47 +64,53 @@ export default function LiveGamePage() {
       const raw = sessionStorage.getItem('ft_game_payload');
       if (navigationTypeIsReload && inProgress && raw && !endedRef.current) {
         const payload = JSON.parse(raw);
-        // Best-effort: write a loss record using payload, then go to postgame
         (async () => {
           try {
-            const playerIdNumeric = Number(payload?.id);
-            if (!Number.isNaN(playerIdNumeric)) {
-              // Insert minimal games_records directly (mirrors saveGameRecord(false))
-              const { data: grInsert, error: grErr } = await supabase
-                .from('games_records')
-                .insert([{
-                  user_id: user?.id || null,
-                  player_id: playerIdNumeric,
-                  player_name: payload?.name || null,
-                  player_data: {
-                    id: playerIdNumeric,
-                    name: payload?.name,
-                    nationality: payload?.nationality,
-                    position: payload?.position,
-                    age: payload?.age,
-                    photo: payload?.photo,
-                  },
-                  is_daily_challenge: !!payload?.isDaily,
-                  is_elimination_game: !!payload?.elimination,
-                  guesses_attempted: 3,
-                  time_taken_seconds: 0,
-                  points_earned: 0,
-                  potential_points: Number(payload?.potentialPoints || 0),
-                  hints_used: 0,
-                  completed: true,
+            if (payload?.elimination?.roundId && user?.id) {
+              const { error: rpcErr } = await supabase.rpc('play_elimination_round', {
+                p_round_id: payload.elimination.roundId,
+                p_user_id: user.id,
+                p_game: {
                   won: false,
-                }])
-                .select('id')
-                .maybeSingle();
-              if (grErr) {
-                console.error('[reload auto-lose] insert games_records error:', grErr);
-              }
-              // For elimination, try to advance
-              if (payload?.elimination?.tournamentId) {
-                const { error: rpcErr } = await supabase.rpc('advance_elimination_tournament', {
-                  p_tournament_id: payload.elimination.tournamentId,
-                });
-                if (rpcErr) console.error('[reload auto-lose] advance RPC error:', rpcErr);
+                  points: 0,
+                  guesses: 3,
+                  time_seconds: 0,
+                  hints_used: {},
+                  player: {
+                    id: Number(payload?.id) || null,
+                    name: payload?.name || null,
+                    nationality: payload?.nationality || null,
+                    position: payload?.position || null,
+                    age: payload?.age || null,
+                    photo: payload?.photo || null,
+                  }
+                }
+              });
+              if (rpcErr) console.error('[reload auto-lose] play_elimination_round error:', rpcErr);
+            } else {
+              const playerIdNumeric = Number(payload?.id);
+              if (!Number.isNaN(playerIdNumeric)) {
+                const { error: grErr } = await supabase
+                  .from('games_records')
+                  .insert([{
+                    user_id: user?.id || null,
+                    player_id: playerIdNumeric,
+                    player_name: payload?.name || null,
+                    player_data: {
+                      id: playerIdNumeric, name: payload?.name, nationality: payload?.nationality,
+                      position: payload?.position, age: payload?.age, photo: payload?.photo,
+                    },
+                    is_daily_challenge: !!payload?.isDaily,
+                    is_elimination_game: !!payload?.elimination,
+                    guesses_attempted: 3,
+                    time_taken_seconds: 0,
+                    points_earned: 0,
+                    potential_points: Number(payload?.potentialPoints || 0),
+                    hints_used: 0,
+                    completed: true,
+                    won: false,
+                  }]);
+                if (grErr) console.error('[reload auto-lose] insert games_records error:', grErr);
               }
             }
           } catch (e) {
@@ -116,13 +121,9 @@ export default function LiveGamePage() {
               state: {
                 didWin: false,
                 player: payload ? {
-                  id: payload.id,
-                  name: payload.name,
-                  age: payload.age,
-                  nationality: payload.nationality,
-                  position: payload.position,
-                  photo: payload.photo,
-                  potentialPoints: payload.potentialPoints,
+                  id: payload.id, name: payload.name, age: payload.age,
+                  nationality: payload.nationality, position: payload.position,
+                  photo: payload.photo, potentialPoints: payload.potentialPoints,
                 } : null,
                 stats: { pointsEarned: 0, timeSec: 0, guessesUsed: 3, usedHints: {} },
                 filters: payload?.filters || { potentialPoints: 0 },
@@ -136,11 +137,11 @@ export default function LiveGamePage() {
           }
         })();
       }
-    } catch (e) {
-      // ignore
-    }
+    } catch {}
   }, []);
-// Boot payload: either daily (from GamePage) or normal
+
+
+  // Boot payload: either daily (from GamePage) or normal
   const isDaily = !!location.state?.isDaily;
   const gameData = location.state
     ? {
@@ -183,7 +184,11 @@ export default function LiveGamePage() {
   const [showFloatingTimer, setShowFloatingTimer] = useState(false);
 
   
+  
   // Floating input visibility (mobile)
+  const inputCardRef = useRef(null);
+  const [showFloatingInput, setShowFloatingInput] = useState(false);
+// Floating input visibility (mobile)
   const inputCardRef = useRef(null);
   const [showFloatingInput, setShowFloatingInput] = useState(false);
 // refs for auto-scrolling the highlighted suggestion into view
