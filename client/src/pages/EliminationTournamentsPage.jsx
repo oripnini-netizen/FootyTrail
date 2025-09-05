@@ -1657,78 +1657,7 @@ if (error) {
     throw error;
   }
 }
-// Fallback to spawn next round if none exists (e.g., all no-shows -> tie)
-try {
-  if (!laterRoundExists) {
-    const openIdAfter = await getLatestOpenRoundIdForTournament(tournament.id);
-    if (!openIdAfter) {
-      if (!nextPlayerId) {
-        const usedIds = new Set((rounds || []).map((x) => x?.player_id).filter(Boolean));
-        const maxAttempts2 = 24;
-        for (let i = 0; i < maxAttempts2; i++) {
-          const candidate2 = await getRandomPlayer(
-            {
-              ...(tournament.filters || {}),
-              userId,
-              excludePlayerIds: Array.from(usedIds),
-            },
-            userId
-          );
-          const cand2 = candidate2?.id || null;
-          if (cand2 && !usedIds.has(cand2)) {
-            nextPlayerId = cand2;
-            break;
-          }
-        }
-      }
-      if (nextPlayerId) {
-        const nextNumber = (r.round_number || 0) + 1;
-        const isElimNext = (nextNumber % roundsToElim === 0);
-        const endsAtIso =
-          Number(tournament.round_time_limit_seconds || 0) > 0
-            ? new Date(Date.now() + Number(tournament.round_time_limit_seconds) * 1000).toISOString()
-            : null;
-        const insertRes = await supabase
-          .from("elimination_rounds")
-          .insert([{
-            tournament_id: tournament.id,
-            round_number: nextNumber,
-            started_at: new Date().toISOString(),
-            ends_at: endsAtIso,
-            player_id: nextPlayerId,
-            is_elimination: isElimNext,
-          }])
-          .select("id");
-        if (insertRes.error) {
-          console.warn("[elim] next round insert failed (likely RLS)", insertRes.error);
-        } else {
-          const { data: roundRows2 } = await supabase
-            .from("elimination_rounds")
-            .select("id, round_number, started_at, ends_at, closed_at, player_id, is_elimination")
-            .eq("tournament_id", tournament.id)
-            .order("round_number", { ascending: true });
-          if (Array.isArray(roundRows2)) setRounds(roundRows2);
-        }
-      }
-    }
-  }
-} catch (spawnErr) {
-  console.warn("[elim] next-round spawn attempt failed", spawnErr);
-}
-
-        if (error) {
-          const msg = String(error?.message || "").toLowerCase();
-          const isNotFound = msg.includes("not found") && msg.includes("round");
-          if (error.code === "P0001" && isNotFound) {
-            await finalizeLatestRoundForTournament(tournament.id);
-          } else if (error.code === "PGRST202") {
-            console.warn("[elim] finalize_round not in schema cache yet; will retry");
-          } else {
-            throw error;
-          }
-        }
-
-        if (onAdvanced) await onAdvanced();
+if (onAdvanced) await onAdvanced();
       } catch (e) {
         console.error("[elim] auto-finalize error", e);
       } finally {
@@ -1916,9 +1845,8 @@ const handleJoinCountdownEnd = async () => {
           >
             {cardCollapsed ? "▼" : "▲"}
           </button>
-          <h3 className="text-base font-semibold text-gray-900">
-            {tournament.name}
-          </h3>
+          <h3 className="text-lg sm:text-xl font-extrabold text-gray-900 tracking-tight">
+            <span className="align-middle">🏁 {tournament.name}</span></h3>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
           <span
