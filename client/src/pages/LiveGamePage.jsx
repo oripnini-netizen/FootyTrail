@@ -117,7 +117,6 @@ useEffect(() => {
           console.error('[reload auto-lose] exception:', e);
         } finally {
           try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
-          try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
                     navigate('/postgame', {
             state: {
               didWin: false,
@@ -290,7 +289,25 @@ useEffect(() => {
     const bootstrap = async () => {
       try {
         // If navigated with a prepared card in state
-        if (location.state && location.state.id && location.state.name) {
+        
+if (location.state && location.state.id && location.state.name) {
+          // persist "game in progress" + payload for hard-refresh detection
+          try {
+            const payload = {
+              id: location.state.id,
+              name: location.state.name,
+              age: location.state.age,
+              nationality: location.state.nationality,
+              position: location.state.position,
+              photo: location.state.photo,
+              potentialPoints: location.state.potentialPoints ?? 10000,
+              isDaily: !!location.state.isDaily,
+              filters: location.state.filters || { potentialPoints: 0 },
+              elimination: location.state.elimination || null,
+            };
+            sessionStorage.setItem('ft_game_in_progress', '1');
+            sessionStorage.setItem('ft_game_payload', JSON.stringify(payload));
+          } catch {}
           // kick off timer
           timerRef.current = setInterval(() => {
             setTimeSec((t) => {
@@ -958,9 +975,57 @@ useEffect(() => {
           Give up
         </button>
       </div>
-    </div>
-  </div>
-)}
+    
+{suggestions?.length ? (
+  <ul
+    ref={listRef}
+    className="mt-3 border rounded divide-y max-h-56 overflow-auto"
+  >
+    {suggestions.map((sug, idx) => (
+      <li
+        key={sug.id ?? sug.display ?? idx}
+        ref={(el) => (itemRefs.current[idx] = el)}
+        className={classNames(
+          'px-3 py-2 cursor-pointer text-sm',
+          idx === highlightIndex ? 'bg-sky-50' : 'hover:bg-gray-50'
+        )}
+        onMouseEnter={() => setHighlightIndex(idx)}
+        onMouseDown={(e) => { e.preventDefault(); }}
+        onClick={() => {
+          if (!sug?.display) return;
+          setGuess(sug.display);
+          setSuggestions([]);
+          submitGuess(sug.display);
+        }}
+      >
+        <div className="flex items-center gap-3">
+          {sug.photo ? (
+            <img
+              src={sug.photo}
+              alt=""
+              className="h-8 w-8 rounded-full object-cover object-top flex-shrink-0"
+            />
+          ) : (
+            <div className="h-8 w-8 rounded-full bg-gray-200 flex items-center justify-center text-xs text-gray-500 flex-shrink-0">
+              {sug.display?.[0]?.toUpperCase() || '?'}
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="truncate">{sug.display}</div>
+            {Array.isArray(sug.ids) && sug.ids.length > 1 ? (
+              <div className="text-[11px] text-gray-500">
+                Multiple players share this name
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </li>
+    ))}
+  </ul>
+) : null}
+          </div>
+        </div>
+      )}
 
 
       {/* MOBILE: split points info into 3 stacked cards */}
@@ -1069,115 +1134,109 @@ useEffect(() => {
             }}
             className="space-y-4"
           >
-            {/* INPUT + LOADING SPINNER */}
-            <div ref={inputCardRef} className="relative">
-              <input
-                type="text"
-                value={guess}
-                onChange={(e) => {
-                  setGuess(typeof e.target.value === 'string' ? e.target.value : String(e.target.value ?? ''));
-                  setHighlightIndex(-1);
-                }}
-                onKeyDown={(e) => {
-                  if (!suggestions.length) return;
-                  if (e.key === 'ArrowDown') {
-                    e.preventDefault();
-                    setHighlightIndex((i) => (i + 1) % suggestions.length);
-                  } else if (e.key === 'ArrowUp') {
-                    e.preventDefault();
-                    setHighlightIndex((i) => (i - 1 + suggestions.length) % suggestions.length);
-                  } else if (e.key === 'Escape') {
-                    setSuggestions([]);
-                    setHighlightIndex(-1);
-                  }
-                }}
-                placeholder="Type a player's name"
-                className="w-full px-4 pr-10 py-3 rounded border"
-                autoFocus
-                aria-busy={isLoadingSuggestions}
-                aria-describedby="name-suggest-loading"
-              />
-              {isLoadingSuggestions && (
-                <div
-                  id="name-suggest-loading"
-                  className="absolute inset-y-0 right-3 flex items-center"
-                  aria-hidden="true"
-                >
-                  {/* Simple Tailwind/inline SVG spinner */}
-                  <svg
-                    className="h-5 w-5 animate-spin text-gray-400"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                  >
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    />
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-                    />
-                  </svg>
-                </div>
-              )}
-            </div>
+            {/* INPUT + LOADING SPINNER (row with Give up) */}
+<div ref={inputCardRef} className="flex items-stretch gap-3">
+  <div className="relative flex-1">
+    <input
+      type="text"
+      value={guess}
+      onChange={(e) => {
+        setGuess(typeof e.target.value === 'string' ? e.target.value : String(e.target.value ?? ''));
+        setHighlightIndex(-1);
+      }}
+      onKeyDown={(e) => {
+        if (!suggestions.length) return;
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setHighlightIndex((i) => (i + 1) % suggestions.length);
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setHighlightIndex((i) => (i - 1 + suggestions.length) % suggestions.length);
+        } else if (e.key === 'Escape') {
+          setSuggestions([]);
+          setHighlightIndex(-1);
+        }
+      }}
+      placeholder="Type a player's name"
+      className="w-full px-4 pr-10 py-3 rounded border"
+      autoFocus
+      aria-busy={isLoadingSuggestions}
+      aria-describedby="name-suggest-loading"
+    />
+    {isLoadingSuggestions && (
+      <div
+        id="name-suggest-loading"
+        className="absolute inset-y-0 right-3 flex items-center"
+        aria-hidden="true"
+      >
+        {/* Simple Tailwind/inline SVG spinner */}
+        <svg
+          className="h-5 w-5 animate-spin text-gray-400"
+          viewBox="0 0 24 24"
+          fill="none"
+        >
+          <circle
+            className="opacity-25"
+            cx="12"
+            cy="12"
+            r="10"
+            stroke="currentColor"
+            strokeWidth="4"
+          />
+          <path
+            className="opacity-75"
+            fill="currentColor"
+            d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+          />
+        </svg>
+      </div>
+    )}
+  </div>
 
-            <div className="flex gap-3">
-              <button
-                type="submit"
-                className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded font-medium"
-              >
-                Submit Guess
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (endedRef.current) return;
-                  endedRef.current = true;
-                  clearInterval(timerRef.current);
-                  (async () => {
-                    await saveGameRecord(false);
-                    await writeElimEntryAndAdvance(false, 0); // NEW
-                    const outroLine = await generateOutro(
-                      false,
-                      0,
-                      3,
-                      INITIAL_TIME - timeSec
-                    );
-                    try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
-                    navigate('/postgame', {
-                      state: {
-                        didWin: false,
-                        player: gameData,
-                        stats: {
-                          pointsEarned: 0,
-                          timeSec: INITIAL_TIME - timeSec,
-                          guessesUsed: 3,
-                          usedHints,
-                        },
-                        filters,
-                        isDaily,
-                        potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
-                        outroLine: outroLine || null,
-                        elimination, // pass through if present
-                      },
-                      replace: true,
-                    });
-                  })();
-                }}
-                className="px-4 py-2 rounded bg-red-600 hover:bg-red-700 text-white"
-              >
-                Give up
-              </button>
-            </div>
+  <button
+    type="button"
+    onClick={() => {
+      if (endedRef.current) return;
+      endedRef.current = true;
+      clearInterval(timerRef.current);
+      (async () => {
+        await saveGameRecord(false);
+        await writeElimEntryAndAdvance(false, 0); // NEW
+        const outroLine = await generateOutro(
+          false,
+          0,
+          3,
+          INITIAL_TIME - timeSec
+        );
+        try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
+        navigate('/postgame', {
+          state: {
+            didWin: false,
+            player: gameData,
+            stats: {
+              pointsEarned: 0,
+              timeSec: INITIAL_TIME - timeSec,
+              guessesUsed: 3,
+              usedHints,
+            },
+            filters,
+            isDaily,
+            potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
+            outroLine: outroLine || null,
+            elimination, // pass through if present
+          },
+          replace: true,
+        });
+      })();
+    }}
+    className="px-4 py-2 rounded bg-red-600 hover:bg-red-700 text-white whitespace-nowrap"
+  >
+    Give up
+  </button>
+</div>
           </form>
 
-          {suggestions?.length ? (
+          {(!showFloatingInput && suggestions?.length) ? (
             <ul
               ref={listRef}
               className="mt-3 border rounded divide-y max-h-56 overflow-auto"
