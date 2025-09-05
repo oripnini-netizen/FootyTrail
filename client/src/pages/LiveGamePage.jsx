@@ -625,7 +625,38 @@ export default function LiveGamePage() {
     };
   }, []);
 
-  // Loading and missing
+  
+  // MOBILE: Observe when the on-page input row scrolls out of view → show floating input
+  useEffect(() => {
+    let observer;
+    const setup = () => {
+      // Disable floating input on desktop
+      if (window.matchMedia('(min-width: 768px)').matches) {
+        setShowFloatingInput(false);
+        if (observer) observer.disconnect();
+        return;
+      }
+      if (!inputCardRef.current) return;
+      if (observer) observer.disconnect();
+
+      observer = new IntersectionObserver(
+        ([entry]) => {
+          // When the original input row is NOT visible, show the floating input
+          setShowFloatingInput(!entry.isIntersecting);
+        },
+        { root: null, threshold: 0 }
+      );
+      observer.observe(inputCardRef.current);
+    };
+
+    setup();
+    window.addEventListener('resize', setup);
+    return () => {
+      window.removeEventListener('resize', setup);
+      if (observer) observer.disconnect();
+    };
+  }, []);
+// Loading and missing
   if (!location.state || !location.state.id) {
     return (
       <div className="max-w-3xl mx-auto p-4">
@@ -761,6 +792,110 @@ export default function LiveGamePage() {
           </div>
         </div>
       )}
+
+      {/* MOBILE floating input (appears once the original input row is off-screen) */}
+      {showFloatingInput && (
+        <div className="md:hidden fixed top-28 left-0 right-0 z-40 px-3">
+          <div className="rounded-xl bg-white shadow-md border p-3">
+            <div className="flex items-stretch gap-3">
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  value={guess}
+                  onChange={(e) => {
+                    setGuess(typeof e.target.value === 'string' ? e.target.value : String(e.target.value ?? ''));
+                    setHighlightIndex(-1);
+                  }}
+                  onKeyDown={(e) => {
+                    if (!suggestions.length) return;
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      setHighlightIndex((i) => (i + 1) % suggestions.length);
+                    } else if (e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      setHighlightIndex((i) => (i - 1 + suggestions.length) % suggestions.length);
+                    } else if (e.key === 'Escape') {
+                      setSuggestions([]);
+                      setHighlightIndex(-1);
+                    }
+                  }}
+                  placeholder="Type a player's name"
+                  className="w-full px-4 pr-10 py-2 rounded border"
+                  aria-busy={isLoadingSuggestions}
+                  aria-describedby="floating-name-suggest-loading"
+                />
+                {isLoadingSuggestions && (
+                  <div
+                    id="floating-name-suggest-loading"
+                    className="absolute inset-y-0 right-3 flex items-center"
+                    aria-hidden="true"
+                  >
+                    <svg
+                      className="h-5 w-5 animate-spin text-gray-400"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      />
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                      />
+                    </svg>
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (endedRef.current) return;
+                  endedRef.current = true;
+                  clearInterval(timerRef.current);
+                  (async () => {
+                    await saveGameRecord(false);
+                    await writeElimEntryAndAdvance(false, 0);
+                    const outroLine = await generateOutro(
+                      false,
+                      0,
+                      3,
+                      INITIAL_TIME - timeSec
+                    );
+                    navigate('/postgame', {
+                      state: {
+                        didWin: false,
+                        player: gameData,
+                        stats: {
+                          pointsEarned: 0,
+                          timeSec: INITIAL_TIME - timeSec,
+                          guessesUsed: 3,
+                          usedHints,
+                        },
+                        filters,
+                        isDaily,
+                        potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
+                        outroLine: outroLine || null,
+                        elimination,
+                      },
+                      replace: true,
+                    });
+                  })();
+                }}
+                className="px-4 py-2 rounded bg-red-600 hover:bg-red-700 text-white whitespace-nowrap"
+              >
+                Give up
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
 
       {/* MOBILE: split points info into 3 stacked cards */}
       <div className="md:hidden space-y-3">
