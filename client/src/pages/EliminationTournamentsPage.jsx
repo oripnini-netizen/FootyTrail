@@ -489,7 +489,7 @@ try {
                             ) : null}
                             {Number.isFinite(Number(n.rounds_to_elimination)) && Number(n.rounds_to_elimination) > 0 ? (
                               <>
-                                {" • "}eliminates every{" "}
+                                {" • "}elimination every{" "}
                                 <span className="font-medium">
                                   {Number(n.rounds_to_elimination)}
                                 </span>{" "}
@@ -2356,7 +2356,7 @@ scoreRows.sort((a, b) => {
         <span className="truncate">{u.full_name || u.email}</span>
         {playedCurrent && (
           <span className="shrink-0 inline-flex items-center rounded-full bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 px-1.5 py-0.5 text-[10px]">
-            played round
+            played
           </span>
         )}
       </div>
@@ -3715,7 +3715,7 @@ function DifficultyFilters(props) {
 
           {/* Minimum Market Value */}
           <Section
-            title="Minimum Market Value (€)"
+            title="Min Market Value (€)"
             icon={<Star className="h-4 w-4 text-green-700" />}
             collapsed={mvCollapsed}
             onToggle={() => setMvCollapsed((v) => !v)}
