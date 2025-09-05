@@ -55,90 +55,91 @@ export default function LiveGamePage() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  // On hard refresh/back-forward: if a game was in progress, auto-lose and (in elimination) write the round entry via RPC
-  useEffect(() => {
-    try {
-      const nav = performance.getEntriesByType('navigation')[0];
-      const navigationTypeIsReload = nav && (nav.type === 'reload' || nav.type === 'back_forward');
-      const inProgress = sessionStorage.getItem('ft_game_in_progress') === '1';
-      const raw = sessionStorage.getItem('ft_game_payload');
-      if (navigationTypeIsReload && inProgress && raw && !endedRef.current) {
-        const payload = JSON.parse(raw);
-        (async () => {
-          try {
-            if (payload?.elimination?.roundId && user?.id) {
-              const { error: rpcErr } = await supabase.rpc('play_elimination_round', {
-                p_round_id: payload.elimination.roundId,
-                p_user_id: user.id,
-                p_game: {
-                  won: false,
-                  points: 0,
-                  guesses: 3,
-                  time_seconds: 0,
-                  hints_used: {},
-                  player: {
-                    id: Number(payload?.id) || null,
-                    name: payload?.name || null,
-                    nationality: payload?.nationality || null,
-                    position: payload?.position || null,
-                    age: payload?.age || null,
-                    photo: payload?.photo || null,
-                  }
+// On hard refresh/back-forward: if a game was in progress, auto-lose and (in elimination) write the round entry via RPC
+useEffect(() => {
+  try {
+    const nav = performance.getEntriesByType('navigation')[0];
+    const navigationTypeIsReload = nav && (nav.type === 'reload' || nav.type === 'back_forward');
+    const inProgress = sessionStorage.getItem('ft_game_in_progress') === '1';
+    const raw = sessionStorage.getItem('ft_game_payload');
+    if (navigationTypeIsReload && inProgress && raw && !endedRef.current) {
+      const payload = JSON.parse(raw);
+      (async () => {
+        try {
+          if (payload?.elimination?.roundId && user?.id) {
+            const { error: rpcErr } = await supabase.rpc('play_elimination_round', {
+              p_round_id: payload.elimination.roundId,
+              p_user_id: user.id,
+              p_game: {
+                won: false,
+                points: 0,
+                guesses: 3,
+                time_seconds: 0,
+                hints_used: {},
+                player: {
+                  id: Number(payload?.id) || null,
+                  name: payload?.name || null,
+                  nationality: payload?.nationality || null,
+                  position: payload?.position || null,
+                  age: payload?.age || null,
+                  photo: payload?.photo || null,
                 }
-              });
-              if (rpcErr) console.error('[reload auto-lose] play_elimination_round error:', rpcErr);
-            } else {
-              const playerIdNumeric = Number(payload?.id);
-              if (!Number.isNaN(playerIdNumeric)) {
-                const { error: grErr } = await supabase
-                  .from('games_records')
-                  .insert([{
-                    user_id: user?.id || null,
-                    player_id: playerIdNumeric,
-                    player_name: payload?.name || null,
-                    player_data: {
-                      id: playerIdNumeric, name: payload?.name, nationality: payload?.nationality,
-                      position: payload?.position, age: payload?.age, photo: payload?.photo,
-                    },
-                    is_daily_challenge: !!payload?.isDaily,
-                    is_elimination_game: !!payload?.elimination,
-                    guesses_attempted: 3,
-                    time_taken_seconds: 0,
-                    points_earned: 0,
-                    potential_points: Number(payload?.potentialPoints || 0),
-                    hints_used: 0,
-                    completed: true,
-                    won: false,
-                  }]);
-                if (grErr) console.error('[reload auto-lose] insert games_records error:', grErr);
               }
-            }
-          } catch (e) {
-            console.error('[reload auto-lose] exception:', e);
-          } finally {
-            try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
-            navigate('/postgame', {
-              state: {
-                didWin: false,
-                player: payload ? {
-                  id: payload.id, name: payload.name, age: payload.age,
-                  nationality: payload.nationality, position: payload.position,
-                  photo: payload.photo, potentialPoints: payload.potentialPoints,
-                } : null,
-                stats: { pointsEarned: 0, timeSec: 0, guessesUsed: 3, usedHints: {} },
-                filters: payload?.filters || { potentialPoints: 0 },
-                isDaily: !!payload?.isDaily,
-                potentialPoints: Number(payload?.potentialPoints || 0),
-                outroLine: null,
-                elimination: payload?.elimination || null,
-              },
-              replace: true,
             });
+            if (rpcErr) console.error('[reload auto-lose] play_elimination_round error:', rpcErr);
+          } else {
+            const playerIdNumeric = Number(payload?.id);
+            if (!Number.isNaN(playerIdNumeric)) {
+              const { error: grErr } = await supabase
+                .from('games_records')
+                .insert([{
+                  user_id: user?.id || null,
+                  player_id: playerIdNumeric,
+                  player_name: payload?.name || null,
+                  player_data: {
+                    id: playerIdNumeric, name: payload?.name, nationality: payload?.nationality,
+                    position: payload?.position, age: payload?.age, photo: payload?.photo,
+                  },
+                  is_daily_challenge: !!payload?.isDaily,
+                  is_elimination_game: !!payload?.elimination,
+                  guesses_attempted: 3,
+                  time_taken_seconds: 0,
+                  points_earned: 0,
+                  potential_points: Number(payload?.potentialPoints || 0),
+                  hints_used: 0,
+                  completed: true,
+                  won: false,
+                }]);
+              if (grErr) console.error('[reload auto-lose] insert games_records error:', grErr);
+            }
           }
-        })();
-      }
-    } catch {}
-  }, []);
+        } catch (e) {
+          console.error('[reload auto-lose] exception:', e);
+        } finally {
+          try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
+          try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
+                    navigate('/postgame', {
+            state: {
+              didWin: false,
+              player: payload ? {
+                id: payload.id, name: payload.name, age: payload.age,
+                nationality: payload.nationality, position: payload.position,
+                photo: payload.photo, potentialPoints: payload.potentialPoints,
+              } : null,
+              stats: { pointsEarned: 0, timeSec: 0, guessesUsed: 3, usedHints: {} },
+              filters: payload?.filters || { potentialPoints: 0 },
+              isDaily: !!payload?.isDaily,
+              potentialPoints: Number(payload?.potentialPoints || 0),
+              outroLine: null,
+              elimination: payload?.elimination || null,
+            },
+            replace: true,
+          });
+        }
+      })();
+    }
+  } catch {}
+}, []);
 
 
   // Boot payload: either daily (from GamePage) or normal
@@ -184,11 +185,7 @@ export default function LiveGamePage() {
   const [showFloatingTimer, setShowFloatingTimer] = useState(false);
 
   
-  
   // Floating input visibility (mobile)
-  const inputCardRef = useRef(null);
-  const [showFloatingInput, setShowFloatingInput] = useState(false);
-// Floating input visibility (mobile)
   const inputCardRef = useRef(null);
   const [showFloatingInput, setShowFloatingInput] = useState(false);
 // refs for auto-scrolling the highlighted suggestion into view
@@ -294,23 +291,6 @@ export default function LiveGamePage() {
       try {
         // If navigated with a prepared card in state
         if (location.state && location.state.id && location.state.name) {
-          // persist "game in progress" + payload for hard-refresh detection
-          try {
-            const payload = {
-              id: location.state.id,
-              name: location.state.name,
-              age: location.state.age,
-              nationality: location.state.nationality,
-              position: location.state.position,
-              photo: location.state.photo,
-              potentialPoints: location.state.potentialPoints ?? 10000,
-              isDaily: !!location.state.isDaily,
-              filters: location.state.filters || { potentialPoints: 0 },
-              elimination: location.state.elimination || null,
-            };
-            sessionStorage.setItem('ft_game_in_progress', '1');
-            sessionStorage.setItem('ft_game_payload', JSON.stringify(payload));
-          } catch {}
           // kick off timer
           timerRef.current = setInterval(() => {
             setTimeSec((t) => {
@@ -329,7 +309,7 @@ export default function LiveGamePage() {
                       INITIAL_TIME /* user ran out of time */
                     );
                     try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
-        navigate('/postgame', {
+                    navigate('/postgame', {
                       state: {
                         didWin: false,
                         player: gameData,
@@ -575,7 +555,7 @@ export default function LiveGamePage() {
           INITIAL_TIME - timeSec
         );
         try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
-        navigate('/postgame', {
+                    navigate('/postgame', {
           state: {
             didWin: false,
             player: gameData,
@@ -738,38 +718,7 @@ export default function LiveGamePage() {
     };
   }, []);
 
-  
-  // MOBILE: Observe when the on-page input row scrolls out of view → show floating input
-  useEffect(() => {
-    let observer;
-    const setup = () => {
-      // Disable floating input on desktop
-      if (window.matchMedia('(min-width: 768px)').matches) {
-        setShowFloatingInput(false);
-        if (observer) observer.disconnect();
-        return;
-      }
-      if (!inputCardRef.current) return;
-      if (observer) observer.disconnect();
-
-      observer = new IntersectionObserver(
-        ([entry]) => {
-          // When the original input row is NOT visible, show the floating input
-          setShowFloatingInput(!entry.isIntersecting);
-        },
-        { root: null, threshold: 0 }
-      );
-      observer.observe(inputCardRef.current);
-    };
-
-    setup();
-    window.addEventListener('resize', setup);
-    return () => {
-      window.removeEventListener('resize', setup);
-      if (observer) observer.disconnect();
-    };
-  }, []);
-// Loading and missing
+  // Loading and missing
   if (!location.state || !location.state.id) {
     return (
       <div className="max-w-3xl mx-auto p-4">
@@ -807,7 +756,7 @@ export default function LiveGamePage() {
       const outroLine = await generateOutro(true, points, guessesUsed, elapsed);
 
       try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
-        navigate('/postgame', {
+                    navigate('/postgame', {
         state: {
           didWin: true,
           player: {
@@ -851,7 +800,7 @@ export default function LiveGamePage() {
       const outroLine = await generateOutro(false, 0, 3, elapsed);
 
       try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
-        navigate('/postgame', {
+                    navigate('/postgame', {
         state: {
           didWin: false,
           player: {
@@ -908,109 +857,84 @@ export default function LiveGamePage() {
         </div>
       )}
 
-      {/* MOBILE floating input (appears once the original input row is off-screen) */}
-      {showFloatingInput && (
-        <div className="md:hidden fixed top-28 left-0 right-0 z-40 px-3">
-          <div className="rounded-xl bg-white shadow-md border p-3">
-            <div ref={inputCardRef} className="flex items-stretch gap-3">
-              <div className="relative flex-1">
-                <input
-                  type="text"
-                  value={guess}
-                  onChange={(e) => {
-                    setGuess(typeof e.target.value === 'string' ? e.target.value : String(e.target.value ?? ''));
-                    setHighlightIndex(-1);
-                  }}
-                  onKeyDown={(e) => {
-                    if (!suggestions.length) return;
-                    if (e.key === 'ArrowDown') {
-                      e.preventDefault();
-                      setHighlightIndex((i) => (i + 1) % suggestions.length);
-                    } else if (e.key === 'ArrowUp') {
-                      e.preventDefault();
-                      setHighlightIndex((i) => (i - 1 + suggestions.length) % suggestions.length);
-                    } else if (e.key === 'Escape') {
-                      setSuggestions([]);
-                      setHighlightIndex(-1);
-                    }
-                  }}
-                  placeholder="Type a player's name"
-                  className="w-full px-4 pr-10 py-2 rounded border"
-                  aria-busy={isLoadingSuggestions}
-                  aria-describedby="floating-name-suggest-loading"
-                />
-                {isLoadingSuggestions && (
-                  <div
-                    id="floating-name-suggest-loading"
-                    className="absolute inset-y-0 right-3 flex items-center"
-                    aria-hidden="true"
-                  >
-                    <svg
-                      className="h-5 w-5 animate-spin text-gray-400"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                    >
-                      <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                      />
-                      <path
-                        className="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-                      />
-                    </svg>
-                  </div>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  if (endedRef.current) return;
-                  endedRef.current = true;
-                  clearInterval(timerRef.current);
-                  (async () => {
-                    await saveGameRecord(false);
-                    await writeElimEntryAndAdvance(false, 0);
-                    const outroLine = await generateOutro(
-                      false,
-                      0,
-                      3,
-                      INITIAL_TIME - timeSec
-                    );
-                    try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
-        navigate('/postgame', {
-                      state: {
-                        didWin: false,
-                        player: gameData,
-                        stats: {
-                          pointsEarned: 0,
-                          timeSec: INITIAL_TIME - timeSec,
-                          guessesUsed: 3,
-                          usedHints,
-                        },
-                        filters,
-                        isDaily,
-                        potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
-                        outroLine: outroLine || null,
-                        elimination,
-                      },
-                      replace: true,
-                    });
-                  })();
-                }}
-                className="px-4 py-2 rounded bg-red-600 hover:bg-red-700 text-white whitespace-nowrap"
-              >
-                Give up
-              </button>
+{/* MOBILE floating input (appears once the original input row is off-screen) */}
+{showFloatingInput && (
+  <div className="md:hidden fixed top-28 left-0 right-0 z-40 px-3">
+    <div className="rounded-xl bg-white shadow-md border p-3">
+      <div className="flex items-stretch gap-3">
+        <div className="relative flex-1">
+          <input
+            type="text"
+            value={guess}
+            onChange={(e) => {
+              setGuess(typeof e.target.value === 'string' ? e.target.value : String(e.target.value ?? ''));
+              setHighlightIndex(-1);
+            }}
+            onKeyDown={(e) => {
+              if (!suggestions.length) return;
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setHighlightIndex((i) => (i + 1) % suggestions.length);
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setHighlightIndex((i) => (i - 1 + suggestions.length) % suggestions.length);
+              } else if (e.key === 'Escape') {
+                setSuggestions([]);
+                setHighlightIndex(-1);
+              }
+            }}
+            placeholder="Type a player's name"
+            className="w-full px-4 pr-10 py-2 rounded border"
+            aria-busy={isLoadingSuggestions}
+            aria-describedby="floating-name-suggest-loading"
+          />
+          {isLoadingSuggestions && (
+            <div
+              id="floating-name-suggest-loading"
+              className="absolute inset-y-0 right-3 flex items-center"
+              aria-hidden="true"
+            >
+              <svg className="h-5 w-5 animate-spin text-gray-400" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+              </svg>
             </div>
-          </div>
+          )}
         </div>
-      )}
+        <button
+          type="button"
+          onClick={() => {
+            if (endedRef.current) return;
+            endedRef.current = true;
+            clearInterval(timerRef.current);
+            (async () => {
+              await saveGameRecord(false);
+              await writeElimEntryAndAdvance(false, 0);
+              const outroLine = await generateOutro(false, 0, 3, INITIAL_TIME - timeSec);
+              try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
+              navigate('/postgame', {
+                state: {
+                  didWin: false,
+                  player: gameData,
+                  stats: { pointsEarned: 0, timeSec: INITIAL_TIME - timeSec, guessesUsed: 3, usedHints },
+                  filters,
+                  isDaily,
+                  potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
+                  outroLine: outroLine || null,
+                  elimination,
+                },
+                replace: true,
+              });
+            })();
+          }}
+          className="px-4 py-2 rounded bg-red-600 hover:bg-red-700 text-white whitespace-nowrap"
+        >
+          Give up
+        </button>
+      </div>
+    </div>
+  </div>
+)}
 
 
       {/* MOBILE: split points info into 3 stacked cards */}
@@ -1119,108 +1043,112 @@ export default function LiveGamePage() {
             }}
             className="space-y-4"
           >
-            {/* INPUT + LOADING SPINNER */}{/* STICKY input row on mobile: input + "Give up" (no Submit button) */}
-<div className="md:static sticky top-28 z-30 bg-white">
-  <div className="flex items-stretch gap-3">
-    <div className="relative flex-1">
-      <input
-        type="text"
-        value={guess}
-        onChange={(e) => {
-          setGuess(typeof e.target.value === 'string' ? e.target.value : String(e.target.value ?? ''));
-          setHighlightIndex(-1);
-        }}
-        onKeyDown={(e) => {
-          if (!suggestions.length) return;
-          if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            setHighlightIndex((i) => (i + 1) % suggestions.length);
-          } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            setHighlightIndex((i) => (i - 1 + suggestions.length) % suggestions.length);
-          } else if (e.key === 'Escape') {
-            setSuggestions([]);
-            setHighlightIndex(-1);
-          }
-        }}
-        placeholder="Type a player's name"
-        className="w-full px-4 pr-10 py-3 rounded border"
-        autoFocus
-        aria-busy={isLoadingSuggestions}
-        aria-describedby="name-suggest-loading"
-      />
-      {isLoadingSuggestions && (
-        <div
-          id="name-suggest-loading"
-          className="absolute inset-y-0 right-3 flex items-center"
-          aria-hidden="true"
-        >
-          {/* Simple Tailwind/inline SVG spinner */}
-          <svg
-            className="h-5 w-5 animate-spin text-gray-400"
-            viewBox="0 0 24 24"
-            fill="none"
-          >
-            <circle
-              className="opacity-25"
-              cx="12"
-              cy="12"
-              r="10"
-              stroke="currentColor"
-              strokeWidth="4"
-            />
-            <path
-              className="opacity-75"
-              fill="currentColor"
-              d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-            />
-          </svg>
-        </div>
-      )}
-    </div>
+            {/* INPUT + LOADING SPINNER */}
+            <div ref={inputCardRef} className="relative">
+              <input
+                type="text"
+                value={guess}
+                onChange={(e) => {
+                  setGuess(typeof e.target.value === 'string' ? e.target.value : String(e.target.value ?? ''));
+                  setHighlightIndex(-1);
+                }}
+                onKeyDown={(e) => {
+                  if (!suggestions.length) return;
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setHighlightIndex((i) => (i + 1) % suggestions.length);
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setHighlightIndex((i) => (i - 1 + suggestions.length) % suggestions.length);
+                  } else if (e.key === 'Escape') {
+                    setSuggestions([]);
+                    setHighlightIndex(-1);
+                  }
+                }}
+                placeholder="Type a player's name"
+                className="w-full px-4 pr-10 py-3 rounded border"
+                autoFocus
+                aria-busy={isLoadingSuggestions}
+                aria-describedby="name-suggest-loading"
+              />
+              {isLoadingSuggestions && (
+                <div
+                  id="name-suggest-loading"
+                  className="absolute inset-y-0 right-3 flex items-center"
+                  aria-hidden="true"
+                >
+                  {/* Simple Tailwind/inline SVG spinner */}
+                  <svg
+                    className="h-5 w-5 animate-spin text-gray-400"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                    />
+                  </svg>
+                </div>
+              )}
+            </div>
 
-    <button
-      type="button"
-      onClick={() => {
-        if (endedRef.current) return;
-        endedRef.current = true;
-        clearInterval(timerRef.current);
-        (async () => {
-          await saveGameRecord(false);
-          await writeElimEntryAndAdvance(false, 0); // NEW
-          const outroLine = await generateOutro(
-            false,
-            0,
-            3,
-            INITIAL_TIME - timeSec
-          );
-          try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
-        navigate('/postgame', {
-            state: {
-              didWin: false,
-              player: gameData,
-              stats: {
-                pointsEarned: 0,
-                timeSec: INITIAL_TIME - timeSec,
-                guessesUsed: 3,
-                usedHints,
-              },
-              filters,
-              isDaily,
-              potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
-              outroLine: outroLine || null,
-              elimination, // pass through if present
-            },
-            replace: true,
-          });
-        })();
-      }}
-      className="px-4 py-2 rounded bg-red-600 hover:bg-red-700 text-white whitespace-nowrap"
-    >
-      Give up
-    </button>
-  </div>
-</div>
+            <div className="flex gap-3">
+              <button
+                type="submit"
+                className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded font-medium"
+              >
+                Submit Guess
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (endedRef.current) return;
+                  endedRef.current = true;
+                  clearInterval(timerRef.current);
+                  (async () => {
+                    await saveGameRecord(false);
+                    await writeElimEntryAndAdvance(false, 0); // NEW
+                    const outroLine = await generateOutro(
+                      false,
+                      0,
+                      3,
+                      INITIAL_TIME - timeSec
+                    );
+                    try { sessionStorage.removeItem('ft_game_in_progress'); sessionStorage.removeItem('ft_game_payload'); } catch {}
+                    navigate('/postgame', {
+                      state: {
+                        didWin: false,
+                        player: gameData,
+                        stats: {
+                          pointsEarned: 0,
+                          timeSec: INITIAL_TIME - timeSec,
+                          guessesUsed: 3,
+                          usedHints,
+                        },
+                        filters,
+                        isDaily,
+                        potentialPoints: gameData?.potentialPoints || filters?.potentialPoints || 0,
+                        outroLine: outroLine || null,
+                        elimination, // pass through if present
+                      },
+                      replace: true,
+                    });
+                  })();
+                }}
+                className="px-4 py-2 rounded bg-red-600 hover:bg-red-700 text-white"
+              >
+                Give up
+              </button>
+            </div>
           </form>
 
           {suggestions?.length ? (
@@ -1531,7 +1459,32 @@ function TransfersList({ transfers }) {
 function NoCopySection({ children }) {
   const ref = useRef(null);
 
-  useEffect(() => {
+  
+// MOBILE: Observe when the on-page input row scrolls out of view → show floating input
+useEffect(() => {
+  let observer;
+  const setup = () => {
+    if (window.matchMedia('(min-width: 768px)').matches) {
+      setShowFloatingInput(false);
+      if (observer) observer.disconnect();
+      return;
+    }
+    if (!inputCardRef.current) return;
+    if (observer) observer.disconnect();
+    observer = new IntersectionObserver(
+      ([entry]) => setShowFloatingInput(!entry.isIntersecting),
+      { root: null, threshold: 0 }
+    );
+    observer.observe(inputCardRef.current);
+  };
+  setup();
+  window.addEventListener('resize', setup);
+  return () => {
+    window.removeEventListener('resize', setup);
+    if (observer) observer.disconnect();
+  };
+}, []);
+useEffect(() => {
     const el = ref.current;
     if (!el) return;
 
