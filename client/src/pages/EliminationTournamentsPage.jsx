@@ -2282,15 +2282,15 @@ for (const pr of prevBlockRounds) {
   pointsByRound.set(pr.id, m);
 }
 
-// ✅ Include CURRENT round points so each card shows accumulated points
+// CURRENT round points map
 const currentEntries = entriesByRound[r.id] || [];
 const currentPointsMap = new Map();
 for (const e of currentEntries) {
   currentPointsMap.set(e.user_id, Number(e.points_earned ?? 0));
 }
 
-// For each ACTIVE user in this round, sum their points across the block
-const cumRows = [];
+// Build rows for **all active** users this round
+const scoreRows = [];
 for (const uid of (activeUsersByRound.get(r.id) || new Set())) {
   const playedCurrent = entryByUser.has(uid);
   let sumPrev = 0;
@@ -2299,25 +2299,24 @@ for (const uid of (activeUsersByRound.get(r.id) || new Set())) {
     const v = m ? m.get(uid) ?? 0 : 0;
     sumPrev += v;
   }
-  const currentPts = currentPointsMap.get(uid) ?? 0;
-  const displayPoints = playedCurrent ? (sumPrev + currentPts) : null; // show '-' if not played
-  const pointsForElim = sumPrev + (playedCurrent ? currentPts : 0);    // treat no-show as 0
+  const roundPts = currentPointsMap.get(uid) ?? 0;
+  const totalPts = sumPrev + (playedCurrent ? roundPts : 0); // keep previous sum if not played yet
 
   const u = participants.find((p) => p.id === uid);
-  if (u) cumRows.push({ user: u, points: displayPoints, pointsForElim, playedCurrent });
+  if (u) scoreRows.push({ user: u, totalPts, roundPts: playedCurrent ? roundPts : null, prevPts: sumPrev, playedCurrent });
 }
 
-// Highlight min/max based on elimination totals (include zeros for no-shows)
-const elimValues = cumRows.map((row) => Number(row.pointsForElim ?? 0));
-const hasAnyValues = elimValues.length > 0;
-const maxPts = hasAnyValues ? Math.max(...elimValues) : null;
-const minPts = hasAnyValues ? Math.min(...elimValues) : null;
-const singleValueOnly = hasAnyValues && maxPts === minPts;
+// Highlight min/max based on totals (include zeros for no-shows)
+const totals = scoreRows.map((row) => Number(row.totalPts ?? 0));
+const hasTotals = totals.length > 0;
+const maxTotal = hasTotals ? Math.max(...totals) : null;
+const minTotal = hasTotals ? Math.min(...totals) : null;
+const singleValueOnly = hasTotals && maxTotal === minTotal;
 
-// Sort primarily by elimination totals (desc), then those who played current round first
-const unifiedRows = [...cumRows].sort((a, b) => {
-  const ap = Number(a.pointsForElim ?? 0);
-  const bp = Number(b.pointsForElim ?? 0);
+// Sort primarily by totals (desc), then those who played current round first, then name
+scoreRows.sort((a, b) => {
+  const ap = Number(a.totalPts ?? 0);
+  const bp = Number(b.totalPts ?? 0);
   if (bp !== ap) return bp - ap;
   if (a.playedCurrent !== b.playedCurrent) return a.playedCurrent ? -1 : 1;
   const an = (a.user.full_name || a.user.email || "").toLowerCase();
@@ -2325,6 +2324,7 @@ const unifiedRows = [...cumRows].sort((a, b) => {
   return an.localeCompare(bn);
 });
 // -------- ACCUMULATION & RESET FIX (end) --------
+
 
 
                 const isElimRound =
@@ -2406,37 +2406,42 @@ const unifiedRows = [...cumRows].sort((a, b) => {
                       <div className="text-xs font-semibold text-gray-700 mb-1">
                         Scores
                       </div>
-                      {unifiedRows.length === 0 ? (
+                      {scoreRows.length === 0 ? (
                         <div className="text-xs text-gray-500">No participants.</div>
                       ) : (
                         <ul className="space-y-1">
-                          {unifiedRows.map(({ user: u, points, pointsForElim, playedCurrent }, idx) => {
-                            const isMax = maxPts !== null && pointsForElim === maxPts;
-                            const isMin = minPts !== null && pointsForElim === minPts;
+                          {scoreRows.map(({ user: u, totalPts, roundPts, playedCurrent }, idx) => {
+  const isMax = maxTotal !== null && totalPts === maxTotal;
+  const isMin = minTotal !== null && totalPts === minTotal;
+  const scoreClass =
+    isMax
+      ? "text-emerald-700 font-semibold"
+      : isMin && !singleValueOnly
+      ? "text-red-600 font-semibold"
+      : "text-gray-800 font-medium";
+  return (
+    <li
+      key={`${u.id}-${idx}`}
+      className="text-sm flex items-center justify-between bg-white rounded-md border px-2 py-1"
+    >
+      <div className="flex items-center gap-2 truncate mr-2">
+        <span className="truncate">{u.full_name || u.email}</span>
+        {playedCurrent && (
+          <span className="shrink-0 inline-flex items-center rounded-full bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 px-1.5 py-0.5 text-[10px]">
+            played round
+          </span>
+        )}
+      </div>
+      <div className="ml-2 flex items-center gap-2">
+        <span className={scoreClass}>{Number(totalPts || 0)} pts</span>
+        {Number.isFinite(roundPts) && (
+          <span className="text-xs text-gray-500">(+{Number(roundPts || 0)})</span>
+        )}
+      </div>
+    </li>
+  );
+})}
 
-                            const scoreClass =
-                              points === null
-                                ? "text-gray-500"
-                                : isMax
-                                ? "text-emerald-700 font-semibold"
-                                : isMin && !singleValueOnly
-                                ? "text-red-600 font-semibold"
-                                : "text-gray-800 font-medium";
-
-                            return (
-                              <li
-                                key={`${u.id}-${idx}`}
-                                className="text-sm flex items-center justify-between bg-white rounded-md border px-2 py-1"
-                              >
-                                <span className="truncate mr-2">
-                                  {u.full_name || u.email}
-                                </span>
-                                <span className={scoreClass}>
-                                  {playedCurrent ? (Number.isFinite(points) ? `${points} pts` : "0 pts") : "-"}
-                                </span>
-                              </li>
-                            );
-                          })}
                         </ul>
                       )}
                     </div>
