@@ -718,6 +718,32 @@ useEffect(() => {
     };
   }, []);
 
+
+// MOBILE: Observe when the on-page input row scrolls out of view → show floating input
+useEffect(() => {
+  let observer;
+  const setup = () => {
+    if (window.matchMedia('(min-width: 768px)').matches) {
+      setShowFloatingInput(false);
+      if (observer) observer.disconnect();
+      return;
+    }
+    if (!inputCardRef.current) return;
+    if (observer) observer.disconnect();
+    observer = new IntersectionObserver(
+      ([entry]) => setShowFloatingInput(!entry.isIntersecting),
+      { root: null, threshold: 0 }
+    );
+    observer.observe(inputCardRef.current);
+  };
+  setup();
+  window.addEventListener('resize', setup);
+  return () => {
+    window.removeEventListener('resize', setup);
+    if (observer) observer.disconnect();
+  };
+}, []);
+
   // Loading and missing
   if (!location.state || !location.state.id) {
     return (
@@ -1460,30 +1486,6 @@ function NoCopySection({ children }) {
   const ref = useRef(null);
 
   
-// MOBILE: Observe when the on-page input row scrolls out of view → show floating input
-useEffect(() => {
-  let observer;
-  const setup = () => {
-    if (window.matchMedia('(min-width: 768px)').matches) {
-      setShowFloatingInput(false);
-      if (observer) observer.disconnect();
-      return;
-    }
-    if (!inputCardRef.current) return;
-    if (observer) observer.disconnect();
-    observer = new IntersectionObserver(
-      ([entry]) => setShowFloatingInput(!entry.isIntersecting),
-      { root: null, threshold: 0 }
-    );
-    observer.observe(inputCardRef.current);
-  };
-  setup();
-  window.addEventListener('resize', setup);
-  return () => {
-    window.removeEventListener('resize', setup);
-    if (observer) observer.disconnect();
-  };
-}, []);
 useEffect(() => {
     const el = ref.current;
     if (!el) return;
