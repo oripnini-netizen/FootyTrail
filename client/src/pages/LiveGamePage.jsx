@@ -97,7 +97,11 @@ export default function LiveGamePage() {
   const timeCardRef = useRef(null);
   const [showFloatingTimer, setShowFloatingTimer] = useState(false);
 
-  // refs for auto-scrolling the highlighted suggestion into view
+  
+  // Floating input visibility (mobile)
+  const inputCardRef = useRef(null);
+  const [showFloatingInput, setShowFloatingInput] = useState(false);
+// refs for auto-scrolling the highlighted suggestion into view
   const listRef = useRef(null);
   const itemRefs = useRef([]);
 
@@ -797,7 +801,7 @@ export default function LiveGamePage() {
       {showFloatingInput && (
         <div className="md:hidden fixed top-28 left-0 right-0 z-40 px-3">
           <div className="rounded-xl bg-white shadow-md border p-3">
-            <div className="flex items-stretch gap-3">
+            <div ref={inputCardRef} className="flex items-stretch gap-3">
               <div className="relative flex-1">
                 <input
                   type="text"
