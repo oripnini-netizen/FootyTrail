@@ -1364,7 +1364,7 @@ const isPublic = ((tournament?.filters || {}).visibility || "private") === "publ
     if (!Array.isArray(rounds) || rounds.length === 0) return result;
     if (!Array.isArray(participants) || participants.length === 0) return result;
 
-    let activeSet = new Set(participants.filter(p => ((p.invite_status || '').toLowerCase() === 'accepted') && (p.state || 'active') !== 'eliminated').map(p => p.id));
+    let activeSet = new Set(participants.filter(p => ((p.invite_status || '').toLowerCase() === 'accepted')).map(p => p.id));
     let blockPoints = new Map([...activeSet].map((uid) => [uid, 0]));
 
     const ordered = [...rounds].sort((a, b) => (a.round_number || 0) - (b.round_number || 0));
