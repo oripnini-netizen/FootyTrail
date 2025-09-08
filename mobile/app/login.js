@@ -1,5 +1,16 @@
 import { useEffect, useState } from "react";
-import { View, Text, Pressable, ActivityIndicator, Alert } from "react-native";
+import {
+  View,
+  Text,
+  Pressable,
+  ActivityIndicator,
+  Alert,
+  Image,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+} from "react-native";
 import * as WebBrowser from "expo-web-browser";
 import { supabase } from "../lib/supabase";
 
@@ -11,7 +22,14 @@ const RETURN_URL = "footytrail://";
 export default function LoginScreen() {
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState(null);
-  const [workingProvider, setWorkingProvider] = useState(null); // "google" | "apple" | null
+
+  // UI state
+  const [busyProvider, setBusyProvider] = useState(null); // "google" | "apple" | null
+  const [mode, setMode] = useState("signin"); // "signin" | "signup"
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -19,7 +37,7 @@ export default function LoginScreen() {
 
     supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return;
-      setSession(data.session);
+      setSession(data.session ?? null);
       setLoading(false);
     });
 
@@ -27,7 +45,7 @@ export default function LoginScreen() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, newSession) => {
       if (!mounted) return;
-      setSession(newSession);
+      setSession(newSession ?? null);
     });
 
     return () => {
@@ -36,11 +54,11 @@ export default function LoginScreen() {
     };
   }, []);
 
+  // ---- OAuth (Google / Apple) – reuses your working browser flow ----
   const signInWithProvider = async (provider /* "google" | "apple" */) => {
     try {
-      setWorkingProvider(provider);
+      setBusyProvider(provider);
 
-      // 1) Ask Supabase for the OAuth URL, but DON'T auto-redirect
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider,
         options: {
@@ -56,7 +74,6 @@ export default function LoginScreen() {
       if (!authUrl) throw new Error(`Could not get ${provider} auth URL from Supabase.`);
       console.log(`[${provider} login] opening`, authUrl);
 
-      // 2) Open Safari; it will close when it hits RETURN_URL
       const result = await WebBrowser.openAuthSessionAsync(authUrl, RETURN_URL);
       console.log(`[${provider} login] WebBrowser result:`, result);
 
@@ -68,12 +85,9 @@ export default function LoginScreen() {
         throw new Error(`Auth flow did not complete: ${result.type}`);
       }
 
-      // 3) Handle either shape:
-      //    a) ?code=...   -> exchangeCodeForSession
-      //    b) #access_token=...&refresh_token=... -> setSession
       const urlStr = result.url;
 
-      // Try code flow first
+      // Try code flow first (?code=...)
       let code = null;
       try {
         const u = new URL(urlStr);
@@ -92,7 +106,7 @@ export default function LoginScreen() {
         return;
       }
 
-      // Fall back to token fragment flow
+      // Fall back to token fragment flow (#access_token=...&refresh_token=...)
       const hashIndex = urlStr.indexOf("#");
       if (hashIndex !== -1 && hashIndex < urlStr.length - 1) {
         const fragment = urlStr.slice(hashIndex + 1);
@@ -125,89 +139,241 @@ export default function LoginScreen() {
       console.error(`[${provider} login] error`, err);
       Alert.alert("Sign-in error", err.message || String(err));
     } finally {
-      setWorkingProvider(null);
+      setBusyProvider(null);
     }
   };
 
-  const signInWithGoogle = () => signInWithProvider("google");
-  const signInWithApple  = () => signInWithProvider("apple");
+  // ---- Email/Password ----
+  const handleEmailSignin = async () => {
+    try {
+      setSubmitting(true);
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password: password.trim(),
+      });
+      if (error) throw error;
+      // onAuthStateChange will handle redirect (layout gate)
+    } catch (e) {
+      Alert.alert("Sign-in failed", e.message || String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleEmailSignup = async () => {
+    try {
+      setSubmitting(true);
+      const { error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password: password.trim(),
+        options: {
+          data: { full_name: fullName.trim() || undefined },
+          // You can add emailRedirectTo here if you want a web link:
+          // emailRedirectTo: "https://your-web-app/login"
+        },
+      });
+      if (error) throw error;
+      Alert.alert("Almost there", "Check your email to confirm your account.");
+    } catch (e) {
+      Alert.alert("Sign-up failed", e.message || String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   if (loading) {
     return (
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 8 }}>
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
         <ActivityIndicator />
-        <Text>Checking session…</Text>
+      </View>
+    );
+  }
+
+  // If already signed in, just show a quick message (layout will redirect away)
+  if (session) {
+    return (
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+        <ActivityIndicator />
+        <Text style={{ marginTop: 8 }}>Already signed in…</Text>
       </View>
     );
   }
 
   return (
-    <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 12, paddingHorizontal: 24 }}>
-      <Text style={{ fontSize: 20, fontWeight: "600" }}>Login</Text>
-
-      {session ? (
-        <>
-          <Text style={{ textAlign: "center" }}>
-            Signed in as{"\n"}
-            <Text style={{ fontWeight: "700" }}>{session.user.email || session.user.id}</Text>
-          </Text>
-
-          <Pressable
-            onPress={async () => {
-              await supabase.auth.signOut();
-            }}
-            style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: "#000" }}
-          >
-            <Text style={{ color: "#fff", fontWeight: "700" }}>Sign out</Text>
-          </Pressable>
-        </>
-      ) : (
-        <>
-          <Text style={{ textAlign: "center", color: "#6b7280" }}>
-            Not signed in yet. Use Google or Apple to continue.
-          </Text>
-
-          {/* Google */}
-          <Pressable
-            disabled={!!workingProvider}
-            onPress={signInWithGoogle}
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: "#f0fdf4" /* light green like web */ }}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+    >
+      <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 20 }}>
+          {/* Card */}
+          <View
             style={{
-              paddingVertical: 12,
-              paddingHorizontal: 16,
-              borderRadius: 12,
-              backgroundColor: "#1a73e8",
-              opacity: workingProvider ? 0.6 : 1,
-              width: "100%",
-              maxWidth: 320,
-              alignItems: "center",
+              width: 360,
+              maxWidth: "100%",
+              backgroundColor: "#fff",
+              padding: 20,
+              borderRadius: 16,
+              shadowColor: "#000",
+              shadowOpacity: 0.12,
+              shadowRadius: 12,
+              shadowOffset: { width: 0, height: 6 },
+              elevation: 4,
             }}
           >
-            <Text style={{ color: "#fff", fontWeight: "700" }}>
-              {workingProvider === "google" ? "Opening Google…" : "Sign in with Google"}
-            </Text>
-          </Pressable>
+            {/* Logo */}
+            <View style={{ alignItems: "center", marginBottom: 12 }}>
+              <Image
+                source={require("../assets/images/footytrail_logo.png")}
+                style={{ width: 64, height: 64, borderRadius: 14 }}
+                resizeMode="contain"
+              />
+              <Text style={{ marginTop: 8, fontSize: 22, fontWeight: "800" }}>FootyTrail</Text>
+              <Text style={{ marginTop: 2, color: "#6b7280" }}>Sign in to continue</Text>
+            </View>
 
-          {/* Apple */}
-          <Pressable
-            disabled={!!workingProvider}
-            onPress={signInWithApple}
-            style={{
-              paddingVertical: 12,
-              paddingHorizontal: 16,
-              borderRadius: 12,
-              backgroundColor: "#000",
-              opacity: workingProvider ? 0.6 : 1,
-              width: "100%",
-              maxWidth: 320,
-              alignItems: "center",
-            }}
-          >
-            <Text style={{ color: "#fff", fontWeight: "700" }}>
-              {workingProvider === "apple" ? "Opening Apple…" : "Sign in with Apple"}
-            </Text>
-          </Pressable>
-        </>
-      )}
-    </View>
+            {/* OAuth Buttons */}
+            <Pressable
+              disabled={!!busyProvider}
+              onPress={() => signInWithProvider("google")}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+                paddingVertical: 12,
+                borderRadius: 10,
+                borderWidth: 1,
+                borderColor: "#d1d5db",
+                backgroundColor: "#fff",
+                opacity: busyProvider ? 0.6 : 1,
+                marginBottom: 10,
+              }}
+            >
+              <Image
+  source={require("../assets/images/google.png")}
+  style={{ width: 18, height: 18 }}
+  resizeMode="contain"
+/>
+
+              <Text style={{ fontWeight: "600" }}>
+                {busyProvider === "google" ? "Opening Google…" : "Continue with Google"}
+              </Text>
+            </Pressable>
+
+            <Pressable
+              disabled={!!busyProvider}
+              onPress={() => signInWithProvider("apple")}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+                paddingVertical: 12,
+                borderRadius: 10,
+                backgroundColor: "#000",
+                opacity: busyProvider ? 0.6 : 1,
+                marginBottom: 14,
+              }}
+            >
+              <Image
+                source={{
+                  uri: "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fa/Apple_logo_black.svg/120px-Apple_logo_black.svg.png",
+                }}
+                style={{ width: 18, height: 18, tintColor: "#fff" }}
+              />
+              <Text style={{ color: "#fff", fontWeight: "700" }}>
+                {busyProvider === "apple" ? "Opening Apple…" : "Sign in with Apple"}
+              </Text>
+            </Pressable>
+
+            {/* Divider */}
+            <View style={{ alignItems: "center", marginVertical: 6 }}>
+              <Text style={{ color: "#9ca3af" }}>or</Text>
+            </View>
+
+            {/* Email/Password */}
+            {mode === "signup" && (
+              <TextInput
+                value={fullName}
+                onChangeText={setFullName}
+                placeholder="Full name"
+                autoCapitalize="words"
+                style={inputStyle}
+              />
+            )}
+            <TextInput
+              value={email}
+              onChangeText={setEmail}
+              placeholder="Email"
+              autoCapitalize="none"
+              keyboardType="email-address"
+              style={inputStyle}
+            />
+            <TextInput
+              value={password}
+              onChangeText={setPassword}
+              placeholder="Password"
+              secureTextEntry
+              autoCapitalize="none"
+              style={inputStyle}
+            />
+
+            <Pressable
+              disabled={submitting}
+              onPress={mode === "signin" ? handleEmailSignin : handleEmailSignup}
+              style={{
+                paddingVertical: 12,
+                borderRadius: 10,
+                backgroundColor: mode === "signin" ? "#16a34a" : "#2563eb",
+                alignItems: "center",
+                opacity: submitting ? 0.7 : 1,
+                marginTop: 4,
+              }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "700" }}>
+                {submitting ? (mode === "signin" ? "Signing in…" : "Creating account…") : mode === "signin" ? "Sign in" : "Sign up"}
+              </Text>
+            </Pressable>
+
+            {/* Toggle Sign in / Sign up */}
+            <View style={{ flexDirection: "row", justifyContent: "center", marginTop: 12 }}>
+              {mode === "signin" ? (
+                <Text>
+                  New here?{" "}
+                  <Text
+                    onPress={() => setMode("signup")}
+                    style={{ color: "#2563eb", fontWeight: "700" }}
+                  >
+                    Create an account
+                  </Text>
+                </Text>
+              ) : (
+                <Text>
+                  Already have an account?{" "}
+                  <Text
+                    onPress={() => setMode("signin")}
+                    style={{ color: "#2563eb", fontWeight: "700" }}
+                  >
+                    Sign in
+                  </Text>
+                </Text>
+              )}
+            </View>
+          </View>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
+
+const inputStyle = {
+  width: "100%",
+  paddingVertical: 12,
+  paddingHorizontal: 12,
+  borderRadius: 10,
+  borderWidth: 1,
+  borderColor: "#d1d5db",
+  marginBottom: 10,
+  backgroundColor: "#fff",
+};
