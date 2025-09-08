@@ -20,10 +20,11 @@ import {
   CalendarClock,
   Axe,
   Bell,
-  Coins, // NEW
-  Check,  // NEW
-  X as XIcon, // NEW
-  Play, // NEW (for Start Now)
+  Coins, 
+  Check,  
+  X as XIcon,
+  Play,
+  User, 
 } from "lucide-react";
 
 /* ------------------------------------------------------------
@@ -2586,6 +2587,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
     selectedCompetitionIds,
     selectedSeasons,
     minMarketValue,
+    minAppearances,
     currentUser?.id,
     loadingFilters,
   ]);
@@ -2988,9 +2990,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                 loadingCounts={loadingCounts}
                 poolCount={poolCount}
                 totalCount={totalCount}
-                poolCount={poolCount}
-                totalCount={totalCount}
-              />
+                />                
 
               {/* Visibility */}
               <div className="rounded-xl shadow-sm border bg-white p-4">
@@ -3773,12 +3773,21 @@ function DifficultyFilters(props) {
           </Section>
           
           {/* Minimum Appearances */}
-          <Section
-            title="Min Appearances"
-            icon={<Check className="h-4 w-4 text-green-700" />}
-            collapsed={appsCollapsed}
-            onToggle={() => setAppsCollapsed((v) => !v)}
-          >
+            <Section
+    title="Min Appearances"
+    icon={<User className="h-4 w-4 text-green-700" />}
+    actions={
+      <>
+        {[5,10,15,20,25,30].map((v) => (
+          <PresetButton key={v} onClick={() => setMinAppearances(v)} active={minAppearances === v}>
+            {v}
+          </PresetButton>
+        ))}
+      </>
+    }
+     collapsed={appsCollapsed}
+     onToggle={() => setAppsCollapsed((v) => !v)}
+  >
             <div className="flex items-center gap-2">
               <input
                 type="number"
