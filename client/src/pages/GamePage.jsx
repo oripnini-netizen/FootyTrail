@@ -37,7 +37,8 @@ import {
   Timer,
   CheckSquare,
   CalendarClock,
-  Search
+  Search,
+  User
 } from 'lucide-react';
 
 // >>> NEW: import supabase client for querying games_records
@@ -86,6 +87,7 @@ export default function GamePage() {
   const [compCollapsed, setCompCollapsed] = useState(false);
   const [seasonsCollapsed, setSeasonsCollapsed] = useState(false);
   const [mvCollapsed, setMvCollapsed] = useState(false);
+  const [appsCollapsed, setAppsCollapsed] = useState(false);
 
   const [groupedCompetitions, setGroupedCompetitions] = useState({});
   const [allSeasons, setAllSeasons] = useState([]);
@@ -93,6 +95,7 @@ export default function GamePage() {
   const [selectedCompetitionIds, setSelectedCompetitionIds] = useState([]);
   const [selectedSeasons, setSelectedSeasons] = useState([]);
   const [minMarketValue, setMinMarketValue] = useState(0);
+  const [minAppearances, setMinAppearances] = useState(0);
 
   const [expandedCountries, setExpandedCountries] = useState({});
   const [loadingCounts, setLoadingCounts] = useState(false);
@@ -146,7 +149,9 @@ export default function GamePage() {
     expandedCountries,
     poolCount,
     totalCount,
-    gamePrompt
+    gamePrompt,
+    minAppearances,
+    appsCollapsed
   });
 
   useLayoutEffect(() => {
@@ -157,6 +162,8 @@ export default function GamePage() {
         if (Array.isArray(cached.selectedCompetitionIds)) setSelectedCompetitionIds(cached.selectedCompetitionIds);
         if (Array.isArray(cached.selectedSeasons)) setSelectedSeasons(cached.selectedSeasons);
         if (Number.isFinite(cached.minMarketValue)) setMinMarketValue(cached.minMarketValue);
+        if (Number.isFinite(cached.minAppearances)) setMinAppearances(cached.minAppearances);
+        if (typeof cached.appsCollapsed === 'boolean') setAppsCollapsed(cached.appsCollapsed);
         if (typeof cached.filtersCollapsed === 'boolean') setFiltersCollapsed(cached.filtersCollapsed);
         if (typeof cached.compCollapsed === 'boolean') setCompCollapsed(cached.compCollapsed);
         if (typeof cached.seasonsCollapsed === 'boolean') setSeasonsCollapsed(cached.seasonsCollapsed);
@@ -184,8 +191,8 @@ export default function GamePage() {
   }, []);
 
   useEffect(() => () => saveGamePageCache(gatherStateForCache()), [
-    selectedCompetitionIds, selectedSeasons, minMarketValue,
-    filtersCollapsed, compCollapsed, seasonsCollapsed, mvCollapsed,
+    selectedCompetitionIds, selectedSeasons, minMarketValue, minAppearances,
+    filtersCollapsed, compCollapsed, seasonsCollapsed, mvCollapsed, appsCollapsed,
     expandedCountries, gamePrompt, poolCount, totalCount
   ]);
 
@@ -197,7 +204,7 @@ export default function GamePage() {
       document.removeEventListener('visibilitychange', handleHide);
       window.removeEventListener('pagehide', handleHide);
     };
-  }, [selectedCompetitionIds, selectedSeasons, minMarketValue, filtersCollapsed, compCollapsed, seasonsCollapsed, mvCollapsed, expandedCountries, gamePrompt, poolCount, totalCount]);
+  }, [selectedCompetitionIds, selectedSeasons, minMarketValue, minAppearances, filtersCollapsed, compCollapsed, seasonsCollapsed, mvCollapsed, appsCollapsed, expandedCountries, gamePrompt, poolCount, totalCount]);
 
   // Apply user defaults if not restored from cache
   useEffect(() => {
@@ -325,6 +332,7 @@ export default function GamePage() {
           competitions: selectedCompetitionIds,
           seasons: selectedSeasons,
           minMarketValue: Number(minMarketValue) || 0,
+          minAppearances: Number(minAppearances) || 0,
           userId: user?.id
         };
 
@@ -346,7 +354,7 @@ export default function GamePage() {
     })();
 
     return () => { cancelled = true; };
-  }, [selectedCompetitionIds, selectedSeasons, minMarketValue, user?.id, loadingFilters]);
+  }, [selectedCompetitionIds, selectedSeasons, minMarketValue, minAppearances, user?.id, loadingFilters]);
 
   // Label map for chips
   const compIdToLabel = useMemo(() => {
@@ -478,6 +486,7 @@ export default function GamePage() {
         competitions: selectedCompetitionIds,
         seasons: selectedSeasons,
         minMarketValue: Number(minMarketValue) || 0,
+        minAppearances: Number(minAppearances) || 0,
         userId: user?.id
       };
       const randomPlayer = await getRandomPlayer(currentFilters, user?.id);
@@ -805,6 +814,18 @@ export default function GamePage() {
                     />
                   </>
                 )}
+                {Number(minAppearances) > 0 && (
+                  <>
+                    <div className="text-sm text-gray-600 mt-3 mb-2">Minimum Appearances</div>
+                    <SelectedChips
+                      items={[minAppearances]}
+                      onClear={() => setMinAppearances(0)}
+                      getLabel={(v) => `Min Apps: ${v}`}
+                      onRemoveItem={() => setMinAppearances(0)}
+                      hoverClose
+                    />
+                  </>
+                )}
               </div>
 
               {/* Filters Panel (3 collapsibles) */}
@@ -1062,6 +1083,35 @@ export default function GamePage() {
                             <Star size={14} /> 50M €
                           </PresetButton>
                         </div>
+                      </div>
+
+                    </Section>
+
+                    {/* Minimum Appearances */}
+                    <Section
+                      title="Minimum Appearances"
+                      icon={<User className="h-4 w-4 text-green-700" />}
+                      collapsed={appsCollapsed}
+                      onToggle={() => setAppsCollapsed(v => !v)}
+                      actions={
+                        <>
+                          {[0,5,10,15,20,25,30].map((v) => (
+                            <PresetButton key={v} onClick={() => setMinAppearances(v)} active={minAppearances === v}>
+                              {v}
+                            </PresetButton>
+                          ))}
+                        </>
+                      }
+                    >
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="number"
+                          value={minAppearances}
+                          onChange={(e) => setMinAppearances(parseInt(e.target.value) || 0)}
+                          min="0"
+                          step="1"
+                          className="w-40 border rounded-md px-2 py-1"
+                        />
                       </div>
                     </Section>
                   </div>
