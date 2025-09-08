@@ -1,23 +1,71 @@
-import { View, Text, Pressable } from "react-native";
+import { useEffect, useState } from "react";
+import { View, Text, Pressable, ActivityIndicator, ScrollView } from "react-native";
 import { Link } from "expo-router";
+import { supabase } from "../lib/supabase";
 
 export default function HomeScreen() {
+  const [loading, setLoading] = useState(true);
+  const [session, setSession] = useState(null);
+
+  useEffect(() => {
+    let mounted = true;
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      setSession(data.session ?? null);
+      setLoading(false);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      if (!mounted) return;
+      setSession(newSession ?? null);
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  if (loading) {
+    return (
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+        <ActivityIndicator />
+      </View>
+    );
+  }
+
   return (
-    <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 16, backgroundColor: "#fff" }}>
-      <Text style={{ fontSize: 22, fontWeight: "600" }}>FootyTrail (Mobile)</Text>
-      <Text style={{ color: "#6b7280" }}>Router is working if navigation works.</Text>
+    <ScrollView contentContainerStyle={{ padding: 20, gap: 16 }}>
+      <Text style={{ fontSize: 22, fontWeight: "700" }}>FootyTrail</Text>
 
-      <Link href="/login" asChild>
-        <Pressable style={{ paddingVertical: 12, paddingHorizontal: 16, borderWidth: 1, borderRadius: 12 }}>
-          <Text style={{ fontWeight: "500" }}>Go to Login</Text>
-        </Pressable>
-      </Link>
+      <View style={{ padding: 12, borderRadius: 12, backgroundColor: "#f3f4f6" }}>
+        <Text style={{ fontSize: 16 }}>
+          Signed in as{" "}
+          <Text style={{ fontWeight: "700" }}>
+            {session?.user?.email || session?.user?.id}
+          </Text>
+        </Text>
+      </View>
 
-      <Link href="/game" asChild>
-        <Pressable style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: "#000" }}>
-          <Text style={{ color: "#fff", fontWeight: "700" }}>Go to Game</Text>
-        </Pressable>
-      </Link>
-    </View>
+      {/* These links will work as we add each screen */}
+      <View style={{ gap: 12 }}>
+        <Link href="/leaderboard" asChild>
+          <Pressable style={{ padding: 12, borderRadius: 12, backgroundColor: "#e5e7eb" }}>
+            <Text style={{ fontWeight: "600" }}>Leaderboard</Text>
+          </Pressable>
+        </Link>
+
+        <Link href="/profile" asChild>
+          <Pressable style={{ padding: 12, borderRadius: 12, backgroundColor: "#e5e7eb" }}>
+            <Text style={{ fontWeight: "600" }}>Profile</Text>
+          </Pressable>
+        </Link>
+
+        {/* We'll wire more routes next to mirror your web pages */}
+      </View>
+    </ScrollView>
   );
 }

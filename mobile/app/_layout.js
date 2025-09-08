@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ActivityIndicator, View } from "react-native";
+import { ActivityIndicator, View, Pressable, Text } from "react-native";
 import { Stack, usePathname, useRouter } from "expo-router";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { supabase } from "../lib/supabase";
@@ -11,7 +11,6 @@ export default function RootLayout() {
   const [ready, setReady] = useState(false);
   const [session, setSession] = useState(null);
 
-  // Load session once and subscribe to changes
   useEffect(() => {
     let mounted = true;
 
@@ -34,7 +33,6 @@ export default function RootLayout() {
     };
   }, []);
 
-  // Guard routes based on auth state
   useEffect(() => {
     if (!ready) return;
 
@@ -44,14 +42,22 @@ export default function RootLayout() {
       return;
     }
 
-    // Signed in but on /login → send to home
+    // Signed in but on /login → go home
     if (session && pathname === "/login") {
       router.replace("/");
     }
   }, [ready, session, pathname, router]);
 
+  const handleSignOut = async () => {
+    try {
+      await supabase.auth.signOut();
+      router.replace("/login");
+    } catch (e) {
+      console.warn("Sign out failed:", e);
+    }
+  };
+
   if (!ready) {
-    // Small splash while we check session to avoid flicker
     return (
       <SafeAreaProvider>
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
@@ -67,6 +73,13 @@ export default function RootLayout() {
         screenOptions={{
           headerShown: true,
           headerTitleAlign: "center",
+          // Show a Sign out button whenever the user is authenticated
+          headerRight: () =>
+            session ? (
+              <Pressable onPress={handleSignOut} hitSlop={10} style={{ paddingHorizontal: 12 }}>
+                <Text style={{ color: "#007aff", fontWeight: "600" }}>Sign out</Text>
+              </Pressable>
+            ) : null,
         }}
       />
     </SafeAreaProvider>
