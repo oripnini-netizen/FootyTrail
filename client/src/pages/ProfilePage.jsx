@@ -21,7 +21,8 @@ import {
   User } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import SelectedChips from '../components/SelectedChips';
-import { getCompetitions, getSeasons } from '../api';
+import { getCompetitions, getSeasons, getCounts } from '../api';
+import { saveGamePageCache } from '../state/gamePageCache.js';
 
 function classNames(...s) {
   return s.filter(Boolean).join(' ');
@@ -126,6 +127,9 @@ const [expandedCountries, setExpandedCountries] = useState({});
   const [isSaving, setIsSaving] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
+  const [poolCount, setPoolCount] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
+  const [loadingCounts, setLoadingCounts] = useState(false);
 
   // --- Competition search state (autocomplete) ---
   const [compQuery, setCompQuery] = useState('');
@@ -201,6 +205,37 @@ const [expandedCountries, setExpandedCountries] = useState({});
       );
     }
   }, [user]);
+  // Recompute player pool for current default filters
+  useEffect(() => {
+    let cancelled = false;
+    if (loadingFilters) return;
+    (async () => {
+      try {
+        setLoadingCounts(true);
+        const payload = {
+          competitions: defaultCompetitionIds,
+          seasons: defaultSeasons,
+          minMarketValue: Number(defaultMinMarket) || 0,
+          minAppearances: Number(defaultMinAppearances) || 0,
+          userId: user?.id
+        };
+        const res = await getCounts(payload);
+        if (!cancelled) {
+          setPoolCount(res?.poolCount || 0);
+          setTotalCount(res?.totalCount || 0);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setPoolCount(0);
+          setTotalCount(0);
+        }
+      } finally {
+        if (!cancelled) setLoadingCounts(false);
+      }
+    })();
+    return () => { cancelled = False }; // keep linter calm about unused return
+  }, [defaultCompetitionIds, defaultSeasons, defaultMinMarket, defaultMinAppearances, user?.id, loadingFilters]);
+
 
   // Fetch recent games (20) + ALL games (for stats) + NEW: include points_transactions in totals
   useEffect(() => {
@@ -263,6 +298,37 @@ const [expandedCountries, setExpandedCountries] = useState({});
       setDefaultMinAppearances(user.default_min_appearances ?? 0);
 }
   }, [user]);
+  // Recompute player pool for current default filters
+  useEffect(() => {
+    let cancelled = false;
+    if (loadingFilters) return;
+    (async () => {
+      try {
+        setLoadingCounts(true);
+        const payload = {
+          competitions: defaultCompetitionIds,
+          seasons: defaultSeasons,
+          minMarketValue: Number(defaultMinMarket) || 0,
+          minAppearances: Number(defaultMinAppearances) || 0,
+          userId: user?.id
+        };
+        const res = await getCounts(payload);
+        if (!cancelled) {
+          setPoolCount(res?.poolCount || 0);
+          setTotalCount(res?.totalCount || 0);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setPoolCount(0);
+          setTotalCount(0);
+        }
+      } finally {
+        if (!cancelled) setLoadingCounts(false);
+      }
+    })();
+    return () => { cancelled = False }; // keep linter calm about unused return
+  }, [defaultCompetitionIds, defaultSeasons, defaultMinMarket, defaultMinAppearances, user?.id, loadingFilters]);
+
 
   // Load filters (NEW model)
   useEffect(() => {
@@ -347,6 +413,23 @@ const [expandedCountries, setExpandedCountries] = useState({});
       if (updateError) throw updateError;
       setHasChanges(false);
       setJustSaved(true);
+      // Also prime GamePage cache so it picks up minAppearances default on next visit
+      saveGamePageCache({
+        scrollY: 0,
+        selectedCompetitionIds: (defaultCompetitionIds || []).map(String),
+        selectedSeasons: (defaultSeasons || []).map(String),
+        minMarketValue: Number(defaultMinMarket) || 0,
+        minAppearances: Number(defaultMinAppearances) || 0,
+        filtersCollapsed: true,
+        compCollapsed: false,
+        seasonsCollapsed: false,
+        mvCollapsed: false,
+        appsCollapsed: false,
+        expandedCountries: {},
+        poolCount: 0,
+        totalCount: 0,
+        gamePrompt: ''
+      });
 
       setAvatar(publicUrl);
       await refresh();
@@ -390,6 +473,23 @@ const [expandedCountries, setExpandedCountries] = useState({});
       if (updateError) throw updateError;
       setHasChanges(false);
       setJustSaved(true);
+      // Also prime GamePage cache so it picks up minAppearances default on next visit
+      saveGamePageCache({
+        scrollY: 0,
+        selectedCompetitionIds: (defaultCompetitionIds || []).map(String),
+        selectedSeasons: (defaultSeasons || []).map(String),
+        minMarketValue: Number(defaultMinMarket) || 0,
+        minAppearances: Number(defaultMinAppearances) || 0,
+        filtersCollapsed: true,
+        compCollapsed: false,
+        seasonsCollapsed: false,
+        mvCollapsed: false,
+        appsCollapsed: false,
+        expandedCountries: {},
+        poolCount: 0,
+        totalCount: 0,
+        gamePrompt: ''
+      });
       await refresh();
       setHasChanges(false);
     } catch (e) {
@@ -634,6 +734,13 @@ const [expandedCountries, setExpandedCountries] = useState({});
                 <button className="text-gray-600 hover:text-gray-800" onClick={() => setFiltersCollapsed(c => !c)} type="button">
                   {filtersCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
                 </button>
+              <div className="mt-3 mb-1 rounded-md bg-yellow-50 border border-yellow-200 p-3 flex items-center justify-between">
+                <div className="text-sm text-yellow-800 font-medium">Player Pool</div>
+                <div className="text-sm text-yellow-900 font-semibold">
+                  {loadingCounts ? '—' : poolCount} / {loadingCounts ? '—' : totalCount}
+                </div>
+              </div>
+
               </div>
 
               {!filtersCollapsed && !loadingFilters && (
