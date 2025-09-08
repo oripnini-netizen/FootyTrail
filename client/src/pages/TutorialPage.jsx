@@ -15,7 +15,7 @@ import {
   Star,
   CheckSquare,
   Search,
-} from 'lucide-react';
+  User } from 'lucide-react';
 
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../supabase';
@@ -90,10 +90,12 @@ export default function TutorialPage() {
   const [selectedCompetitionIds, setSelectedCompetitionIds] = useState([]);
   const [selectedSeasons, setSelectedSeasons] = useState([]);
   const [minMarketValue, setMinMarketValue] = useState(0);
+  const [minAppearances, setMinAppearances] = useState(0);
 
   const [compCollapsed, setCompCollapsed] = useState(false);
   const [seasonsCollapsed, setSeasonsCollapsed] = useState(false);
   const [mvCollapsed, setMvCollapsed] = useState(false);
+  const [appsCollapsed, setAppsCollapsed] = useState(false);
 
   // for tiny progress indicator during db updates
   const [busy, setBusy] = useState(false);
@@ -148,7 +150,7 @@ export default function TutorialPage() {
         const { data } = await supabase
           .from('users')
           .select(
-            'full_name, profile_photo_url, default_leagues, default_seasons, default_min_market_value'
+            'full_name, profile_photo_url, default_leagues, default_seasons, default_min_market_value, default_min_appearances'
           )
           .eq('id', user.id)
           .maybeSingle();
@@ -158,6 +160,7 @@ export default function TutorialPage() {
           setSelectedCompetitionIds(data.default_leagues || []); // using legacy column name if present
           setSelectedSeasons(data.default_seasons || []);
           setMinMarketValue(Number(data.default_min_market_value || 0));
+          setMinAppearances(Number(data.default_min_appearances || 0));
         }
       }
 
@@ -262,6 +265,7 @@ export default function TutorialPage() {
         default_leagues: selectedCompetitionIds, // reuse column for competitions
         default_seasons: selectedSeasons,
         default_min_market_value: Number(minMarketValue) || 0,
+        default_min_appearances: Number(minAppearances) || 0,
         has_completed_onboarding: true,
       };
 
@@ -389,7 +393,7 @@ export default function TutorialPage() {
                 <p className="text-sm text-gray-700 leading-relaxed">
                   FootyTrail is a daily football guessing game. Each round you’ll get hints
                   about a player. Guess correctly to earn points! Your <b>Difficulty Filters</b> let you
-                  tailor the pool by <b>competitions</b>, <b>seasons</b>, and <b>minimum market value (€)</b>.
+                  tailor the pool by <b>competitions</b>, <b>seasons</b>, <b>minimum appearances</b> and <b>minimum market value (€)</b>.
                 </p>
               </div>
             )}
@@ -726,6 +730,35 @@ export default function TutorialPage() {
                         <Star size={14} /> 50M €
                       </PresetBtn>
                     </div>
+                  </div>
+                </Section>
+
+                {/* Minimum Appearances */}
+                <Section
+                  title="Minimum Appearances"
+                  icon={<User className="h-4 w-4 text-green-700" />}
+                  collapsed={appsCollapsed}
+                  onToggle={() => setAppsCollapsed((v) => !v)}
+                  actions={
+                    <>
+                      {[0,5,10,15,20,25,30].map((v) => (
+                        <PresetBtn key={v} onClick={() => setMinAppearances(v)} active={minAppearances === v}>
+                          {v}
+                        </PresetBtn>
+                      ))}
+                    </>
+                  }
+                >
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="number"
+                      value={minAppearances}
+                      onChange={(e) => setMinAppearances(parseInt(e.target.value) || 0)}
+                      min="0"
+                      step="1"
+                      className="w-40 border rounded-md px-2 py-1 text-center"
+                    />
+                    <div className="text-sm text-gray-600">Current: {Number(minAppearances) || 0}</div>
                   </div>
                 </Section>
 
