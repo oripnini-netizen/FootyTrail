@@ -150,14 +150,14 @@ export default function TutorialPage() {
         const { data } = await supabase
           .from('users')
           .select(
-            'full_name, profile_photo_url, default_leagues, default_seasons, default_min_market_value, default_min_appearances'
+            'full_name, profile_photo_url, default_competitions, default_seasons, default_min_market_value, default_min_appearances'
           )
           .eq('id', user.id)
           .maybeSingle();
         if (data) {
           setDisplayName(data.full_name || '');
           setAvatarUrl(data.profile_photo_url || '');
-          setSelectedCompetitionIds(data.default_leagues || []); // using legacy column name if present
+          setSelectedCompetitionIds(data.default_competitions || []); 
           setSelectedSeasons(data.default_seasons || []);
           setMinMarketValue(Number(data.default_min_market_value || 0));
           setMinAppearances(Number(data.default_min_appearances || 0));
@@ -262,7 +262,7 @@ export default function TutorialPage() {
       setStatus('Setting up your FootyTrail experience…');
 
       const updates = {
-        default_leagues: selectedCompetitionIds, // reuse column for competitions
+        default_competitions: selectedCompetitionIds, // reuse column for competitions
         default_seasons: selectedSeasons,
         default_min_market_value: Number(minMarketValue) || 0,
         default_min_appearances: Number(minAppearances) || 0,
