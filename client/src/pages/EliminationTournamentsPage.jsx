@@ -1961,9 +1961,10 @@ const handleJoinCountdownEnd = async () => {
                   const compIds = Array.isArray(f.competitions) ? f.competitions : [];
                   const seasons = Array.isArray(f.seasons) ? f.seasons : [];
                   const mv = Number(f.minMarketValue || 0);
+                  const ma = Number(f.minAppearances || 0);
 
                   const hasAny =
-                    (compIds.length || 0) + (seasons.length || 0) + (mv > 0 ? 1 : 0) > 0;
+                    (compIds.length || 0) + (seasons.length || 0) + (mv > 0 ? 1 : 0) + (ma > 0 ? 1 : 0) > 0;
 
                   if (!hasAny) {
                     return (
@@ -1996,6 +1997,11 @@ const handleJoinCountdownEnd = async () => {
                         {mv > 0 && (
                           <span className="inline-flex items-center gap-2 px-2 py-1 rounded-full text-[11px] bg-green-100 text-green-800">
                             Min MV: €{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(Number(mv)).replace('€', '').trim()}
+                          </span>
+                        )}
+                        {ma > 0 && (
+                          <span className="inline-flex items-center gap-2 px-2 py-1 rounded-full text-[11px] bg-green-100 text-green-800">
+                            Min Apps: {Number(ma)}
                           </span>
                         )}
                       </div>
@@ -2460,7 +2466,9 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
 
   const [selectedCompetitionIds, setSelectedCompetitionIds] = useState([]);
   const [selectedSeasons, setSelectedSeasons] = useState([]);
-  const [minMarketValue, setMinMarketValue] = useState(0);
+  const [minMarketValue,
+    minAppearances, setMinMarketValue] = useState(0);
+  const [minAppearances, setMinAppearances] = useState(0);
 
   const [expandedCountries, setExpandedCountries] = useState({});
   const [compCollapsed, setCompCollapsed] = useState(true);
@@ -2553,6 +2561,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
           competitions: selectedCompetitionIds,
           seasons: selectedSeasons,
           minMarketValue: Number(minMarketValue) || 0,
+          minAppearances: Number(minAppearances) || 0,
           userId: currentUser?.id,
         };
         const countsResult = await getCounts(payload);
@@ -2831,6 +2840,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
         competitions: selectedCompetitionIds,
         seasons: selectedSeasons,
         minMarketValue: Number(minMarketValue) || 0,
+        minAppearances: Number(minAppearances) || 0,
         visibility: visibility // Make sure visibility is included in filters
       };
 
@@ -2974,7 +2984,11 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
                 handleLast5Seasons={handleLast5Seasons}
                 minMarketValue={minMarketValue}
                 setMinMarketValue={setMinMarketValue}
+                minAppearances={minAppearances}
+                setMinAppearances={setMinAppearances}
                 loadingCounts={loadingCounts}
+                poolCount={poolCount}
+                totalCount={totalCount}
                 poolCount={poolCount}
                 totalCount={totalCount}
               />
@@ -3295,6 +3309,7 @@ function SelectedChipsRow({
   compIdToLabel,
   selectedSeasons,
   minMarketValue,
+  minAppearances,
   onRemoveCompetition,
   onRemoveSeason,
   onClearAll,
@@ -3302,7 +3317,8 @@ function SelectedChipsRow({
   const hasAny =
     (selectedCompetitionIds?.length || 0) +
       (selectedSeasons?.length || 0) +
-      (minMarketValue ? 1 : 0) >
+      (minMarketValue ? 1 : 0) +
+      (minAppearances ? 1 : 0) >
     0;
 
   if (!hasAny) {
@@ -3355,6 +3371,11 @@ function SelectedChipsRow({
         {minMarketValue ? (
           <span className="inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800">
             Min MV: €{fmtCurrency(minMarketValue)}
+          </span>
+        ) : null}
+        {minAppearances ? (
+          <span className="inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs bg-green-100 text-green-800">
+            Min Apps: {minAppearances}
           </span>
         ) : null}
         {onClearAll && (
@@ -3430,11 +3451,14 @@ function DifficultyFilters(props) {
     handleLast5Seasons,
     minMarketValue,
     setMinMarketValue,
+    minAppearances,
+    setMinAppearances,
     loadingCounts,
     poolCount,
     totalCount,
   } = props;
 
+  const [appsCollapsed, setAppsCollapsed] = useState(true);
   return (
     <div className="rounded-xl shadow-sm border bg-green-50/60 p-4">
       <div className="flex items-center justify-between">
@@ -3450,6 +3474,7 @@ function DifficultyFilters(props) {
           compIdToLabel={compIdToLabel}
           selectedSeasons={selectedSeasons}
           minMarketValue={minMarketValue}
+          minAppearances={minAppearances}
           onRemoveCompetition={(id) => toggleCompetition(id)}
           onRemoveSeason={(s) =>
             setSelectedSeasons((prev) => prev.filter((x) => x !== s))
@@ -3458,6 +3483,7 @@ function DifficultyFilters(props) {
             clearCompetitions();
             clearSeasons();
             setMinMarketValue(0);
+            setMinAppearances(0);
           }}
         />
         <div className="mt-2 text-xs text-gray-600">
@@ -3742,6 +3768,25 @@ function DifficultyFilters(props) {
                 step={100000}
                 value={minMarketValue}
                 onChange={(e) => setMinMarketValue(Math.max(0, Number(e.target.value)))}
+                className="w-44 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-700"
+              />
+            </div>
+          </Section>
+          
+          {/* Minimum Appearances */}
+          <Section
+            title="Min Appearances"
+            icon={<Check className="h-4 w-4 text-green-700" />}
+            collapsed={appsCollapsed}
+            onToggle={() => setAppsCollapsed((v) => !v)}
+          >
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={minAppearances}
+                onChange={(e) => setMinAppearances(Math.max(0, Number(e.target.value)))}
                 className="w-44 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-700"
               />
             </div>
