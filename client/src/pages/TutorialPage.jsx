@@ -20,6 +20,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../supabase';
 import { getCompetitions, getSeasons } from '../api';
+import { saveGamePageCache } from '../state/gamePageCache.js';
 
 function cx(...a) {
   return a.filter(Boolean).join(' ');
@@ -272,7 +273,25 @@ export default function TutorialPage() {
       const { error } = await supabase.from('users').update(updates).eq('id', user.id);
       if (error) throw error;
 
-      // small pause then hard refresh to route to GamePage
+      
+      // Prime GamePage cache so your defaults (including minAppearances) are applied immediately
+      saveGamePageCache({
+        scrollY: 0,
+        selectedCompetitionIds: (selectedCompetitionIds || []).map(String),
+        selectedSeasons: (selectedSeasons || []).map(String),
+        minMarketValue: Number(minMarketValue) || 0,
+        minAppearances: Number(minAppearances) || 0,
+        filtersCollapsed: true,
+        compCollapsed: false,
+        seasonsCollapsed: false,
+        mvCollapsed: false,
+        appsCollapsed: false,
+        expandedCountries: {},
+        poolCount: 0,
+        totalCount: 0,
+        gamePrompt: ''
+      });
+// small pause then hard refresh to route to GamePage
       setTimeout(() => {
         setBusy(false);
         window.location.href = '/game';
