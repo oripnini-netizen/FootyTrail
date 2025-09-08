@@ -365,7 +365,7 @@ const [expandedCountries, setExpandedCountries] = useState({});
       const hasMinChangedMV = Number(defaultMinMarket) !== Number(user.default_min_market_value ?? 0);
       const hasMinChangedApps = Number(defaultMinAppearances) !== Number(user.default_min_appearances ?? 0);
       setHasChanges(hasCompsChanged || hasSeasonsChanged || hasMinChangedMV || hasMinChangedApps);
-    }
+    
     if (hasCompsChanged || hasSeasonsChanged || hasMinChangedMV || hasMinChangedApps) {
         setJustSaved(false);
       }
@@ -373,7 +373,7 @@ const [expandedCountries, setExpandedCountries] = useState({});
       setHasChanges(hasAny);
       if (hasAny) setJustSaved(false);
     }
-  , [defaultCompetitionIds, defaultSeasons, defaultMinMarket, defaultMinAppearances, user]);
+  }, [defaultCompetitionIds, defaultSeasons, defaultMinMarket, defaultMinAppearances, user]);
 
   const saveDefaultFilters = async () => {
     try {
