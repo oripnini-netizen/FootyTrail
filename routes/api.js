@@ -69,10 +69,26 @@ function normalizeNewFilters(raw = {}) {
     ? raw.seasons.map(toIdString).filter(Boolean)
     : null;
 
+  // Support both camelCase and snake_case just in case
+  const minMarketValue =
+    raw.minMarketValue != null
+      ? Number(raw.minMarketValue) || 0
+      : raw.min_market_value != null
+      ? Number(raw.min_market_value) || 0
+      : 0;
+
+  const minAppearances =
+    raw.minAppearances != null
+      ? Number(raw.minAppearances) || 0
+      : raw.min_appearances != null
+      ? Number(raw.min_appearances) || 0
+      : 0;
+
   return {
     competitions: competitionsArr && competitionsArr.length ? competitionsArr : null,
     seasons: seasonsArr && seasonsArr.length ? seasonsArr : null,
-    minMarketValue: Number(raw.minMarketValue) || 0,
+    minMarketValue,
+    minAppearances,
   };
 }
 
@@ -112,22 +128,28 @@ async function getPlayerCardFromPIS(playerId) {
 }
 
 // ---------- RPC wrappers (new model) ----------
-async function rpcCountPlayersPool({ competitions, seasons, minMarketValue }) {
-  const { data, error } = await supabase.rpc('rpc_count_players_pool', {
+async function rpcCountPlayersPool({ competitions, seasons, minMarketValue, minAppearances }) {
+  const payload = {
     competitions,
     seasons,
     min_market_value: minMarketValue || 0,
-  });
+    min_appearances:  minAppearances || 0,
+  };
+
+  const { data, error } = await supabase.rpc('rpc_count_players_pool', payload);
   if (error) throw error;
   return typeof data === 'number' ? data : Number(data);
 }
 
-async function rpcGetPlayerIdsMarket({ competitions, seasons, minMarketValue }) {
-  const { data, error } = await supabase.rpc('rpc_get_player_ids_market', {
+async function rpcGetPlayerIdsMarket({ competitions, seasons, minMarketValue, minAppearances }) {
+  const payload = {
     competitions,
     seasons,
     min_market_value: minMarketValue || 0,
-  });
+    min_appearances:  minAppearances || 0,
+  };
+
+  const { data, error } = await supabase.rpc('rpc_get_player_ids_market', payload);
   if (error) throw error;
 
   return (data || [])
@@ -227,7 +249,7 @@ router.get('/filters/competitions', async (_req, res) => {
     if (error) return res.status(500).json({ error: error.message });
 
     const groupedByCountry = {};
-    for (const r of data || []) {
+    for (const r of (data || [])) {
       const country = r.country || 'Unknown';
       if (!groupedByCountry[country]) groupedByCountry[country] = [];
       groupedByCountry[country].push({
@@ -525,8 +547,10 @@ router.post('/generate-daily-challenge', async (req, res) => {
           ? settings.legacy_seasons.map(toIdString)
           : null;
 
-      const minMarketValue = Number(settings?.min_market_value || 0);
-      filters = normalizeNewFilters({ competitions, seasons, minMarketValue });
+      const minMarketValue  = Number(settings?.min_market_value || 0);
+      const minAppearances  = Number(settings?.appearances || 0); // map settings.appearances -> minAppearances
+
+      filters = normalizeNewFilters({ competitions, seasons, minMarketValue, minAppearances });
     }
 
     const poolIds = await rpcGetPlayerIdsMarket(filters);
