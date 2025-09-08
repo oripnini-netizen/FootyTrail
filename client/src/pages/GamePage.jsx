@@ -212,10 +212,12 @@ export default function GamePage() {
       const defaultsComp = (user.default_competitions || user.default_leagues || []).map(String);
       const defaultsSeasons = user.default_seasons || [];
       const defaultsMinMV = user.default_min_market_value ?? 0;
-
+      const defaultsMinApps = user.default_min_appearances ?? 0;
+      
       setSelectedCompetitionIds(defaultsComp);
       setSelectedSeasons(defaultsSeasons);
       setMinMarketValue(defaultsMinMV);
+      setMinAppearances(defaultsMinApps);
     }
   }, [user]);
 
