@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { View, Text, ActivityIndicator, Pressable, Alert } from "react-native";
-import { supabase } from "../lib/supabase";
+import { supabase } from "../../lib/supabase"; // <-- fixed path
 
 export default function ProfileScreen() {
   const [loading, setLoading] = useState(true);

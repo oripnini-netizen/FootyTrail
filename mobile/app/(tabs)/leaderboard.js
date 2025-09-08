@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { View, Text, ActivityIndicator, FlatList, RefreshControl } from "react-native";
-import { supabase } from "../lib/supabase";
+import { supabase } from "../../lib/supabase"; // <-- fixed path
 
 export default function LeaderboardScreen() {
   const [loading, setLoading] = useState(true);
@@ -11,8 +11,12 @@ export default function LeaderboardScreen() {
     try {
       setLoading(true);
       // TODO: replace with your real source (Railway API / Supabase table)
-      // Example if you later store scores in Supabase:
-      // const { data, error } = await supabase.from("leaderboard").select("*").order("points", { ascending: false }).limit(50);
+      // Example:
+      // const { data, error } = await supabase
+      //   .from("leaderboard")
+      //   .select("*")
+      //   .order("points", { ascending: false })
+      //   .limit(50);
       // if (error) throw error;
       // setRows(data || []);
 

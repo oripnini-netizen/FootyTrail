@@ -1,7 +1,8 @@
+// mobile/app/(tabs)/game.js
 import React, { useEffect, useState } from "react";
 import { View, Text, Pressable, ActivityIndicator, ScrollView, Alert } from "react-native";
 import { useRouter } from "expo-router";
-import { supabase } from "../lib/supabase";
+import { supabase } from "../../lib/supabase";
 import {
   getCompetitions,
   getSeasons,
@@ -9,7 +10,7 @@ import {
   getRandomPlayer,
   getDailyChallenge,
   getLimits,
-} from "../lib/api";
+} from "../../lib/api";
 
 export default function GameScreen() {
   const router = useRouter();
