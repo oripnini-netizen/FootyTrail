@@ -17,7 +17,7 @@ import {
   CheckSquare,
   CalendarClock,
   Search,
-  X,
+  X, 
   User } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import SelectedChips from '../components/SelectedChips';
@@ -369,7 +369,11 @@ const [expandedCountries, setExpandedCountries] = useState({});
     if (hasCompsChanged || hasSeasonsChanged || hasMinChangedMV || hasMinChangedApps) {
         setJustSaved(false);
       }
-  }, [defaultCompetitionIds, defaultSeasons, defaultMinMarket, defaultMinAppearances, user]);
+    const hasAny = hasCompsChanged || hasSeasonsChanged || hasMinChangedMV || hasMinChangedApps;
+      setHasChanges(hasAny);
+      if (hasAny) setJustSaved(false);
+    }
+  , [defaultCompetitionIds, defaultSeasons, defaultMinMarket, defaultMinAppearances, user]);
 
   const saveDefaultFilters = async () => {
     try {
