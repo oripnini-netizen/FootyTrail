@@ -735,7 +735,7 @@ const [expandedCountries, setExpandedCountries] = useState({});
                   {filtersCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
                 </button>
               <div className="mt-3 mb-1 rounded-md bg-yellow-50 border border-yellow-200 p-3 flex items-center justify-between">
-                <div className="text-sm text-yellow-800 font-medium">Player Pool</div>
+                <div className="text-sm text-yellow-800 font-medium">Player Pool: </div>
                 <div className="text-sm text-yellow-900 font-semibold">
                   {loadingCounts ? '—' : poolCount} / {loadingCounts ? '—' : totalCount}
                 </div>
