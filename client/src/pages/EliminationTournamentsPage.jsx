@@ -3778,7 +3778,7 @@ function DifficultyFilters(props) {
     icon={<User className="h-4 w-4 text-green-700" />}
     actions={
       <>
-        {[5,10,15,20,25,30].map((v) => (
+        {[0,5,10,15,20,25,30].map((v) => (
           <PresetButton key={v} onClick={() => setMinAppearances(v)} active={minAppearances === v}>
             {v}
           </PresetButton>
