@@ -2466,8 +2466,7 @@ function CreateTournamentModal({ currentUser, onClose, onCreated }) {
 
   const [selectedCompetitionIds, setSelectedCompetitionIds] = useState([]);
   const [selectedSeasons, setSelectedSeasons] = useState([]);
-  const [minMarketValue,
-    minAppearances, setMinMarketValue] = useState(0);
+  const [minMarketValue, setMinMarketValue] = useState(0);
   const [minAppearances, setMinAppearances] = useState(0);
 
   const [expandedCountries, setExpandedCountries] = useState({});
