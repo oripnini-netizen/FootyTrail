@@ -17,8 +17,8 @@ import {
   CheckSquare,
   CalendarClock,
   Search,
-  X
-} from 'lucide-react';
+  X,
+User } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import SelectedChips from '../components/SelectedChips';
 import { getCompetitions, getSeasons } from '../api';
@@ -110,6 +110,9 @@ export default function ProfilePage() {
   const [seasonsCollapsed, setSeasonsCollapsed] = useState(false);
   const [mvCollapsed, setMvCollapsed] = useState(false);
 
+  // NEW: appearances section collapsed state
+  const [appsCollapsed, setAppsCollapsed] = useState(false);
+
   // NEW model state
   const [groupedCompetitions, setGroupedCompetitions] = useState({});
   const [allSeasons, setAllSeasons] = useState([]);
@@ -117,10 +120,9 @@ export default function ProfilePage() {
     user?.default_competitions || user?.default_leagues || []
   );
   const [defaultSeasons, setDefaultSeasons] = useState(user?.default_seasons || []);
-  const [defaultMinMarket, setDefaultMinMarket] = useState(
-    (user?.default_min_market_value ?? user?.default_min_appearances ?? 0) || 0
-  );
-  const [expandedCountries, setExpandedCountries] = useState({});
+  const [defaultMinMarket, setDefaultMinMarket] = useState(user?.default_min_market_value ?? 0);
+  const [defaultMinAppearances, setDefaultMinAppearances] = useState(user?.default_min_appearances ?? 0);
+const [expandedCountries, setExpandedCountries] = useState({});
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
 
@@ -256,8 +258,9 @@ export default function ProfilePage() {
     if (user) {
       setDefaultCompetitionIds(user.default_competitions || user.default_leagues || []);
       setDefaultSeasons(user.default_seasons || []);
-      setDefaultMinMarket((user.default_min_market_value ?? user.default_min_appearances ?? 0) || 0);
-    }
+      setDefaultMinMarket(user.default_min_market_value ?? 0);
+      setDefaultMinAppearances(user.default_min_appearances ?? 0);
+}
   }, [user]);
 
   // Load filters (NEW model)
@@ -356,8 +359,9 @@ export default function ProfilePage() {
     if (user) {
       const hasCompsChanged   = JSON.stringify(defaultCompetitionIds) !== JSON.stringify(user.default_competitions || user.default_leagues || []);
       const hasSeasonsChanged = JSON.stringify(defaultSeasons) !== JSON.stringify(user.default_seasons || []);
-      const hasMinChanged     = Number(defaultMinMarket) !== Number(user.default_min_market_value ?? user.default_min_appearances ?? 0);
-      setHasChanges(hasCompsChanged || hasSeasonsChanged || hasMinChanged);
+      const hasMinChangedMV = Number(defaultMinMarket) !== Number(user.default_min_market_value ?? 0);
+      const hasMinChangedApps = Number(defaultMinAppearances) !== Number(user.default_min_appearances ?? 0);
+      setHasChanges(hasCompsChanged || hasSeasonsChanged || hasMinChangedMV || hasMinChangedApps);
     }
   }, [defaultCompetitionIds, defaultSeasons, defaultMinMarket, user]);
 
@@ -370,9 +374,9 @@ export default function ProfilePage() {
         .update({
           default_competitions: defaultCompetitionIds,
           default_seasons: defaultSeasons,
-          default_min_market_value: Number(defaultMinMarket) || 0
-        })
-        .eq('id', user.id);
+          default_min_market_value: Number(defaultMinMarket) || 0,
+          default_min_appearances: Number(defaultMinAppearances) || 0
+        }) .eq('id', user.id);
       if (updateError) throw updateError;
       await refresh();
       setHasChanges(false);
@@ -846,6 +850,35 @@ export default function ProfilePage() {
                       </div>
                     </div>
                   </Section>
+                  {/* Minimum Appearances */}
+                  <Section
+                    title="Minimum Appearances"
+                    icon={<User className="h-4 w-4 text-green-700" />}
+                    collapsed={appsCollapsed}
+                    onToggle={() => setAppsCollapsed(v => !v)}
+                    actions={
+                      <>
+                        {[0,5,10,15,20,25,30].map((v) => (
+                          <PresetButton key={v} onClick={() => setDefaultMinAppearances(v)} active={defaultMinAppearances === v}>
+                            {v}
+                          </PresetButton>
+                        ))}
+                      </>
+                    }
+                  >
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="number"
+                        value={defaultMinAppearances}
+                        onChange={(e) => setDefaultMinAppearances(parseInt(e.target.value) || 0)}
+                        min="0"
+                        step="1"
+                        className="w-40 border rounded-md px-2 py-1 text-center"
+                      />
+                      <div className="text-sm text-gray-600">Current: {Number(defaultMinAppearances) || 0}</div>
+                    </div>
+                  </Section>
+
 
                   <div className="flex justify-end mt-4">
                     <button
@@ -853,7 +886,7 @@ export default function ProfilePage() {
                       disabled={isSaving || !hasChanges}
                       className="w-full px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400"
                     >
-                      {isSaving ? 'Saving...' : 'Save Filters'}
+                      {isSaving ? 'Saving...' : 'Filters Saved'}
                     </button>
                   </div>
                 </div>
