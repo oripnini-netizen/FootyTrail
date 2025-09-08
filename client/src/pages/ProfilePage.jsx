@@ -233,7 +233,7 @@ const [expandedCountries, setExpandedCountries] = useState({});
         if (!cancelled) setLoadingCounts(false);
       }
     })();
-    return () => { cancelled = False }; // keep linter calm about unused return
+    return () => { cancelled = false }; // keep linter calm about unused return
   }, [defaultCompetitionIds, defaultSeasons, defaultMinMarket, defaultMinAppearances, user?.id, loadingFilters]);
 
 
@@ -326,7 +326,7 @@ const [expandedCountries, setExpandedCountries] = useState({});
         if (!cancelled) setLoadingCounts(false);
       }
     })();
-    return () => { cancelled = False }; // keep linter calm about unused return
+    return () => { cancelled = false }; // keep linter calm about unused return
   }, [defaultCompetitionIds, defaultSeasons, defaultMinMarket, defaultMinAppearances, user?.id, loadingFilters]);
 
 
