@@ -426,7 +426,10 @@ export default function PostGamePage() {
       const minMarketValue =
         Number(filters?.minMarketValue ?? filters?.min_market_value ?? 0) || 0;
 
-      const prevPot = Number(prevPotentialPoints);
+      
+      const minAppearances =
+        Number(filters?.minAppearances ?? filters?.min_appearances ?? 0) || 0;
+const prevPot = Number(prevPotentialPoints);
       if (!Number.isFinite(prevPot) || prevPot <= 0) {
         alert(
           'Could not determine the previous round’s pool size. Please start from the Game page.'
@@ -445,7 +448,7 @@ export default function PostGamePage() {
       const nextPotential = prevPot - 5;
 
       const nextCard = await getRandomPlayer(
-        { competitions, seasons, minMarketValue },
+        { competitions, seasons, minMarketValue, minAppearances },
         user?.id
       );
 
@@ -455,7 +458,7 @@ export default function PostGamePage() {
         state: {
           ...nextCard,
           isDaily: false,
-          filters: { competitions, seasons, minMarketValue },
+          filters: { competitions, seasons, minMarketValue, minAppearances },
           potentialPoints: nextPotential,
           fromPostGame: true,
         },
