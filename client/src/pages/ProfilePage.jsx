@@ -18,7 +18,7 @@ import {
   CalendarClock,
   Search,
   X,
-User } from 'lucide-react';
+  User } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import SelectedChips from '../components/SelectedChips';
 import { getCompetitions, getSeasons } from '../api';
@@ -124,6 +124,7 @@ export default function ProfilePage() {
   const [defaultMinAppearances, setDefaultMinAppearances] = useState(user?.default_min_appearances ?? 0);
 const [expandedCountries, setExpandedCountries] = useState({});
   const [isSaving, setIsSaving] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
 
   // --- Competition search state (autocomplete) ---
@@ -344,6 +345,8 @@ const [expandedCountries, setExpandedCountries] = useState({});
         .update({ profile_photo_url: publicUrl })
         .eq('id', user.id);
       if (updateError) throw updateError;
+      setHasChanges(false);
+      setJustSaved(true);
 
       setAvatar(publicUrl);
       await refresh();
@@ -363,7 +366,10 @@ const [expandedCountries, setExpandedCountries] = useState({});
       const hasMinChangedApps = Number(defaultMinAppearances) !== Number(user.default_min_appearances ?? 0);
       setHasChanges(hasCompsChanged || hasSeasonsChanged || hasMinChangedMV || hasMinChangedApps);
     }
-  }, [defaultCompetitionIds, defaultSeasons, defaultMinMarket, user]);
+    if (hasCompsChanged || hasSeasonsChanged || hasMinChangedMV || hasMinChangedApps) {
+        setJustSaved(false);
+      }
+  }, [defaultCompetitionIds, defaultSeasons, defaultMinMarket, defaultMinAppearances, user]);
 
   const saveDefaultFilters = async () => {
     try {
@@ -378,6 +384,8 @@ const [expandedCountries, setExpandedCountries] = useState({});
           default_min_appearances: Number(defaultMinAppearances) || 0
         }) .eq('id', user.id);
       if (updateError) throw updateError;
+      setHasChanges(false);
+      setJustSaved(true);
       await refresh();
       setHasChanges(false);
     } catch (e) {
@@ -886,7 +894,7 @@ const [expandedCountries, setExpandedCountries] = useState({});
                       disabled={isSaving || !hasChanges}
                       className="w-full px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400"
                     >
-                      {isSaving ? 'Saving...' : 'Save Filters'}
+                      {isSaving ? 'Saving...' : (!hasChanges && justSaved ? 'Filters Saved' : 'Save Filters')}
                     </button>
                   </div>
                 </div>
