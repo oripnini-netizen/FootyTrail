@@ -1,76 +1,96 @@
-import { useEffect, useState } from "react";
-import { View, Text, ActivityIndicator, Pressable, Alert } from "react-native";
-import { supabase } from "../../lib/supabase"; // <-- fixed path
+// mobile/app/(tabs)/profile.js
+import { useEffect, useState } from 'react';
+import { View, Text, ActivityIndicator, Pressable, Alert, Image, ScrollView } from 'react-native';
+import { useRouter } from 'expo-router';
+import { supabase } from '../../lib/supabase';
+
+const THEME_GREEN = '#166534';
 
 export default function ProfileScreen() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
-  const [session, setSession] = useState(null);
+  const [authUser, setAuthUser] = useState(null);
+  const [profile, setProfile] = useState({ full_name: '', email: '', profile_photo_url: '' });
 
   useEffect(() => {
     let mounted = true;
+    (async () => {
+      const { data: authData, error: authErr } = await supabase.auth.getUser();
+      if (authErr || !authData?.user) {
+        if (mounted) setLoading(false);
+        return;
+      }
+      const user = authData.user;
+      if (mounted) setAuthUser(user);
 
-    supabase.auth.getSession().then(({ data }) => {
-      if (!mounted) return;
-      setSession(data.session ?? null);
-      setLoading(false);
-    });
+      let { data, error } = await supabase
+        .from('users')
+        .select('full_name,email,profile_photo_url')
+        .eq('user_id', user.id)
+        .single();
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      if (!mounted) return;
-      setSession(newSession ?? null);
-    });
+      if (error || !data) {
+        const fb = await supabase
+          .from('users')
+          .select('full_name,email,profile_photo_url')
+          .eq('id', user.id)
+          .single();
+        if (!fb.error && fb.data) data = fb.data;
+      }
 
-    return () => {
-      mounted = false;
-      subscription.unsubscribe();
-    };
+      if (mounted && data) setProfile(data);
+      if (mounted) setLoading(false);
+    })();
+    return () => { mounted = false; };
   }, []);
 
-  const updateDisplayName = async () => {
-    try {
-      // TODO: show a small input UI; for now, just a placeholder action
-      Alert.alert("Coming soon", "Profile editing UI will be added next.");
-    } catch (e) {
-      Alert.alert("Update failed", e.message || String(e));
+  const signOut = async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      Alert.alert('Sign out failed', error.message);
+    } else {
+      router.replace('/'); // go back to entry
     }
   };
 
   if (loading) {
     return (
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
         <ActivityIndicator />
       </View>
     );
   }
 
-  const user = session?.user;
   return (
-    <View style={{ flex: 1, padding: 20, gap: 12 }}>
-      <Text style={{ fontSize: 22, fontWeight: "700" }}>Profile</Text>
-
-      <View style={{ padding: 12, borderRadius: 12, backgroundColor: "#f3f4f6" }}>
-        <Text style={{ marginBottom: 6 }}>
-          <Text style={{ fontWeight: "700" }}>User ID: </Text>
-          {user?.id}
-        </Text>
-        <Text style={{ marginBottom: 6 }}>
-          <Text style={{ fontWeight: "700" }}>Email: </Text>
-          {user?.email || "—"}
-        </Text>
-        <Text>
-          <Text style={{ fontWeight: "700" }}>Provider(s): </Text>
-          {(user?.app_metadata?.providers || []).join(", ") || "—"}
-        </Text>
+    <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 32 }}>
+      <View style={{ alignItems: 'center', marginBottom: 16 }}>
+        {profile?.profile_photo_url ? (
+          <Image source={{ uri: profile.profile_photo_url }} style={{ width: 96, height: 96, borderRadius: 48 }} />
+        ) : (
+          <View style={{ width: 96, height: 96, borderRadius: 48, backgroundColor: '#d1d5db' }} />
+        )}
       </View>
 
+      <Text style={{ fontSize: 22, fontWeight: '700', textAlign: 'center' }}>
+        {profile?.full_name || authUser?.email || 'Profile'}
+      </Text>
+      <Text style={{ fontSize: 14, color: '#666', textAlign: 'center', marginTop: 4 }}>
+        {profile?.email || authUser?.email}
+      </Text>
+
+      <View style={{ height: 24 }} />
+
       <Pressable
-        onPress={updateDisplayName}
-        style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: "#000" }}
+        onPress={signOut}
+        style={{
+          backgroundColor: THEME_GREEN,
+          paddingVertical: 12,
+          borderRadius: 8,
+          alignItems: 'center',
+        }}
       >
-        <Text style={{ color: "#fff", fontWeight: "700" }}>Edit display name</Text>
+        <Text style={{ color: 'white', fontSize: 16, fontWeight: '700' }}>Sign Out</Text>
       </Pressable>
-    </View>
+    </ScrollView>
   );
 }
