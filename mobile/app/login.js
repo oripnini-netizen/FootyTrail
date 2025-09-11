@@ -12,6 +12,7 @@ import {
   ScrollView,
 } from "react-native";
 import * as WebBrowser from "expo-web-browser";
+import { useRouter } from "expo-router";
 import { supabase } from "../lib/supabase";
 
 WebBrowser.maybeCompleteAuthSession();
@@ -20,6 +21,8 @@ WebBrowser.maybeCompleteAuthSession();
 const RETURN_URL = "footytrail://";
 
 export default function LoginScreen() {
+  const router = useRouter();
+
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState(null);
 
@@ -37,8 +40,13 @@ export default function LoginScreen() {
 
     supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return;
-      setSession(data.session ?? null);
+      const s = data.session ?? null;
+      setSession(s);
       setLoading(false);
+      // If a session already exists, bounce immediately to the root gate.
+      if (s?.user) {
+        router.replace("/");
+      }
     });
 
     const {
@@ -46,13 +54,17 @@ export default function LoginScreen() {
     } = supabase.auth.onAuthStateChange((_event, newSession) => {
       if (!mounted) return;
       setSession(newSession ?? null);
+      // On any successful sign-in, leave /login so index gate can route to /tutorial or /game
+      if (newSession?.user) {
+        router.replace("/");
+      }
     });
 
     return () => {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, []);
+  }, [router]);
 
   // ---- OAuth (Google / Apple) – reuses your working browser flow ----
   const signInWithProvider = async (provider /* "google" | "apple" */) => {
@@ -64,6 +76,8 @@ export default function LoginScreen() {
         options: {
           redirectTo: RETURN_URL,
           skipBrowserRedirect: true,
+          // NOTE: Supabase v2 expects "flow: 'pkce'". Keeping your value for now,
+          // but consider changing to `flow: 'pkce'` in future.
           flowType: "pkce",
           queryParams: { prompt: "select_account" },
         },
@@ -103,6 +117,8 @@ export default function LoginScreen() {
         });
         if (exErr) throw exErr;
         console.log(`[${provider} login] session exchange success (code)`);
+        // We’re signed in now – leave /login so the root gate can route properly.
+        router.replace("/");
         return;
       }
 
@@ -128,6 +144,8 @@ export default function LoginScreen() {
           });
           if (setErr) throw setErr;
           console.log(`[${provider} login] session set success (token)`);
+          // We’re signed in now – leave /login so the root gate can route properly.
+          router.replace("/");
           return;
         }
 
@@ -152,7 +170,7 @@ export default function LoginScreen() {
         password: password.trim(),
       });
       if (error) throw error;
-      // onAuthStateChange will handle redirect (layout gate)
+      // onAuthStateChange will navigate away from /login
     } catch (e) {
       Alert.alert("Sign-in failed", e.message || String(e));
     } finally {
@@ -168,7 +186,6 @@ export default function LoginScreen() {
         password: password.trim(),
         options: {
           data: { full_name: fullName.trim() || undefined },
-          // You can add emailRedirectTo here if you want a web link:
           // emailRedirectTo: "https://your-web-app/login"
         },
       });
@@ -189,12 +206,12 @@ export default function LoginScreen() {
     );
   }
 
-  // If already signed in, just show a quick message (layout will redirect away)
+  // If already signed in, show a short spinner (the effect above will immediately redirect)
   if (session) {
     return (
       <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
         <ActivityIndicator />
-        <Text style={{ marginTop: 8 }}>Already signed in…</Text>
+        <Text style={{ marginTop: 8 }}>Signing you in…</Text>
       </View>
     );
   }
@@ -251,11 +268,10 @@ export default function LoginScreen() {
               }}
             >
               <Image
-  source={require("../assets/images/google.png")}
-  style={{ width: 18, height: 18 }}
-  resizeMode="contain"
-/>
-
+                source={require("../assets/images/google.png")}
+                style={{ width: 18, height: 18 }}
+                resizeMode="contain"
+              />
               <Text style={{ fontWeight: "600" }}>
                 {busyProvider === "google" ? "Opening Google…" : "Continue with Google"}
               </Text>
@@ -332,7 +348,13 @@ export default function LoginScreen() {
               }}
             >
               <Text style={{ color: "#fff", fontWeight: "700" }}>
-                {submitting ? (mode === "signin" ? "Signing in…" : "Creating account…") : mode === "signin" ? "Sign in" : "Sign up"}
+                {submitting
+                  ? mode === "signin"
+                    ? "Signing in…"
+                    : "Creating account…"
+                  : mode === "signin"
+                  ? "Sign in"
+                  : "Sign up"}
               </Text>
             </Pressable>
 
@@ -341,20 +363,14 @@ export default function LoginScreen() {
               {mode === "signin" ? (
                 <Text>
                   New here?{" "}
-                  <Text
-                    onPress={() => setMode("signup")}
-                    style={{ color: "#2563eb", fontWeight: "700" }}
-                  >
+                  <Text onPress={() => setMode("signup")} style={{ color: "#2563eb", fontWeight: "700" }}>
                     Create an account
                   </Text>
                 </Text>
               ) : (
                 <Text>
                   Already have an account?{" "}
-                  <Text
-                    onPress={() => setMode("signin")}
-                    style={{ color: "#2563eb", fontWeight: "700" }}
-                  >
+                  <Text onPress={() => setMode("signin")} style={{ color: "#2563eb", fontWeight: "700" }}>
                     Sign in
                   </Text>
                 </Text>

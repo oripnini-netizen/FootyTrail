@@ -1,16 +1,16 @@
 // mobile/app/(tabs)/_layout.js
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Image, View, Pressable, Platform, Text, Animated } from 'react-native';
+import { Image, View, Pressable, Platform, Text, Animated, TouchableOpacity, StyleSheet } from 'react-native';
 import { Tabs, useRouter, useSegments } from 'expo-router';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../../lib/supabase';
 
 // ---------------- Theme ----------------
-const THEME_GREEN = '#166534';      // focused circle / focused icon tint
-const INACTIVE_GRAY = '#6b7280';    // non-focused tab icons
-const UNFOCUSED_CIRCLE = '#e5e7eb'; // unfocused daily circle
-const UNFOCUSED_ICON = '#9ca3af';   // unfocused daily icon (muted gray)
+const THEME_GREEN = '#166534';
+const INACTIVE_GRAY = '#6b7280';
+const UNFOCUSED_CIRCLE = '#e5e7eb';
+const UNFOCUSED_ICON = '#9ca3af';
 
 // ---------------- Helpers ----------------
 function Avatar({ uri }) {
@@ -53,9 +53,8 @@ function TopNav({ title, avatarUrl, onAvatarPress }) {
   );
 }
 
-// Floating middle tab button (Daily) – stronger focused/unfocused difference
+// Floating middle tab button (Daily)
 function FloatingCenterButton({ onPress, focused }) {
-  // Scale animation (visible but subtle)
   const scale = useRef(new Animated.Value(focused ? 1.04 : 0.96)).current;
 
   useEffect(() => {
@@ -67,13 +66,12 @@ function FloatingCenterButton({ onPress, focused }) {
     }).start();
   }, [focused, scale]);
 
-  // Visual deltas by state
   const innerBg = focused ? THEME_GREEN : UNFOCUSED_CIRCLE;
   const iconSize = focused ? 34 : 30;
   const iconColor = focused ? '#fff' : UNFOCUSED_ICON;
   const ringBorderWidth = focused ? 2 : 1;
   const ringBorderColor = focused ? '#e5e7eb' : '#f3f4f6';
-  const lift = focused ? -24 : -20; // slightly less lift when unfocused
+  const lift = focused ? -24 : -20;
 
   return (
     <Pressable
@@ -81,7 +79,6 @@ function FloatingCenterButton({ onPress, focused }) {
       style={{ top: lift, justifyContent: 'center', alignItems: 'center' }}
       android_ripple={{ color: '#e5e7eb', borderless: true }}
     >
-      {/* white ring to make it "pop" */}
       <Animated.View
         style={{
           transform: [{ scale }],
@@ -127,11 +124,16 @@ function formatDDMMYYYY(d) {
 
 export default function TabsLayout() {
   const router = useRouter();
-  const segments = useSegments(); // <-- reliable current route
+  const segments = useSegments();
   const insets = useSafeAreaInsets();
 
-  // Avatar
   const [avatarUrl, setAvatarUrl] = useState(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  // for anchored menu placement
+  const NAV_HEIGHT = 56;
+  const menuTop = (insets.top || 0) + NAV_HEIGHT + 4;
+
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -139,22 +141,17 @@ export default function TabsLayout() {
       const userId = authData?.user?.id;
       if (!userId) return;
 
-      let { data, error } = await supabase
+      const { data } = await supabase
         .from('users')
         .select('profile_photo_url')
         .eq('id', userId)
-        .single();
+        .maybeSingle();
 
-      if (error || !data?.profile_photo_url) {
-        const alt = await supabase.from('users').select('profile_photo_url').eq('user_id', userId).single();
-        if (!alt.error) data = alt.data;
-      }
       if (mounted && data?.profile_photo_url) setAvatarUrl(data.profile_photo_url);
     })();
     return () => { mounted = false; };
   }, []);
 
-  // Daily title – auto-refresh at midnight
   const [today, setToday] = useState(() => new Date());
   const timeoutRef = useRef(null);
   const scheduleMidnightTick = React.useCallback(() => {
@@ -172,101 +169,175 @@ export default function TabsLayout() {
   }, [scheduleMidnightTick]);
   const dailyTitle = useMemo(() => formatDDMMYYYY(today), [today]);
 
-  // ← Determine if the current route is the game tab
   const last = segments[segments.length - 1];
   const isGameFocused = last === 'game';
 
   return (
-    <Tabs
-      screenOptions={{
-        header: ({ options }) => (
-          <TopNav
-            title={options.title}
-            avatarUrl={avatarUrl}
-            onAvatarPress={() => router.push('/(tabs)/profile')}
+    <>
+      <Tabs
+        screenOptions={{
+          header: ({ options }) => (
+            <TopNav
+              title={options.title}
+              avatarUrl={avatarUrl}
+              onAvatarPress={() => setMenuOpen((v) => !v)}
+            />
+          ),
+          tabBarShowLabel: false,
+          tabBarActiveTintColor: THEME_GREEN,
+          tabBarInactiveTintColor: INACTIVE_GRAY,
+          tabBarStyle: {
+            height: 64 + (insets.bottom ? insets.bottom - 6 : 0),
+            paddingTop: 6,
+            paddingBottom: (insets.bottom ? insets.bottom - 6 : 8),
+            backgroundColor: '#fff',
+            borderTopColor: '#e5e7eb',
+            borderTopWidth: 1,
+          },
+        }}
+      >
+        <Tabs.Screen name="index" options={{ href: null }} />
+        <Tabs.Screen name="explore" options={{ href: null }} />
+
+        {/* Hidden pages to inherit nav bars */}
+        <Tabs.Screen name="profile-info" options={{ href: null, title: 'Profile Info' }} />
+        <Tabs.Screen name="default-filters" options={{ href: null, title: 'Default Filters' }} />
+        <Tabs.Screen name="recent-games" options={{ href: null, title: 'Recent Games' }} />
+
+        <Tabs.Screen
+          name="leaderboard"
+          options={{
+            title: 'Leaderboard',
+            tabBarIcon: ({ color, size, focused }) => (
+              <Ionicons name="trophy" size={size} color={focused ? THEME_GREEN : color} />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="elimination"
+          options={{
+            title: 'Elimination',
+            tabBarIcon: ({ color, size, focused }) => (
+              <MaterialCommunityIcons name="axe" size={size} color={focused ? THEME_GREEN : color} />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="game"
+          options={{
+            title: dailyTitle,
+            tabBarButton: (props) => (
+              <FloatingCenterButton
+                focused={isGameFocused}
+                onPress={props.onPress}
+              />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="leagues"
+          options={{
+            title: 'Leagues',
+            tabBarIcon: ({ color, size, focused }) => (
+              <MaterialCommunityIcons name="table" size={size} color={focused ? THEME_GREEN : color} />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="about"
+          options={{
+            title: 'About',
+            tabBarIcon: ({ color, size, focused }) => (
+              <Ionicons
+                name="information-circle-outline"
+                size={size}
+                color={focused ? THEME_GREEN : color}
+              />
+            ),
+          }}
+        />
+      </Tabs>
+
+      {/* Anchored menu: backdrop starts BELOW top bar, so avatar stays visible */}
+      {menuOpen && (
+        <>
+          {/* Backdrop only below the nav bar */}
+          <Pressable
+            onPress={() => setMenuOpen(false)}
+            style={[styles.backdropBelowNav, { top: menuTop }]}
           />
-        ),
-        tabBarShowLabel: false,                 // no text under icons
-        tabBarActiveTintColor: THEME_GREEN,     // focus tint for non-center icons
-        tabBarInactiveTintColor: INACTIVE_GRAY,
-        tabBarStyle: {
-          height: 64 + (insets.bottom ? insets.bottom - 6 : 0),
-          paddingTop: 6,
-          paddingBottom: (insets.bottom ? insets.bottom - 6 : 8),
-          backgroundColor: '#fff',
-          borderTopColor: '#e5e7eb',
-          borderTopWidth: 1,
-        },
-      }}
-    >
-      {/* Hide stray routes */}
-      <Tabs.Screen name="index" options={{ href: null }} />
-      {/* profile lives inside tabs but hidden from the bar */}
-      <Tabs.Screen name="profile" options={{ href: null, title: 'Profile' }} />
-      <Tabs.Screen name="explore" options={{ href: null }} />
+          {/* Menu box positioned under avatar (top-right) */}
+          <View style={[styles.menu, { top: menuTop, right: 16 }]}>
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => { setMenuOpen(false); router.push('/(tabs)/profile-info'); }}
+            >
+              <Ionicons name="stats-chart" size={18} color="#0b3d24" style={styles.menuIcon} />
+              <Text style={styles.menuText}>Profile Info</Text>
+            </TouchableOpacity>
 
-      {/* Left 1: Leaderboard */}
-      <Tabs.Screen
-        name="leaderboard"
-        options={{
-          title: 'Leaderboard',
-          tabBarIcon: ({ color, size, focused }) => (
-            <Ionicons name="trophy" size={size} color={focused ? THEME_GREEN : color} />
-          ),
-        }}
-      />
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => { setMenuOpen(false); router.push('/(tabs)/recent-games'); }}
+            >
+              <Ionicons name="time-outline" size={18} color="#0b3d24" style={styles.menuIcon} />
+              <Text style={styles.menuText}>Recent Games</Text>
+            </TouchableOpacity>
 
-      {/* Left 2: Elimination */}
-      <Tabs.Screen
-        name="elimination"
-        options={{
-          title: 'Elimination',
-          tabBarIcon: ({ color, size, focused }) => (
-            <MaterialCommunityIcons name="axe" size={size} color={focused ? THEME_GREEN : color} />
-          ),
-        }}
-      />
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => { setMenuOpen(false); router.push('/(tabs)/default-filters'); }}
+            >
+              <Ionicons name="funnel" size={18} color="#0b3d24" style={styles.menuIcon} />
+              <Text style={styles.menuText}>Default Filters</Text>
+            </TouchableOpacity>
 
-      {/* CENTER: Daily (game.js) – floating, clearly distinct focused vs unfocused */}
-      <Tabs.Screen
-        name="game"
-        options={{
-          title: dailyTitle,
-          // Pass a reliable 'focused' computed from route segments
-          tabBarButton: (props) => (
-            <FloatingCenterButton
-              focused={isGameFocused}
-              onPress={props.onPress}
-            />
-          ),
-        }}
-      />
+            <View style={styles.divider} />
 
-      {/* Right 2: Leagues */}
-      <Tabs.Screen
-        name="leagues"
-        options={{
-          title: 'Leagues',
-          tabBarIcon: ({ color, size, focused }) => (
-            <MaterialCommunityIcons name="table" size={size} color={focused ? THEME_GREEN : color} />
-          ),
-        }}
-      />
-
-      {/* Right 1: About */}
-      <Tabs.Screen
-        name="about"
-        options={{
-          title: 'About',
-          tabBarIcon: ({ color, size, focused }) => (
-            <Ionicons
-              name="information-circle-outline"
-              size={size}
-              color={focused ? THEME_GREEN : color}
-            />
-          ),
-        }}
-      />
-    </Tabs>
+            {/* === CHANGED: local-scope sign-out + drop realtime channels === */}
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={async () => {
+                setMenuOpen(false);
+                try {
+                  await supabase.auth.signOut({ scope: 'local' });
+                  try { supabase.removeAllChannels?.(); } catch {}
+                } catch {}
+                router.replace('/login');
+              }}
+            >
+              <Ionicons name="log-out-outline" size={18} color="#b00020" style={styles.menuIcon} />
+              <Text style={[styles.menuText, { color: '#b00020', fontWeight: '700' }]}>Sign Out</Text>
+            </TouchableOpacity>
+          </View>
+        </>
+      )}
+    </>
   );
 }
+
+const styles = StyleSheet.create({
+  backdropBelowNav: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.12)',
+  },
+  menu: {
+    position: 'absolute',
+    width: 240,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingVertical: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  menuItem: { paddingVertical: 12, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center' },
+  menuIcon: { marginRight: 10 },
+  menuText: { fontSize: 15, color: '#111827' },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: '#e5e7eb', marginVertical: 4 },
+});
