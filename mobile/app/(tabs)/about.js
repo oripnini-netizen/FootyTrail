@@ -37,55 +37,61 @@ export default function AboutPage() {
 
       {/* Feature "Cards" */}
       <Section>
-        <SectionTitle>Features</SectionTitle>
         <CardGrid>
-          <FeatureCard emoji="🎯" title="Daily Challenge" text="One global player per day. Guess right to earn a bonus game." />
-          <FeatureCard emoji="🛡️" title="Regular Game" text="Play up to 10 games a day with fully customizable difficulty." />
-          <FeatureCard emoji="👥" title="Private Leagues" text="Challenge friends; daily totals decide matchday wins." />
+          <FeatureCard emoji="🌟" title="Daily Challenges" text="One global player per day. Guess right to earn a bonus game." />
+          <FeatureCard emoji="⚽️" title="Regular Games" text="Play up to 10 games a day with fully customizable difficulty." />
+          <FeatureCard emoji="⚔️" title="Private Leagues" text="Challenge friends; daily totals decide matchday wins." />
           <FeatureCard emoji="🪓" title="Elimination Challenges" text="Survive round by round—lowest totals get knocked out on elimination rounds." />
-          <FeatureCard emoji="⏱️" title="Time Pressure" text="3 minutes and 3 guesses—points decay over time." />
-          <FeatureCard emoji="🧪" title="Advanced Filters" text="Pick competitions, seasons, and a minimum market value to tune difficulty." />
+          <FeatureCard emoji="⏱️" title="Time Pressure" text="2 minutes and 3 guesses—points decay over time." />
+          <FeatureCard
+            emoji="⚙️"
+            title="Advanced Filters"
+            text="Pick competitions, seasons, a minimum market value, and a minimum appearances filter to tune difficulty."
+          />
           <FeatureCard emoji="💡" title="Strategic Hints" text="Age, citizenship, position & image hints—use wisely to preserve points." />
         </CardGrid>
       </Section>
 
       {/* How It Works */}
       <Section>
-        <RowTitle emoji="🏆" title="How It Works" />
+        <RowTitle emoji="⚠️" title="How It Works" />
         <Paragraph>
           FootyTrail challenges you to identify professional football players using only their transfer
           history. Each day, you get <Bold>10 regular attempts</Bold> and <Bold>one Daily Challenge attempt</Bold>.
           Win the Daily Challenge to unlock a bonus 11th game.
         </Paragraph>
 
-        <InfoBox tone="green">
-          <Paragraph style={{ marginBottom: 6 }}>
-            <Bold>Game Modes:</Bold>
-          </Paragraph>
-          <Bullet> <Bold>Daily Challenge:</Bold> Everyone faces the same player. Guess correctly to earn a bonus game!</Bullet>
+        {/* ⬇️ GAME MODES — now styled like the Pro Tips card; 'Rules' bullet REMOVED */}
+        <Card>
+          <SubTitle>Game Modes</SubTitle>
           <Bullet>
-            <Bold>Regular Game:</Bold> Customize difficulty with <Italic>competitions</Italic>, <Italic>seasons</Italic>, and a
-            <Italic> minimum market value</Italic> filter.
+            <Bold>Daily Challenge:</Bold> Everyone faces the same player. Guess correctly to earn a bonus game!
           </Bullet>
-          <Bullet><Bold>Rules:</Bold> 3 minutes & 3 guesses per player in all modes.</Bullet>
+          <Bullet>
+            <Bold>Regular Game:</Bold> Customize difficulty with <Italic>competitions</Italic>, <Italic>seasons</Italic>, a
+            <Italic> minimum market value</Italic>, and a <Italic>minimum appearances</Italic> filter.
+          </Bullet>
           <Bullet>
             <Bold>Elimination Challenges:</Bold> Create survival-style tournaments with friends. Scores accumulate across
             rounds and the lowest totals are eliminated on designated elimination rounds.
           </Bullet>
-        </InfoBox>
+        </Card>
 
-        <InfoBox tone="blue">
-          <Paragraph style={{ marginBottom: 6 }}>
-            <Bold>Advanced Filtering:</Bold>
-          </Paragraph>
+        {/* ⬇️ ADVANCED FILTERING — now styled like the Pro Tips card */}
+        <Card>
+          <SubTitle>Advanced Filtering</SubTitle>
           <Bullet><Bold>Competitions:</Bold> Choose from professional competitions worldwide.</Bullet>
           <Bullet><Bold>Seasons:</Bold> Focus your search on specific seasons.</Bullet>
           <Bullet>
             <Bold>Minimum Market Value (€):</Bold> Only include players whose market value (max across the selected
             seasons) meets or exceeds your threshold.
           </Bullet>
+          <Bullet>
+            <Bold>Minimum Appearances:</Bold> Only include players who reached at least your appearance threshold across
+            the selected seasons.
+          </Bullet>
           <Bullet><Bold>Profile Defaults:</Bold> Save your preferred filters to auto-apply for new games.</Bullet>
-        </InfoBox>
+        </Card>
       </Section>
 
       {/* Pro Tips */}
@@ -94,20 +100,17 @@ export default function AboutPage() {
         <Card>
           <SubTitle>Maximize Points</SubTitle>
           <Bullet>Include more competitions for larger player pools and higher potential points.</Bullet>
-          <Bullet>Set a lower <Bold>minimum market value</Bold> for tougher pools and more points.</Bullet>
+          <Bullet>
+            Tuning difficulty: set a lower <Bold>minimum market value</Bold> and/or a higher <Bold>minimum appearances</Bold> to
+            affect pool size and scoring.
+          </Bullet>
           <Bullet>Use hints sparingly—first letter hint costs the most.</Bullet>
           <Bullet>Guess quickly to minimize time penalties.</Bullet>
           <Bullet>Win the Daily Challenge to earn a bonus regular game.</Bullet>
         </Card>
-        <Card>
-          <SubTitle>League Strategy</SubTitle>
-          <Bullet>Consistency beats spikes; your daily total decides league match results.</Bullet>
-          <Bullet>Balance safer picks with occasional high-risk plays when chasing points.</Bullet>
-          <Bullet>Watch opponents’ typical scores to plan your approach.</Bullet>
-        </Card>
       </Section>
 
-      {/* Scoring System */}
+      {/* Scoring System (wrong guess penalty ×0.66) */}
       <Section>
         <RowTitle emoji="🥇" title="Scoring System" />
         <Paragraph>
@@ -116,7 +119,6 @@ export default function AboutPage() {
           score is then modified by hints, wrong guesses, and time.
         </Paragraph>
 
-        {/* Simple "table" */}
         <Card>
           <KV label="Base points" value="5 pts × pool size" />
           <KV label="Daily Challenge base points" value="10,000" />
@@ -124,28 +126,39 @@ export default function AboutPage() {
           <KV label="Position hint" value="×0.80" />
           <KV label="Player image hint" value="×0.50" />
           <KV label="First letter hint" value="×0.25" />
-          <KV label="Wrong guess penalty" value="Current points are halved per wrong guess" />
+          <KV label="Wrong guess penalty" value="×0.66 per wrong guess" />
           <KV label="Time penalty" value="Points decay over time" />
         </Card>
 
         <InfoBox tone="yellow">
           <Paragraph>
-            <Bold>Example:</Bold> 500 players in pool → 2,500 base points. Hints, wrong guesses (halving), and time
+            <Bold>Example:</Bold> 500 players in pool → 2,500 base points. Hints, wrong guesses (×0.66 each), and time
             will adjust your final score—play smart to maximize it!
           </Paragraph>
         </InfoBox>
       </Section>
 
-      {/* Private Leagues */}
+      {/* Elimination Challenges — now styled like the Pro Tips card; last filters bullet REMOVED */}
       <Section>
-        <RowTitle emoji="👥" title="Private Leagues" />
-        <InfoBox tone="blue">
+        <RowTitle emoji="🪓" title="Elimination Challenges" />
+        <Card>
+          <Bullet>Create public or private elimination tournaments with friends.</Bullet>
+          <Bullet>Set <Bold>rounds to elimination</Bold>: after each block, the lowest totals are eliminated.</Bullet>
+          <Bullet>Rounds continue until a single winner remains (or as defined by your tournament settings).</Bullet>
+          <Bullet>Scores carry over between rounds; every guess matters.</Bullet>
+        </Card>
+      </Section>
+
+      {/* Private Leagues — now styled like the Pro Tips card */}
+      <Section>
+        <RowTitle emoji="⚔️" title="Private Leagues" />
+        <Card>
           <Bullet>Create leagues with 2–20 friends — a bot will be added for odd numbers.</Bullet>
           <Bullet>Your total daily points are compared head-to-head with your opponent’s.</Bullet>
           <Bullet>Win = 3 points, Draw = 1 point each. League tables update live through the day.</Bullet>
           <Bullet>League play is independent of global rankings.</Bullet>
           <Bullet>Fixtures are generated automatically for the whole schedule.</Bullet>
-        </InfoBox>
+        </Card>
       </Section>
 
       {/* Contact & Support */}
