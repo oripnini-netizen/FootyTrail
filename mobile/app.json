@@ -32,6 +32,9 @@
         "projectId": "ac02e276-39db-412b-afce-20d1deb97813"
       },
       "EXPO_PUBLIC_API_BASE": "https://footytrail.up.railway.app/api"
-    }
+    },
+    "plugins": [
+      "expo-font"
+    ]
   }
 }

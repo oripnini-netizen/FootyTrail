@@ -1,18 +1,37 @@
-// mobile/app/(tabs)/profile-info.js
 import React, { useEffect, useState } from "react";
-import { View, Text, Image, Pressable, TextInput, ActivityIndicator, StyleSheet, Alert } from "react-native";
-// ImagePicker dynamically imported in pickNewAvatar()
+import {
+  View,
+  Text,
+  Image,
+  Pressable,
+  TextInput,
+  ActivityIndicator,
+  StyleSheet,
+  Alert,
+  Platform,
+} from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useFonts, Tektur_400Regular, Tektur_700Bold } from "@expo-google-fonts/tektur";
 import { supabase, uploadAvatar } from "../../lib/supabase";
 
 export default function ProfileInfoScreen() {
+  const [fontsLoaded] = useFonts({
+    Tektur_400Regular,
+    Tektur_700Bold,
+  });
+
   const [user, setUser] = useState(null);
   const [fullName, setFullName] = useState("");
   const [avatar, setAvatar] = useState(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  const [stats, setStats] = useState({ total_points: 0, games_played: 0, avg_time: 0, success_rate: 0 });
+  const [stats, setStats] = useState({
+    total_points: 0,
+    games_played: 0,
+    avg_time: 0,
+    success_rate: 0,
+  });
 
   useEffect(() => {
     let mounted = true;
@@ -30,9 +49,13 @@ export default function ProfileInfoScreen() {
 
         setUser({ id: u.id, email: row?.email || u.email });
         setFullName(row?.full_name || u.user_metadata?.full_name || "");
-        setAvatar(row?.profile_photo_url || u.user_metadata?.profile_photo_url || u.user_metadata?.avatar_url || null);
+        setAvatar(
+          row?.profile_photo_url ||
+            u.user_metadata?.profile_photo_url ||
+            u.user_metadata?.avatar_url ||
+            null
+        );
 
-        // stats (points + tx, games, avg time, success)
         const { data: allGames } = await supabase
           .from("games_records")
           .select("won, points_earned, time_taken_seconds")
@@ -43,11 +66,7 @@ export default function ProfileInfoScreen() {
         const basePoints = (allGames || []).reduce((s, g) => s + (g.points_earned || 0), 0);
         const totalTime = (allGames || []).reduce((s, g) => s + (g.time_taken_seconds || 0), 0);
 
-        const { data: txs } = await supabase
-          .from("points_transactions")
-          .select("amount")
-          .eq("user_id", u.id);
-
+        const { data: txs } = await supabase.from("points_transactions").select("amount").eq("user_id", u.id);
         const txPoints = (txs || []).reduce((s, t) => s + Number(t.amount || 0), 0);
 
         setStats({
@@ -66,29 +85,63 @@ export default function ProfileInfoScreen() {
   }, []);
 
   const pickNewAvatar = async () => {
+    // Web guard: expo-image-picker only supports web via a limited flow; show a clear message.
+    if (Platform.OS === "web") {
+      Alert.alert("Unsupported on Web", "Picking an avatar is currently supported on iOS/Android builds.");
+      return;
+    }
+
     let ImagePicker;
     try {
       ImagePicker = await import("expo-image-picker");
     } catch {
       Alert.alert(
         "Image Picker Unavailable",
-        "Install it with `expo install expo-image-picker` and rebuild your dev build."
+        "Install the native module with:\n\nnpx expo install expo-image-picker\n\nThen rebuild your dev/client app."
       );
       return;
     }
 
+    // If the native side isn't linked in this build, calling any method will throw with 'ExponentImagePicker'
+    try {
+      const getPerm = ImagePicker.requestMediaLibraryPermissionsAsync ?? ImagePicker.getMediaLibraryPermissionsAsync;
+      if (!getPerm) {
+        throw new Error("Native module missing");
+      }
+    } catch (e) {
+      Alert.alert(
+        "Image Picker Not Linked",
+        "This build is missing the native Image Picker module.\n\nRun:\n  npx expo install expo-image-picker\nand rebuild your EAS/dev client."
+      );
+      return;
+    }
+
+    // Ask permission
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
       Alert.alert("Permission needed", "Please allow photo library access to change your avatar.");
       return;
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.9,
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-    });
-    if (result.canceled) return;
+
+    // Launch picker (wrap to catch the 'ExponentImagePicker' native error if build is stale)
+    let result;
+    try {
+      result = await ImagePicker.launchImageLibraryAsync({
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.9,
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      });
+    } catch (e) {
+      // Most common failure: native module missing in the current build.
+      Alert.alert(
+        "Picker Failed",
+        "The Image Picker native module isn't available in this build.\nRe-install & rebuild:\n  npx expo install expo-image-picker\n  eas build --profile development"
+      );
+      return;
+    }
+
+    if (!result || result.canceled) return;
     const asset = result.assets?.[0];
     if (!asset) return;
 
@@ -121,7 +174,7 @@ export default function ProfileInfoScreen() {
     }
   };
 
-  if (loading) {
+  if (!fontsLoaded || loading) {
     return (
       <View style={styles.screen}>
         <ActivityIndicator />
@@ -138,20 +191,13 @@ export default function ProfileInfoScreen() {
             <Image source={{ uri: avatar }} style={styles.bigAvatar} />
           ) : (
             <View style={[styles.bigAvatar, styles.avatarFallback]}>
-              <Text style={{ fontSize: 22, fontWeight: "800" }}>
-                {(user?.email || "U").slice(0, 1).toUpperCase()}
-              </Text>
+              <Text style={styles.avatarLetter}>{(user?.email || "U").slice(0, 1).toUpperCase()}</Text>
             </View>
           )}
         </Pressable>
 
         <Text style={styles.label}>User Name</Text>
-        <TextInput
-          value={fullName}
-          onChangeText={setFullName}
-          placeholder="Your name"
-          style={styles.input}
-        />
+        <TextInput value={fullName} onChangeText={setFullName} placeholder="Your name" style={styles.input} />
         <Pressable onPress={saveName} disabled={saving} style={[styles.button, { backgroundColor: "#166534" }]}>
           <Text style={styles.buttonText}>{saving ? "Saving..." : "Save Name"}</Text>
         </Pressable>
@@ -190,8 +236,6 @@ export default function ProfileInfoScreen() {
           />
         </View>
       </View>
-
-      {/* Note: Recent Games moved to its own page (see recent-games.js) */}
     </View>
   );
 }
@@ -207,7 +251,7 @@ function Stat({ label, value, icon }) {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, padding: 12, backgroundColor: '#f7faf7' },
+  screen: { flex: 1, padding: 12, backgroundColor: "#f7faf7" },
   card: {
     backgroundColor: "#fff",
     borderRadius: 12,
@@ -229,8 +273,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  label: { fontSize: 12, color: "#6b7280", marginBottom: 4 },
-  value: { fontSize: 14, fontWeight: "600", color: "#111827" },
+  avatarLetter: { fontSize: 22, fontFamily: "Tektur_700Bold", color: "#0b3d24" },
+
+  // Typography (Tektur applied everywhere)
+  label: { fontSize: 12, color: "#6b7280", marginBottom: 4, fontFamily: "Tektur_400Regular" },
+  value: { fontSize: 14, fontFamily: "Tektur_700Bold", color: "#111827" },
   input: {
     borderWidth: 1,
     borderColor: "#d1d5db",
@@ -239,6 +286,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     fontSize: 14,
     color: "#111827",
+    fontFamily: "Tektur_400Regular",
   },
   button: {
     marginTop: 10,
@@ -246,8 +294,8 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     alignItems: "center",
   },
-  buttonText: { color: "#fff", fontWeight: "700" },
-  sectionTitle: { fontSize: 16, fontWeight: "700", color: "#0b3d24" },
+  buttonText: { color: "#fff", fontFamily: "Tektur_700Bold", fontSize: 14 },
+  sectionTitle: { fontSize: 16, fontFamily: "Tektur_700Bold", color: "#0b3d24" },
   statsRow: { flexDirection: "row", gap: 8, marginTop: 8 },
   statBox: {
     flex: 1,
@@ -257,6 +305,6 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     alignItems: "center",
   },
-  statValue: { fontSize: 18, fontWeight: "800", color: "#111827" },
-  statLabel: { fontSize: 12, color: "#6b7280" },
+  statValue: { fontSize: 18, fontFamily: "Tektur_700Bold", color: "#111827" },
+  statLabel: { fontSize: 12, color: "#6b7280", fontFamily: "Tektur_400Regular" },
 });

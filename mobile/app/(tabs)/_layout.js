@@ -6,6 +6,9 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../../lib/supabase';
 
+// --- Google Font (Tektur) ---
+import { useFonts, Tektur_700Bold } from '@expo-google-fonts/tektur';
+
 // ---------------- Theme ----------------
 const THEME_GREEN = '#166534';
 const INACTIVE_GRAY = '#6b7280';
@@ -20,7 +23,7 @@ function Avatar({ uri }) {
   return <Image source={{ uri }} style={{ width: 32, height: 32, borderRadius: 16 }} />;
 }
 
-function TopNav({ title, avatarUrl, onAvatarPress }) {
+function TopNav({ title, avatarUrl, onAvatarPress, titleFontFamily }) {
   return (
     <SafeAreaView edges={['top']} style={{ backgroundColor: '#fff' }}>
       <View
@@ -41,7 +44,15 @@ function TopNav({ title, avatarUrl, onAvatarPress }) {
         />
         <Text
           numberOfLines={1}
-          style={{ flex: 1, textAlign: 'center', fontSize: 18, fontWeight: '700', color: '#111827' }}
+          style={{
+            flex: 1,
+            textAlign: 'center',
+            fontSize: 18,
+            fontWeight: '700',
+            color: '#111827',
+            // Apply Tektur when loaded
+            fontFamily: titleFontFamily || undefined,
+          }}
         >
           {title || ''}
         </Text>
@@ -114,18 +125,32 @@ function FloatingCenterButton({ onPress, focused }) {
   );
 }
 
-// Format date dd/mm/yyyy
-function formatDDMMYYYY(d) {
-  const dd = String(d.getDate()).padStart(2, '0');
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const yyyy = d.getFullYear();
-  return `${dd}/${mm}/${yyyy}`;
+// New: Header date formatter "Wkdy, DD Mon YYYY" (e.g., Fri, 12 Sep 2025)
+function formatHeaderDate(d) {
+  try {
+    return d.toLocaleDateString('en-GB', {
+      weekday: 'short',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    });
+  } catch {
+    // Fallback, just in case
+    const wk = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()];
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
+    const yyyy = d.getFullYear();
+    return `${wk}, ${dd} ${mon} ${yyyy}`;
+  }
 }
 
 export default function TabsLayout() {
   const router = useRouter();
   const segments = useSegments();
   const insets = useSafeAreaInsets();
+
+  // Load Tektur font
+  const [fontsLoaded] = useFonts({ Tektur_700Bold });
 
   const [avatarUrl, setAvatarUrl] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -167,7 +192,9 @@ export default function TabsLayout() {
     scheduleMidnightTick();
     return () => timeoutRef.current && clearTimeout(timeoutRef.current);
   }, [scheduleMidnightTick]);
-  const dailyTitle = useMemo(() => formatDDMMYYYY(today), [today]);
+
+  // Use new header date format
+  const dailyTitle = useMemo(() => formatHeaderDate(today), [today]);
 
   const last = segments[segments.length - 1];
   const isGameFocused = last === 'game';
@@ -181,6 +208,7 @@ export default function TabsLayout() {
               title={options.title}
               avatarUrl={avatarUrl}
               onAvatarPress={() => setMenuOpen((v) => !v)}
+              titleFontFamily={fontsLoaded ? 'Tektur_700Bold' : undefined}
             />
           ),
           tabBarShowLabel: false,
@@ -209,7 +237,7 @@ export default function TabsLayout() {
           options={{
             title: 'Leaderboard',
             tabBarIcon: ({ color, size, focused }) => (
-              <Ionicons name="trophy" size={size} color={focused ? THEME_GREEN : color} />
+              <MaterialCommunityIcons name="trophy-outline" size={size} color={focused ? THEME_GREEN : color} />
             ),
           }}
         />
@@ -239,7 +267,7 @@ export default function TabsLayout() {
           options={{
             title: 'Leagues',
             tabBarIcon: ({ color, size, focused }) => (
-              <MaterialCommunityIcons name="table" size={size} color={focused ? THEME_GREEN : color} />
+              <MaterialCommunityIcons name="shield-crown-outline" size={size} color={focused ? THEME_GREEN : color} />
             ),
           }}
         />
@@ -272,24 +300,24 @@ export default function TabsLayout() {
               style={styles.menuItem}
               onPress={() => { setMenuOpen(false); router.push('/(tabs)/profile-info'); }}
             >
-              <Ionicons name="stats-chart" size={18} color="#0b3d24" style={styles.menuIcon} />
-              <Text style={styles.menuText}>Profile Info</Text>
+              <MaterialCommunityIcons name="smart-card" size={18} color="#0b3d24" style={styles.menuIcon} />
+              <Text style={[styles.menuText, { fontFamily: fontsLoaded ? 'Tektur_700Bold' : undefined }]}>Profile Info</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.menuItem}
               onPress={() => { setMenuOpen(false); router.push('/(tabs)/recent-games'); }}
             >
-              <Ionicons name="time-outline" size={18} color="#0b3d24" style={styles.menuIcon} />
-              <Text style={styles.menuText}>Recent Games</Text>
+              <MaterialCommunityIcons name="timelapse" size={18} color="#0b3d24" style={styles.menuIcon} />
+              <Text style={[styles.menuText, { fontFamily: fontsLoaded ? 'Tektur_700Bold' : undefined }]}>Recent Games</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.menuItem}
               onPress={() => { setMenuOpen(false); router.push('/(tabs)/default-filters'); }}
             >
-              <Ionicons name="funnel" size={18} color="#0b3d24" style={styles.menuIcon} />
-              <Text style={styles.menuText}>Default Filters</Text>
+              <MaterialCommunityIcons name="account-filter" size={18} color="#0b3d24" style={styles.menuIcon} />
+              <Text style={[styles.menuText, { fontFamily: fontsLoaded ? 'Tektur_700Bold' : undefined }]}>Default Filters</Text>
             </TouchableOpacity>
 
             <View style={styles.divider} />
@@ -306,8 +334,10 @@ export default function TabsLayout() {
                 router.replace('/login');
               }}
             >
-              <Ionicons name="log-out-outline" size={18} color="#b00020" style={styles.menuIcon} />
-              <Text style={[styles.menuText, { color: '#b00020', fontWeight: '700' }]}>Sign Out</Text>
+              <MaterialCommunityIcons name="logout" size={18} color="#b00020" style={styles.menuIcon} />
+              <Text style={[styles.menuText, { color: '#b00020', fontWeight: '700', fontFamily: fontsLoaded ? 'Tektur_700Bold' : undefined }]}>
+                Sign Out
+              </Text>
             </TouchableOpacity>
           </View>
         </>
@@ -336,8 +366,17 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 6,
   },
-  menuItem: { paddingVertical: 12, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center' },
+  menuItem: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   menuIcon: { marginRight: 10 },
-  menuText: { fontSize: 15, color: '#111827' },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: '#e5e7eb', marginVertical: 4 },
+  menuText: { fontSize: 14, color: '#0b3d24' },
+  divider: {
+    height: 1,
+    backgroundColor: '#e5e7eb',
+    marginVertical: 6,
+  },
 });

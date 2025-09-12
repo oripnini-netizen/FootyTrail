@@ -51,7 +51,7 @@ async function j(url, opts = {}) {
   return data ?? raw;
 }
 
-// -------- API calls (no network fallbacks) --------
+// -------- Existing API calls (left as-is) --------
 export async function getCompetitions() {
   return j(`${API_BASE}/competitions`);
 }
@@ -85,4 +85,35 @@ export async function getDailyChallenge() {
 
 export async function getLimits(userId) {
   return j(`${API_BASE}/limits?userId=${encodeURIComponent(userId)}`);
+}
+
+// -------- New API calls expected by Live Game (parity with web) --------
+
+// Name suggestions for the guess input
+export async function suggestNames(query, limit = 50) {
+  return j(`${API_BASE}/suggest-names`, {
+    method: "POST",
+    body: JSON.stringify({ q: String(query || "").trim(), limit }),
+  });
+}
+
+// Player transfer history (used in Live Game + Postgame)
+export async function fetchTransfers(playerId) {
+  const id = Number(playerId);
+  if (!Number.isFinite(id) || id <= 0) {
+    throw new Error("fetchTransfers: valid numeric playerId is required");
+  }
+  // If your backend path differs, tell me and I’ll match it.
+  return j(`${API_BASE}/players/${id}/transfers`);
+}
+
+// Persist a completed round (non-elimination path)
+export async function saveGameCompleted(body) {
+  if (!body || typeof body !== "object") {
+    throw new Error("saveGameCompleted: body payload is required");
+  }
+  return j(`${API_BASE}/game-completed`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }

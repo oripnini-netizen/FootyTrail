@@ -10,24 +10,15 @@ export default function AboutPage() {
         backgroundColor: '#F0FDF4', // green-50 vibe
       }}
     >
-      {/* Header */}
+      {/* Intro */}
       <View style={{ marginBottom: 8 }}>
-        <Text
-          style={{
-            fontSize: 28,
-            fontWeight: '800',
-            color: '#064E3B', // green-900
-            textAlign: 'center',
-          }}
-        >
-          About <Text style={{ color: '#EAB308' /* yellow-500 */ }}>FootyTrail</Text>
-        </Text>
         <Text
           style={{
             fontSize: 16,
             color: '#166534', // green-700
             textAlign: 'center',
             marginTop: 6,
+            fontFamily: 'Tektur_400Regular',
           }}
         >
           Test your football knowledge in the ultimate transfer-history guessing game. Can you
@@ -61,7 +52,6 @@ export default function AboutPage() {
           Win the Daily Challenge to unlock a bonus 11th game.
         </Paragraph>
 
-        {/* ⬇️ GAME MODES — now styled like the Pro Tips card; 'Rules' bullet REMOVED */}
         <Card>
           <SubTitle>Game Modes</SubTitle>
           <Bullet>
@@ -77,7 +67,6 @@ export default function AboutPage() {
           </Bullet>
         </Card>
 
-        {/* ⬇️ ADVANCED FILTERING — now styled like the Pro Tips card */}
         <Card>
           <SubTitle>Advanced Filtering</SubTitle>
           <Bullet><Bold>Competitions:</Bold> Choose from professional competitions worldwide.</Bullet>
@@ -110,7 +99,7 @@ export default function AboutPage() {
         </Card>
       </Section>
 
-      {/* Scoring System (wrong guess penalty ×0.66) */}
+      {/* Scoring System */}
       <Section>
         <RowTitle emoji="🥇" title="Scoring System" />
         <Paragraph>
@@ -138,7 +127,7 @@ export default function AboutPage() {
         </InfoBox>
       </Section>
 
-      {/* Elimination Challenges — now styled like the Pro Tips card; last filters bullet REMOVED */}
+      {/* Elimination Challenges */}
       <Section>
         <RowTitle emoji="🪓" title="Elimination Challenges" />
         <Card>
@@ -149,7 +138,7 @@ export default function AboutPage() {
         </Card>
       </Section>
 
-      {/* Private Leagues — now styled like the Pro Tips card */}
+      {/* Private Leagues */}
       <Section>
         <RowTitle emoji="⚔️" title="Private Leagues" />
         <Card>
@@ -172,7 +161,7 @@ export default function AboutPage() {
           accessibilityRole="button"
           accessibilityLabel="Email support"
         >
-          <Text style={{ fontSize: 16, color: '#15803D', textDecorationLine: 'underline' }}>
+          <Text style={{ fontSize: 16, color: '#15803D', textDecorationLine: 'underline', fontFamily: 'Tektur_400Regular' }}>
             footy.trail.app@gmail.com
           </Text>
         </TouchableOpacity>
@@ -183,44 +172,21 @@ export default function AboutPage() {
         <SectionTitle>Site Policy & Legal</SectionTitle>
         <Paragraph>
           <Bold>Unofficial Fan Project:</Bold> FootyTrail is a fan-made game and is not affiliated with, endorsed by,
-          or sponsored by any football league, club, player, or governing body. Logos, names, and other marks may be
-          the property of their respective owners and are used for identification purposes only.
+          or sponsored by any football league, club, player, or governing body.
         </Paragraph>
         <Paragraph>
           <Bold>Data Accuracy:</Bold> We strive to keep all information up to date, but we can’t guarantee accuracy,
-          completeness, or availability at all times. The app is provided on an “as is” and “as available” basis,
-          without warranties of any kind.
+          completeness, or availability at all times.
         </Paragraph>
         <Paragraph>
           <Bold>Fair Use & Takedowns:</Bold> If you believe any content infringes your rights, please contact us at{' '}
           <Text
-            style={{ color: '#15803D', textDecorationLine: 'underline' }}
+            style={{ color: '#15803D', textDecorationLine: 'underline', fontFamily: 'Tektur_400Regular' }}
             onPress={() => Linking.openURL('mailto:footy.trail.app@gmail.com')}
           >
             footy.trail.app@gmail.com
           </Text>{' '}
-          with details, and we’ll review and address it promptly.
-        </Paragraph>
-        <Paragraph>
-          <Bold>Privacy:</Bold> We collect only the information necessary to operate the game (e.g., account and
-          gameplay data). We don’t sell personal information. For any privacy questions or data deletion requests, email{' '}
-          <Text
-            style={{ color: '#15803D', textDecorationLine: 'underline' }}
-            onPress={() => Linking.openURL('mailto:footy.trail.app@gmail.com')}
-          >
-            footy.trail.app@gmail.com
-          </Text>.
-        </Paragraph>
-        <Paragraph>
-          <Bold>No Gambling:</Bold> FootyTrail is for entertainment purposes only and does not support wagering or betting.
-        </Paragraph>
-        <Paragraph>
-          <Bold>Age Requirement:</Bold> By using FootyTrail, you confirm that you are at least 13 years old (or the age of
-          digital consent in your jurisdiction).
-        </Paragraph>
-        <Paragraph>
-          <Bold>Limitation of Liability:</Bold> To the fullest extent permitted by law, FootyTrail and its creators are not
-          liable for any indirect, incidental, special, consequential, or punitive damages arising from your use of the app.
+          with details.
         </Paragraph>
       </Section>
     </ScrollView>
@@ -234,26 +200,26 @@ const Section = ({ children }) => (
 );
 
 const SectionTitle = ({ children }) => (
-  <Text style={{ fontSize: 20, fontWeight: '700', color: '#065F46', marginBottom: 8 }}>{children}</Text>
+  <Text style={{ fontSize: 20, fontWeight: '700', color: '#065F46', marginBottom: 8, fontFamily: 'Tektur_700Bold' }}>{children}</Text>
 );
 
 const SubTitle = ({ children }) => (
-  <Text style={{ fontSize: 16, fontWeight: '700', color: '#065F46', marginBottom: 6 }}>{children}</Text>
+  <Text style={{ fontSize: 16, fontWeight: '700', color: '#065F46', marginBottom: 6, fontFamily: 'Tektur_700Bold' }}>{children}</Text>
 );
 
 const RowTitle = ({ emoji, title }) => (
   <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-    <Text style={{ fontSize: 20, marginRight: 8 }}>{emoji}</Text>
-    <Text style={{ fontSize: 20, fontWeight: '700', color: '#065F46' }}>{title}</Text>
+    <Text style={{ fontSize: 20, marginRight: 8, fontFamily: 'Tektur_400Regular' }}>{emoji}</Text>
+    <Text style={{ fontSize: 20, fontWeight: '700', color: '#065F46', fontFamily: 'Tektur_700Bold' }}>{title}</Text>
   </View>
 );
 
 const Paragraph = ({ children, style }) => (
-  <Text style={[{ fontSize: 14, color: '#374151', lineHeight: 20 }, style]}>{children}</Text>
+  <Text style={[{ fontSize: 14, color: '#374151', lineHeight: 20, fontFamily: 'Tektur_400Regular' }, style]}>{children}</Text>
 );
 
-const Bold = ({ children }) => <Text style={{ fontWeight: '700' }}>{children}</Text>;
-const Italic = ({ children }) => <Text style={{ fontStyle: 'italic' }}>{children}</Text>;
+const Bold = ({ children }) => <Text style={{ fontWeight: '700', fontFamily: 'Tektur_700Bold' }}>{children}</Text>;
+const Italic = ({ children }) => <Text style={{ fontStyle: 'italic', fontFamily: 'Tektur_400Regular' }}>{children}</Text>;
 
 const Card = ({ children, style }) => (
   <View
@@ -278,7 +244,7 @@ const Card = ({ children, style }) => (
 );
 
 const CardGrid = ({ children }) => (
-  <View style={{ gap: 10 }}>{children}</View> // stacked for mobile; simple and readable
+  <View style={{ gap: 10 }}>{children}</View>
 );
 
 const FeatureCard = ({ emoji, title, text }) => (
@@ -289,19 +255,19 @@ const FeatureCard = ({ emoji, title, text }) => (
           height: 64,
           width: 64,
           borderRadius: 32,
-          backgroundColor: '#DCFCE7', // green-100
+          backgroundColor: '#DCFCE7',
           alignItems: 'center',
           justifyContent: 'center',
           marginBottom: 8,
         }}
       >
-        <Text style={{ fontSize: 28 }}>{emoji}</Text>
+        <Text style={{ fontSize: 28, fontFamily: 'Tektur_400Regular' }}>{emoji}</Text>
       </View>
-      <Text style={{ fontSize: 16, fontWeight: '700', color: '#065F46', textAlign: 'center' }}>
+      <Text style={{ fontSize: 16, fontWeight: '700', color: '#065F46', textAlign: 'center', fontFamily: 'Tektur_700Bold' }}>
         {title}
       </Text>
     </View>
-    <Text style={{ fontSize: 14, color: '#4B5563', textAlign: 'center' }}>{text}</Text>
+    <Text style={{ fontSize: 14, color: '#4B5563', textAlign: 'center', fontFamily: 'Tektur_400Regular' }}>{text}</Text>
   </Card>
 );
 
@@ -316,7 +282,7 @@ const KV = ({ label, value }) => (
       borderBottomColor: '#F3F4F6',
     }}
   >
-    <Text style={{ flex: 1, paddingRight: 8, color: '#374151' }}>{label}</Text>
+    <Text style={{ flex: 1, paddingRight: 8, color: '#374151', fontFamily: 'Tektur_400Regular' }}>{label}</Text>
     <Badge>{value}</Badge>
   </View>
 );
@@ -331,6 +297,7 @@ const Badge = ({ children }) => (
       borderRadius: 999,
       fontSize: 12,
       overflow: 'hidden',
+      fontFamily: 'Tektur_400Regular',
     }}
   >
     {children}
@@ -362,7 +329,7 @@ const InfoBox = ({ children, tone = 'green' }) => {
 };
 
 const Bullet = ({ children }) => (
-  <Text style={{ fontSize: 14, color: '#374151', lineHeight: 20, marginBottom: 6 }}>
+  <Text style={{ fontSize: 14, color: '#374151', lineHeight: 20, marginBottom: 6, fontFamily: 'Tektur_400Regular' }}>
     • {children}
   </Text>
 );

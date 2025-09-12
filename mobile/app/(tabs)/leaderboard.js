@@ -14,6 +14,9 @@ import {
 } from "react-native";
 import { supabase } from "../../lib/supabase";
 
+// ---- Google Font (Tektur) ----
+import { useFonts, Tektur_400Regular, Tektur_700Bold } from "@expo-google-fonts/tektur";
+
 // ---- Tabs & metric options (match web semantics) ----
 const TABS = ["Today", "Week", "Month", "All Time"];
 const METRIC_TOTAL = "Total Points";
@@ -22,16 +25,26 @@ const METRIC_PPG = "Points/Game";
 // Helpers
 const periodStartFromTab = (now, tab) => {
   if (tab === "Today") return new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  if (tab === "Week") { const d = new Date(now); d.setDate(now.getDate() - 7); return d; }
-  if (tab === "Month") { const d = new Date(now); d.setMonth(now.getMonth() - 1); return d; }
+  if (tab === "Week") {
+    const d = new Date(now);
+    d.setDate(now.getDate() - 7);
+    return d;
+  }
+  if (tab === "Month") {
+    const d = new Date(now);
+    d.setMonth(now.getMonth() - 1);
+    return d;
+  }
   return null; // All Time
 };
 const isToday = (isoOrDate) => {
   const d = new Date(isoOrDate);
   const now = new Date();
-  return d.getFullYear() === now.getFullYear() &&
-         d.getMonth() === now.getMonth() &&
-         d.getDate() === now.getDate();
+  return (
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  );
 };
 const formatTime = (seconds) => {
   const s = Number(seconds) || 0;
@@ -47,6 +60,24 @@ const rankDisplay = (index) => {
 };
 
 export default function LeaderboardScreen() {
+  // Load Tektur fonts
+  const [fontsLoaded] = useFonts({
+    Tektur_400Regular,
+    Tektur_700Bold,
+  });
+
+  // Apply Tektur Regular globally to all <Text/> in this component
+  if (Text && !Text.defaultProps?.style) {
+    Text.defaultProps = Text.defaultProps || {};
+    Text.defaultProps.style = [{ fontFamily: "Tektur_400Regular" }];
+  } else if (Text?.defaultProps?.style) {
+    // ensure Tektur takes effect even if default style exists
+    const base = Array.isArray(Text.defaultProps.style)
+      ? Text.defaultProps.style
+      : [Text.defaultProps.style];
+    Text.defaultProps.style = [...base, { fontFamily: "Tektur_400Regular" }];
+  }
+
   // Filters
   const [tab, setTab] = useState("Today");
   const [metric, setMetric] = useState(METRIC_TOTAL); // controlled by "Per Game" switch
@@ -71,21 +102,17 @@ export default function LeaderboardScreen() {
   const [userGames, setUserGames] = useState([]);
 
   // -------- Lightweight cache to speed up tab/metric switching --------
-  // Key: `${tab}|${metric}`
   const cacheRef = useRef(new Map());
 
   // ------- Data loader (same logic as web page) -------
   const load = async (opts = { useCache: true, backgroundRefresh: true }) => {
     const cacheKey = `${tab}|${metric}`;
 
-    // Fast path: use cache immediately if available
     if (opts.useCache && cacheRef.current.has(cacheKey)) {
       const cached = cacheRef.current.get(cacheKey);
       setDailyChampions(cached.dailyChampions || []);
       setRows(cached.rows || []);
       setLoading(false);
-
-      // Do a silent refresh in background to keep things fresh
       if (!opts.backgroundRefresh) return;
     } else {
       setLoading(true);
@@ -121,8 +148,11 @@ export default function LeaderboardScreen() {
       if (startIso) txQuery = txQuery.gte("created_at", startIso);
 
       // Fetch in parallel
-      const [{ data: daily, error: dailyErr }, { data: gamesRows, error: gamesErr }, { data: txRows, error: txErr }] =
-        await Promise.all([dailyPromise, grQuery, txQuery]);
+      const [
+        { data: daily, error: dailyErr },
+        { data: gamesRows, error: gamesErr },
+        { data: txRows, error: txErr },
+      ] = await Promise.all([dailyPromise, grQuery, txQuery]);
 
       if (dailyErr) throw dailyErr;
       if (gamesErr) throw gamesErr;
@@ -142,7 +172,10 @@ export default function LeaderboardScreen() {
           users = usersData || [];
         }
         const map = new Map(users.map((u) => [u.id, u]));
-        champions = daily.map((d) => ({ ...d, user: map.get(d.user_id) || { full_name: "Unknown Player" } }));
+        champions = daily.map((d) => ({
+          ...d,
+          user: map.get(d.user_id) || { full_name: "Unknown Player" },
+        }));
       }
 
       // Aggregate base (non-elimination) stats by user
@@ -185,7 +218,12 @@ export default function LeaderboardScreen() {
       const built = [];
       for (const uid of involvedIds) {
         const u = userMap.get(uid);
-        const base = baseByUser.get(uid) || { gamesCount: 0, basePoints: 0, totalTime: 0, wins: 0 };
+        const base = baseByUser.get(uid) || {
+          gamesCount: 0,
+          basePoints: 0,
+          totalTime: 0,
+          wins: 0,
+        };
         if (base.gamesCount === 0) continue;
 
         const txSum = txByUser.get(uid) || 0;
@@ -199,8 +237,12 @@ export default function LeaderboardScreen() {
           points: totalPoints,
           gamesCount: base.gamesCount,
           avgTime: base.gamesCount ? Math.round(base.totalTime / base.gamesCount) : 0,
-          successRate: base.gamesCount ? Math.round((base.wins / base.gamesCount) * 100) : 0,
-          avgPoints: base.gamesCount ? Math.round(totalPoints / base.gamesCount) : totalPoints,
+          successRate: base.gamesCount
+            ? Math.round((base.wins / base.gamesCount) * 100)
+            : 0,
+          avgPoints: base.gamesCount
+            ? Math.round(totalPoints / base.gamesCount)
+            : totalPoints,
         });
       }
 
@@ -287,8 +329,8 @@ export default function LeaderboardScreen() {
     }
   };
 
-  // ----- RENDER -----
-  if (loading) {
+  // Block until fonts are ready so typography is consistent
+  if (!fontsLoaded || loading) {
     return (
       <View style={styles.centered}>
         <ActivityIndicator />
@@ -305,7 +347,9 @@ export default function LeaderboardScreen() {
           <View style={styles.dailyEmpty}>
             <Text style={styles.dailyEmptyStar}>⭐</Text>
             <Text style={styles.dailyEmptyTitle}>No champions yet today!</Text>
-            <Text style={styles.dailyEmptySub}>Be the first to conquer today's daily challenge.</Text>
+            <Text style={styles.dailyEmptySub}>
+              Be the first to conquer today's daily challenge.
+            </Text>
           </View>
         ) : (
           <FlatList
@@ -428,7 +472,7 @@ export default function LeaderboardScreen() {
         )}
         ListEmptyComponent={
           <View style={styles.emptyBox}>
-            <Text style={{ color: "#6b7280" }}>
+            <Text style={{ color: "#6b7280", fontFamily: "Tektur_400Regular" }}>
               No leaderboard data for the selected period.
             </Text>
           </View>
@@ -436,7 +480,12 @@ export default function LeaderboardScreen() {
       />
 
       {/* User Modal */}
-      <Modal visible={!!openUser} transparent animationType="fade" onRequestClose={() => setOpenUser(null)}>
+      <Modal
+        visible={!!openUser}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setOpenUser(null)}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
@@ -454,13 +503,11 @@ export default function LeaderboardScreen() {
                   <Text style={styles.modalName} numberOfLines={1}>
                     {openUser?.name}
                   </Text>
-                  <Text style={styles.modalSince}>
-                    Joined {openUser?.memberSince || "—"}
-                  </Text>
+                  <Text style={styles.modalSince}>Joined {openUser?.memberSince || "—"}</Text>
                 </View>
               </View>
               <Pressable onPress={() => setOpenUser(null)} style={styles.closeBtn}>
-                <Text style={{ fontWeight: "700" }}>✕</Text>
+                <Text style={{ fontFamily: "Tektur_700Bold" }}>✕</Text>
               </Pressable>
             </View>
 
@@ -494,7 +541,9 @@ export default function LeaderboardScreen() {
                 </View>
               ) : userGames.length === 0 ? (
                 <View style={styles.emptyBox}>
-                  <Text style={{ color: "#6b7280" }}>No recent games.</Text>
+                  <Text style={{ color: "#6b7280", fontFamily: "Tektur_400Regular" }}>
+                    No recent games.
+                  </Text>
                 </View>
               ) : (
                 <ScrollView>
@@ -503,24 +552,28 @@ export default function LeaderboardScreen() {
                       g.is_daily_challenge && isToday(g.created_at)
                         ? "Daily Challenge Player"
                         : g.player_name || "Unknown Player";
+
                     const titleStyle = [
                       styles.gameTitle,
                       g.is_daily_challenge
-                        ? { color: "#a16207", fontWeight: "700" }
+                        ? { color: "#a16207" }
                         : g.is_elimination_game
-                        ? { color: "#7c3aed", fontWeight: "700" }
+                        ? { color: "#7c3aed" } // purple for elimination
                         : null,
                     ];
+
                     return (
                       <View key={g.id} style={styles.gameRow}>
                         <View style={{ flex: 1, minWidth: 0 }}>
                           <Text style={titleStyle} numberOfLines={1} ellipsizeMode="tail">
                             {maskedName}
                           </Text>
-                          <Text style={styles.gameSub}>
+                          {/* LEFT-ALIGNED played time */}
+                          <Text style={styles.gameSubLeft}>
                             {new Date(g.created_at).toLocaleString()}
                           </Text>
                         </View>
+
                         <View style={{ alignItems: "flex-end" }}>
                           <Text
                             style={[
@@ -530,10 +583,20 @@ export default function LeaderboardScreen() {
                           >
                             {g.won ? `+${g.points_earned}` : "0"} pts
                           </Text>
+
+                          {/* Mixed subline with purple "Elimination" when applicable */}
                           <Text style={styles.gameSub}>
-                            {g.guesses_attempted} {g.guesses_attempted === 1 ? "guess" : "guesses"}
+                            {g.guesses_attempted}{" "}
+                            {g.guesses_attempted === 1 ? "guess" : "guesses"}
                             {g.is_daily_challenge ? " • Daily" : ""}
-                            {g.is_elimination_game ? " • Elimination" : ""}
+                            {g.is_elimination_game ? (
+                              <>
+                                {" "}
+                                • <Text style={{ color: "#7c3aed", fontFamily: "Tektur_400Regular" }}>Elimination</Text>
+                              </>
+                            ) : (
+                              ""
+                            )}
                           </Text>
                         </View>
                       </View>
@@ -566,13 +629,13 @@ const styles = StyleSheet.create({
     borderBottomColor: "#fef3c7",
     textAlign: "center",
     paddingVertical: 10,
-    fontWeight: "700",
     color: "#92400e",
+    fontFamily: "Tektur_700Bold",
   },
   dailyEmpty: { paddingVertical: 18, alignItems: "center", justifyContent: "center" },
-  dailyEmptyStar: { fontSize: 28, marginBottom: 4 },
-  dailyEmptyTitle: { fontSize: 16, fontWeight: "600" },
-  dailyEmptySub: { color: "#6b7280", marginTop: 2 },
+  dailyEmptyStar: { fontSize: 28, marginBottom: 4, fontFamily: "Tektur_700Bold" },
+  dailyEmptyTitle: { fontSize: 16, fontFamily: "Tektur_700Bold" },
+  dailyEmptySub: { color: "#6b7280", marginTop: 2, fontFamily: "Tektur_400Regular" },
   dailyItem: {
     flexDirection: "row",
     alignItems: "center",
@@ -591,9 +654,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginRight: 8,
   },
-  dailyRankText: { fontWeight: "700", color: "#92400e" },
-  dailyName: { fontWeight: "600" },
+  dailyRankText: { color: "#92400e", fontFamily: "Tektur_700Bold" },
+  dailyName: { fontFamily: "Tektur_700Bold" },
   dailyPoints: { color: "#a16207", marginTop: 2, fontSize: 12 },
+
   avatarSm: { height: 28, width: 28, borderRadius: 14, backgroundColor: "#f0fdf4", marginRight: 8 },
   avatarSmFallback: {
     height: 28,
@@ -604,7 +668,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginRight: 8,
   },
-  avatarSmFallbackText: { color: "#065f46", fontWeight: "700" },
+  avatarSmFallbackText: { color: "#065f46", fontFamily: "Tektur_700Bold" },
 
   // Tabs row — centered pills
   filtersRow: {
@@ -625,8 +689,8 @@ const styles = StyleSheet.create({
   },
   tabPillActive: { backgroundColor: "#064e3b" },
   tabPillInactive: { backgroundColor: "#e5e7eb" },
-  tabTextActive: { color: "white", fontWeight: "600" },
-  tabTextInactive: { color: "#374151", fontWeight: "500" },
+  tabTextActive: { color: "white", fontFamily: "Tektur_700Bold" },
+  tabTextInactive: { color: "#374151", fontFamily: "Tektur_400Regular" },
 
   // Metric switch row
   switchRow: {
@@ -643,7 +707,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-  switchLabel: { fontWeight: "700", color: "#374151" },
+  switchLabel: { color: "#374151", fontFamily: "Tektur_700Bold" },
 
   // Section title
   sectionTitle: {
@@ -651,8 +715,8 @@ const styles = StyleSheet.create({
     marginHorizontal: 12,
     marginBottom: 6,
     color: "#065f46",
-    fontWeight: "700",
     fontSize: 16,
+    fontFamily: "Tektur_700Bold",
   },
 
   // Leaderboard rows
@@ -668,7 +732,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   leftCol: { width: 80, flexDirection: "row", alignItems: "center", gap: 8 },
-  rankText: { fontWeight: "700", color: "#6b7280", width: 28, textAlign: "center" },
+  rankText: { color: "#6b7280", width: 28, textAlign: "center", fontFamily: "Tektur_700Bold" },
   avatar: { height: 36, width: 36, borderRadius: 18, backgroundColor: "#f0fdf4" },
   avatarFallback: {
     height: 36,
@@ -678,14 +742,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  avatarFallbackText: { color: "#065f46", fontWeight: "700" },
+  avatarFallbackText: { color: "#065f46", fontFamily: "Tektur_700Bold" },
 
   midCol: { flex: 1, minWidth: 0, paddingRight: 8 },
-  playerName: { fontWeight: "600", color: "#111827" },
-  memberSince: { color: "#6b7280", fontSize: 12, marginTop: 1 },
+  playerName: { color: "#111827", fontFamily: "Tektur_700Bold" },
+  memberSince: { color: "#6b7280", fontSize: 12 },
 
   rightCol: { width: 120, alignItems: "flex-end" },
-  pointsValue: { color: "#16a34a", fontWeight: "700" },
+  pointsValue: { color: "#16a34a", fontFamily: "Tektur_700Bold" },
   pointsLabel: { color: "#6b7280", fontSize: 12, marginTop: 1 },
   compactStats: { color: "#6b7280", fontSize: 12, marginTop: 4 },
 
@@ -725,7 +789,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-  modalName: { fontWeight: "700" },
+  modalName: { fontFamily: "Tektur_700Bold" },
   modalSince: { color: "#6b7280", fontSize: 12 },
   closeBtn: { padding: 6, borderRadius: 16 },
 
@@ -746,7 +810,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   statSmallLabel: { color: "#6b7280", fontSize: 12 },
-  statBigValue: { fontWeight: "700", color: "#065f46", marginTop: 2 },
+  statBigValue: { color: "#065f46", marginTop: 2, fontFamily: "Tektur_700Bold" },
 
   gameRow: {
     borderWidth: 1,
@@ -758,7 +822,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-  gameTitle: { fontWeight: "600" },
+  gameTitle: { fontFamily: "Tektur_700Bold" },
+  // RIGHT-aligned meta used on the right column lines
   gameSub: { color: "#6b7280", fontSize: 12, marginTop: 2, textAlign: "right" },
-  gamePoints: { fontWeight: "700", textAlign: "right" },
+  // LEFT-aligned time line (requested change)
+  gameSubLeft: { color: "#6b7280", fontSize: 12, marginTop: 2, textAlign: "left" },
+  gamePoints: { fontFamily: "Tektur_700Bold", textAlign: "right" },
 });

@@ -38,7 +38,14 @@ function Chip({ children, onPress, selected = false, variant = "solid", style })
         style,
       ]}
     >
-      <Text style={{ color: selected ? "#fff" : "#111827", fontSize: 12, fontWeight: "600" }}>
+      <Text
+        style={{
+          color: selected ? "#fff" : "#111827",
+          fontSize: 12,
+          fontWeight: "600",
+          fontFamily: "Tektur_400Regular",
+        }}
+      >
         {children}
       </Text>
     </Pressable>
@@ -324,6 +331,36 @@ export default function DefaultFiltersScreen() {
     );
   };
 
+  // ---------- active-pill helpers ----------
+  const arraysEqualAsSets = (a, b) =>
+    a.length === b.length && a.every((x) => b.includes(x));
+
+  const isTop10Selected =
+    defaultCompetitionIds.length > 0 &&
+    top10Ids.length > 0 &&
+    arraysEqualAsSets(defaultCompetitionIds, top10Ids);
+
+  const isAllCompsSelected =
+    allCompetitions.length > 0 &&
+    defaultCompetitionIds.length === allCompetitions.length;
+
+  const isClearComps = defaultCompetitionIds.length === 0;
+
+  const isLast3Seasons =
+    allSeasons.length >= 3 &&
+    defaultSeasons.length === 3 &&
+    arraysEqualAsSets(defaultSeasons, allSeasons.slice(0, 3));
+
+  const isLast5Seasons =
+    allSeasons.length >= 5 &&
+    defaultSeasons.length === 5 &&
+    arraysEqualAsSets(defaultSeasons, allSeasons.slice(0, 5));
+
+  const isAllSeasons =
+    allSeasons.length > 0 && defaultSeasons.length === allSeasons.length;
+
+  const isClearSeasons = defaultSeasons.length === 0;
+
   const handleSave = async () => {
     if (!user) return;
     try {
@@ -361,9 +398,13 @@ export default function DefaultFiltersScreen() {
         <Text style={styles.cardTitle}>Competitions</Text>
 
         <View style={styles.rowWrap}>
-          <Chip onPress={selectTop10}>Top 10</Chip>
-          <Chip onPress={selectAllComps}>Select All</Chip>
-          <Chip onPress={clearComps} variant="outline">
+          <Chip onPress={selectTop10} selected={isTop10Selected}>
+            Top 10
+          </Chip>
+          <Chip onPress={selectAllComps} selected={isAllCompsSelected}>
+            Select All
+          </Chip>
+          <Chip onPress={clearComps} variant="outline" selected={isClearComps}>
             Clear All
           </Chip>
         </View>
@@ -422,11 +463,30 @@ export default function DefaultFiltersScreen() {
         <Text style={styles.cardTitle}>Seasons</Text>
 
         <View style={styles.rowWrap}>
-          <Chip onPress={() => setDefaultSeasons(allSeasons.slice(0, 3))}>Last 3</Chip>
-          <Chip onPress={() => setDefaultSeasons(allSeasons.slice(0, 5))}>Last 5</Chip>
-          <Chip onPress={() => setDefaultSeasons(allSeasons)}>Select All</Chip>
-          <Chip onPress={() => setDefaultSeasons([])} variant="outline">
-            Clear
+          <Chip
+            onPress={() => setDefaultSeasons(allSeasons.slice(0, 3))}
+            selected={isLast3Seasons}
+          >
+            Last 3
+          </Chip>
+          <Chip
+            onPress={() => setDefaultSeasons(allSeasons.slice(0, 5))}
+            selected={isLast5Seasons}
+          >
+            Last 5
+          </Chip>
+          <Chip
+            onPress={() => setDefaultSeasons(allSeasons)}
+            selected={isAllSeasons}
+          >
+            Select All
+          </Chip>
+          <Chip
+            onPress={() => setDefaultSeasons([])}
+            variant="outline"
+            selected={isClearSeasons}
+          >
+            Clear All
           </Chip>
         </View>
 
@@ -502,7 +562,7 @@ export default function DefaultFiltersScreen() {
                 selected={Number(defaultMinMarket) === v}
                 onPress={() => setDefaultMinMarket(v)}
               >
-                {v === 0 ? "Clear" : compactMoney(v)}
+                {compactMoney(v)}
               </Chip>
             )
           )}
@@ -574,8 +634,8 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginBottom: 12,
   },
-  poolLabel: { fontSize: 14, color: "#92400e", fontWeight: "600" },
-  poolValue: { fontSize: 14, color: "#92400e", fontWeight: "800" },
+  poolLabel: { fontSize: 14, color: "#92400e", fontWeight: "600", fontFamily: "Tektur_700Bold" },
+  poolValue: { fontSize: 14, color: "#92400e", fontWeight: "800", fontFamily: "Tektur_700Bold" },
 
   card: {
     backgroundColor: "#fff",
@@ -585,9 +645,15 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "#e5e7eb",
   },
-  cardTitle: { fontSize: 16, fontWeight: "700", color: "#0b3d24", marginBottom: 8 },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#0b3d24",
+    marginBottom: 8,
+    fontFamily: "Tektur_700Bold",
+  },
   rowWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  muted: { color: "#6b7280", marginTop: 8 },
+  muted: { color: "#6b7280", marginTop: 8, fontFamily: "Tektur_400Regular" },
 
   input: {
     borderWidth: 1,
@@ -598,6 +664,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#111827",
     marginBottom: 8,
+    fontFamily: "Tektur_400Regular",
   },
 
   chip: {
@@ -619,7 +686,12 @@ const styles = StyleSheet.create({
     gap: 8,
     backgroundColor: "#fff",
   },
-  selectHeaderText: { flex: 1, color: "#111827", fontWeight: "600" },
+  selectHeaderText: {
+    flex: 1,
+    color: "#111827",
+    fontWeight: "600",
+    fontFamily: "Tektur_700Bold",
+  },
 
   dropdown: {
     marginTop: 8,
@@ -641,7 +713,13 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     backgroundColor: "#fafafa",
   },
-  searchInput: { flex: 1, fontSize: 14, color: "#111827", paddingVertical: 4 },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: "#111827",
+    paddingVertical: 4,
+    fontFamily: "Tektur_400Regular",
+  },
 
   compRow: {
     flexDirection: "row",
@@ -653,8 +731,8 @@ const styles = StyleSheet.create({
   },
   flag: { width: 18, height: 12, borderRadius: 2, backgroundColor: "#eee" },
   logo: { width: 18, height: 18, borderRadius: 3, backgroundColor: "#eee" },
-  compName: { fontWeight: "700", color: "#0b3d24" },
-  compSub: { fontSize: 12, color: "#6b7280" },
+  compName: { fontWeight: "700", color: "#0b3d24", fontFamily: "Tektur_700Bold" },
+  compSub: { fontSize: 12, color: "#6b7280", fontFamily: "Tektur_400Regular" },
 
   optionRow: {
     flexDirection: "row",
@@ -673,5 +751,5 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: "center",
   },
-  saveText: { color: "#fff", fontWeight: "800" },
+  saveText: { color: "#fff", fontWeight: "800", fontFamily: "Tektur_700Bold" },
 });
