@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -9,16 +9,15 @@ import {
   StyleSheet,
   Alert,
   Platform,
+  Switch,
+  ScrollView,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useFonts, Tektur_400Regular, Tektur_700Bold } from "@expo-google-fonts/tektur";
 import { supabase, uploadAvatar } from "../../lib/supabase";
 
 export default function ProfileInfoScreen() {
-  const [fontsLoaded] = useFonts({
-    Tektur_400Regular,
-    Tektur_700Bold,
-  });
+  const [fontsLoaded] = useFonts({ Tektur_400Regular, Tektur_700Bold });
 
   const [user, setUser] = useState(null);
   const [fullName, setFullName] = useState("");
@@ -33,6 +32,23 @@ export default function ProfileInfoScreen() {
     success_rate: 0,
   });
 
+  // --- Notification preferences ---
+  const [notifs, setNotifs] = useState({
+    notifications_all: true,
+    notify_daily_challenge: true,
+    notify_daily_games: true,
+    notify_private_elims: true,
+    notify_public_elims: true,
+  });
+  const allIndividualsOn = useMemo(
+    () =>
+      notifs.notify_daily_challenge &&
+      notifs.notify_daily_games &&
+      notifs.notify_private_elims &&
+      notifs.notify_public_elims,
+    [notifs]
+  );
+
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -43,7 +59,18 @@ export default function ProfileInfoScreen() {
 
         const { data: row } = await supabase
           .from("users")
-          .select("full_name, profile_photo_url, email")
+          .select(
+            [
+              "full_name",
+              "profile_photo_url",
+              "email",
+              "notifications_all",
+              "notify_daily_challenge",
+              "notify_daily_games",
+              "notify_private_elims",
+              "notify_public_elims",
+            ].join(",")
+          )
           .eq("id", u.id)
           .maybeSingle();
 
@@ -56,6 +83,15 @@ export default function ProfileInfoScreen() {
             null
         );
 
+        // Initialize notifications (fallback to true if undefined)
+        setNotifs({
+          notifications_all: row?.notifications_all ?? true,
+          notify_daily_challenge: row?.notify_daily_challenge ?? true,
+          notify_daily_games: row?.notify_daily_games ?? true,
+          notify_private_elims: row?.notify_private_elims ?? true,
+          notify_public_elims: row?.notify_public_elims ?? true,
+        });
+
         const { data: allGames } = await supabase
           .from("games_records")
           .select("won, points_earned, time_taken_seconds")
@@ -66,7 +102,11 @@ export default function ProfileInfoScreen() {
         const basePoints = (allGames || []).reduce((s, g) => s + (g.points_earned || 0), 0);
         const totalTime = (allGames || []).reduce((s, g) => s + (g.time_taken_seconds || 0), 0);
 
-        const { data: txs } = await supabase.from("points_transactions").select("amount").eq("user_id", u.id);
+        const { data: txs } = await supabase
+          .from("points_transactions")
+          .select("amount")
+          .eq("user_id", u.id);
+
         const txPoints = (txs || []).reduce((s, t) => s + Number(t.amount || 0), 0);
 
         setStats({
@@ -75,6 +115,8 @@ export default function ProfileInfoScreen() {
           avg_time: totalGames > 0 ? Math.round(totalTime / totalGames) : 0,
           success_rate: totalGames > 0 ? Math.round((wonGames / totalGames) * 100) : 0,
         });
+      } catch (e) {
+        console.error(e);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -84,46 +126,55 @@ export default function ProfileInfoScreen() {
     };
   }, []);
 
+  // --- Avatar picking, with hard guards so it never crashes ---
   const pickNewAvatar = async () => {
-    // Web guard: expo-image-picker only supports web via a limited flow; show a clear message.
     if (Platform.OS === "web") {
-      Alert.alert("Unsupported on Web", "Picking an avatar is currently supported on iOS/Android builds.");
+      Alert.alert(
+        "Unsupported on Web",
+        "Picking an avatar is currently supported on iOS/Android builds."
+      );
       return;
     }
 
     let ImagePicker;
     try {
+      // Dynamic import so projects without the native module don’t crash on startup.
       ImagePicker = await import("expo-image-picker");
     } catch {
       Alert.alert(
         "Image Picker Unavailable",
-        "Install the native module with:\n\nnpx expo install expo-image-picker\n\nThen rebuild your dev/client app."
+        "Install the native module:\n\nnpx expo install expo-image-picker\n\nThen rebuild your dev/client app."
       );
       return;
     }
 
-    // If the native side isn't linked in this build, calling any method will throw with 'ExponentImagePicker'
+    // Verify native module exists before calling any method
     try {
-      const getPerm = ImagePicker.requestMediaLibraryPermissionsAsync ?? ImagePicker.getMediaLibraryPermissionsAsync;
-      if (!getPerm) {
-        throw new Error("Native module missing");
-      }
-    } catch (e) {
+      const hasMethod =
+        ImagePicker?.requestMediaLibraryPermissionsAsync ||
+        ImagePicker?.getMediaLibraryPermissionsAsync;
+      if (!hasMethod) throw new Error("Native module missing");
+    } catch {
       Alert.alert(
         "Image Picker Not Linked",
-        "This build is missing the native Image Picker module.\n\nRun:\n  npx expo install expo-image-picker\nand rebuild your EAS/dev client."
+        "This build is missing the Image Picker native module.\n\nRun:\n  npx expo install expo-image-picker\nand rebuild with EAS."
       );
       return;
     }
 
     // Ask permission
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== "granted") {
-      Alert.alert("Permission needed", "Please allow photo library access to change your avatar.");
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission needed", "Allow photo library access to change your avatar.");
+        return;
+      }
+    } catch (e) {
+      Alert.alert("Permission Error", "Could not request photo permissions.");
       return;
     }
 
-    // Launch picker (wrap to catch the 'ExponentImagePicker' native error if build is stale)
+    // Launch picker
     let result;
     try {
       result = await ImagePicker.launchImageLibraryAsync({
@@ -132,8 +183,7 @@ export default function ProfileInfoScreen() {
         quality: 0.9,
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
       });
-    } catch (e) {
-      // Most common failure: native module missing in the current build.
+    } catch {
       Alert.alert(
         "Picker Failed",
         "The Image Picker native module isn't available in this build.\nRe-install & rebuild:\n  npx expo install expo-image-picker\n  eas build --profile development"
@@ -148,7 +198,9 @@ export default function ProfileInfoScreen() {
     try {
       setSaving(true);
       const publicUrl = await uploadAvatar(asset);
-      await supabase.auth.updateUser({ data: { avatar_url: publicUrl, profile_photo_url: publicUrl } });
+      await supabase.auth.updateUser({
+        data: { avatar_url: publicUrl, profile_photo_url: publicUrl },
+      });
       await supabase.from("users").update({ profile_photo_url: publicUrl }).eq("id", user.id);
       setAvatar(publicUrl);
     } catch (e) {
@@ -174,6 +226,53 @@ export default function ProfileInfoScreen() {
     }
   };
 
+  // --- Save notifications helper ---
+  const persistNotifs = useCallback(
+    async (next) => {
+      if (!user?.id) return;
+      try {
+        await supabase
+          .from("users")
+          .update({
+            notifications_all: next.notifications_all,
+            notify_daily_challenge: next.notify_daily_challenge,
+            notify_daily_games: next.notify_daily_games,
+            notify_private_elims: next.notify_private_elims,
+            notify_public_elims: next.notify_public_elims,
+          })
+          .eq("id", user.id);
+      } catch (e) {
+        Alert.alert("Save failed", "Could not update notification preferences.");
+      }
+    },
+    [user?.id]
+  );
+
+  // Toggle “All” -> toggles everyone, keeps state and persists
+  const onToggleAll = (value) => {
+    const next = {
+      notifications_all: value,
+      notify_daily_challenge: value,
+      notify_daily_games: value,
+      notify_private_elims: value,
+      notify_public_elims: value,
+    };
+    setNotifs(next);
+    persistNotifs(next);
+  };
+
+  // Toggle any individual -> recompute “All”
+  const onToggleOne = (key, value) => {
+    const next = { ...notifs, [key]: value };
+    next.notifications_all =
+      next.notify_daily_challenge &&
+      next.notify_daily_games &&
+      next.notify_private_elims &&
+      next.notify_public_elims;
+    setNotifs(next);
+    persistNotifs(next);
+  };
+
   if (!fontsLoaded || loading) {
     return (
       <View style={styles.screen}>
@@ -183,7 +282,7 @@ export default function ProfileInfoScreen() {
   }
 
   return (
-    <View style={styles.screen}>
+    <ScrollView style={{ flex: 1, backgroundColor: "#f7faf7" }} contentContainerStyle={{ padding: 12 }}>
       {/* User details */}
       <View style={styles.card}>
         <Pressable onPress={pickNewAvatar} style={{ alignSelf: "center" }}>
@@ -191,14 +290,25 @@ export default function ProfileInfoScreen() {
             <Image source={{ uri: avatar }} style={styles.bigAvatar} />
           ) : (
             <View style={[styles.bigAvatar, styles.avatarFallback]}>
-              <Text style={styles.avatarLetter}>{(user?.email || "U").slice(0, 1).toUpperCase()}</Text>
+              <Text style={styles.avatarLetter}>
+                {(user?.email || "U").slice(0, 1).toUpperCase()}
+              </Text>
             </View>
           )}
         </Pressable>
 
         <Text style={styles.label}>User Name</Text>
-        <TextInput value={fullName} onChangeText={setFullName} placeholder="Your name" style={styles.input} />
-        <Pressable onPress={saveName} disabled={saving} style={[styles.button, { backgroundColor: "#166534" }]}>
+        <TextInput
+          value={fullName}
+          onChangeText={setFullName}
+          placeholder="Your name"
+          style={styles.input}
+        />
+        <Pressable
+          onPress={saveName}
+          disabled={saving}
+          style={[styles.button, { backgroundColor: "#166534" }]}
+        >
           <Text style={styles.buttonText}>{saving ? "Saving..." : "Save Name"}</Text>
         </Pressable>
 
@@ -206,7 +316,7 @@ export default function ProfileInfoScreen() {
         <Text style={styles.value}>{user?.email}</Text>
       </View>
 
-      {/* Stats with colored icons */}
+      {/* Stats */}
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Your Stats</Text>
 
@@ -214,12 +324,12 @@ export default function ProfileInfoScreen() {
           <Stat
             label="Total Points"
             value={stats.total_points}
-            icon={<Ionicons name="trophy" size={18} color="#f59e0b" />} // amber
+            icon={<Ionicons name="trophy" size={18} color="#f59e0b" />}
           />
           <Stat
             label="Games Played"
             value={stats.games_played}
-            icon={<Ionicons name="game-controller" size={18} color="#3b82f6" />} // blue
+            icon={<Ionicons name="game-controller" size={18} color="#3b82f6" />}
           />
         </View>
 
@@ -227,16 +337,56 @@ export default function ProfileInfoScreen() {
           <Stat
             label="Average Time"
             value={`${stats.avg_time}s`}
-            icon={<Ionicons name="timer-outline" size={18} color="#10b981" />} // emerald
+            icon={<Ionicons name="timer-outline" size={18} color="#10b981" />}
           />
           <Stat
             label="Success Rate"
             value={`${stats.success_rate}%`}
-            icon={<Ionicons name="checkmark-circle" size={18} color="#22c55e" />} // green
+            icon={<Ionicons name="checkmark-circle" size={18} color="#22c55e" />}
           />
         </View>
       </View>
-    </View>
+
+      {/* Notifications */}
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>Notifications</Text>
+
+        <NotifRow
+          title="All notifications"
+          value={notifs.notifications_all}
+          onValueChange={onToggleAll}
+        />
+
+        <View style={styles.divider} />
+
+        <NotifRow
+          title="Daily challenge reminders"
+          value={notifs.notify_daily_challenge}
+          onValueChange={(v) => onToggleOne("notify_daily_challenge", v)}
+        />
+        <NotifRow
+          title="Daily games reminders"
+          value={notifs.notify_daily_games}
+          onValueChange={(v) => onToggleOne("notify_daily_games", v)}
+        />
+        <NotifRow
+          title="Private elimination challenges"
+          value={notifs.notify_private_elims}
+          onValueChange={(v) => onToggleOne("notify_private_elims", v)}
+        />
+        <NotifRow
+          title="Public elimination challenges"
+          value={notifs.notify_public_elims}
+          onValueChange={(v) => onToggleOne("notify_public_elims", v)}
+        />
+
+        {!allIndividualsOn && notifs.notifications_all ? (
+          <Text style={styles.hintText}>
+            Tip: “All notifications” turns off automatically if you disable a specific type.
+          </Text>
+        ) : null}
+      </View>
+    </ScrollView>
   );
 }
 
@@ -246,6 +396,15 @@ function Stat({ label, value, icon }) {
       <View style={{ marginBottom: 6 }}>{icon}</View>
       <Text style={styles.statValue}>{value}</Text>
       <Text style={styles.statLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function NotifRow({ title, value, onValueChange }) {
+  return (
+    <View style={styles.notifRow}>
+      <Text style={styles.notifLabel}>{title}</Text>
+      <Switch value={value} onValueChange={onValueChange} />
     </View>
   );
 }
@@ -275,7 +434,7 @@ const styles = StyleSheet.create({
   },
   avatarLetter: { fontSize: 22, fontFamily: "Tektur_700Bold", color: "#0b3d24" },
 
-  // Typography (Tektur applied everywhere)
+  // Typography
   label: { fontSize: 12, color: "#6b7280", marginBottom: 4, fontFamily: "Tektur_400Regular" },
   value: { fontSize: 14, fontFamily: "Tektur_700Bold", color: "#111827" },
   input: {
@@ -296,6 +455,7 @@ const styles = StyleSheet.create({
   },
   buttonText: { color: "#fff", fontFamily: "Tektur_700Bold", fontSize: 14 },
   sectionTitle: { fontSize: 16, fontFamily: "Tektur_700Bold", color: "#0b3d24" },
+
   statsRow: { flexDirection: "row", gap: 8, marginTop: 8 },
   statBox: {
     flex: 1,
@@ -307,4 +467,24 @@ const styles = StyleSheet.create({
   },
   statValue: { fontSize: 18, fontFamily: "Tektur_700Bold", color: "#111827" },
   statLabel: { fontSize: 12, color: "#6b7280", fontFamily: "Tektur_400Regular" },
+
+  // Notifications
+  notifRow: {
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  notifLabel: { fontSize: 14, fontFamily: "Tektur_400Regular", color: "#111827" },
+  divider: {
+    height: 1,
+    backgroundColor: "#e5e7eb",
+    marginVertical: 8,
+  },
+  hintText: {
+    marginTop: 8,
+    fontSize: 12,
+    color: "#6b7280",
+    fontFamily: "Tektur_400Regular",
+  },
 });

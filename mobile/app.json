@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "FootyTrail Mobile",
+    "name": "FootyTrail",
     "slug": "footytrail-mobile",
     "scheme": "footytrail",
     "orientation": "portrait",
@@ -14,7 +14,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "co.footytrail.app",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSPhotoLibraryUsageDescription": "We use your photo to show your avatar."
       }
     },
     "android": {
@@ -34,7 +35,8 @@
       "EXPO_PUBLIC_API_BASE": "https://footytrail.up.railway.app/api"
     },
     "plugins": [
-      "expo-font"
+      "expo-font",
+      "expo-router"
     ]
   }
 }

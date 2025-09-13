@@ -231,28 +231,24 @@ export default function PostgameMobile() {
       const { data: authData } = await supabase.auth.getUser();
       const userId = authData?.user?.id || null;
 
-      const competitions = Array.isArray(filters?.competitions) ? filters.competitions : [];
-      const seasons = Array.isArray(filters?.seasons) ? filters.seasons : [];
-      const minMarketValue = Number(filters?.minMarketValue ?? 0) || 0;
-      const minAppearances = Number(filters?.minAppearances ?? 0) || 0;
+      // ✅ Use the EXACT same filters object that was used originally
+      const originalFilters = (filters && typeof filters === 'object') ? filters : {};
 
-      // pool shrinks by 1 (≈5 points per player), mirroring web logic
-      const nextPotential = prevPotentialPoints - 5;
+      // Keep the same potential-points decrement behavior (if provided)
+      const nextPotential = Number.isFinite(prevPotentialPoints) ? (prevPotentialPoints - 5) : undefined;
 
-      const nextCard = await getRandomPlayer(
-        { competitions, seasons, minMarketValue, minAppearances },
-        userId
-      ); // API call shape mirrors mobile lib/api.js
+      // Call getRandomPlayer with the original filters as-is
+      const nextCard = await getRandomPlayer(originalFilters, userId);
 
-      // Navigate to live-game with a single payload param (clean handoff)
+      // Navigate to live-game and pass the same filters forward
       router.replace({
         pathname: '/live-game',
         params: {
           payload: JSON.stringify({
             ...nextCard,
             isDaily: false,
-            filters: { competitions, seasons, minMarketValue, minAppearances },
-            potentialPoints: nextPotential,
+            filters: originalFilters,
+            ...(nextPotential !== undefined ? { potentialPoints: nextPotential } : {}),
             fromPostGame: true,
           }),
         },

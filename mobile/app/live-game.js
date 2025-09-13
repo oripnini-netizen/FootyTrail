@@ -36,10 +36,15 @@ import Logo from '../assets/images/footytrail_logo.png';
  * - Ensure suggestions dropdown closes after game finishes and stays closed until navigation.
  * - Apply Tektur Google font across the page (400/700).
  * - Keep confetti/emoji rain visible during the finishing "loading" state until navigating.
+ * - Swipeable, paging-enabled carousels for Transfer History and Hints (no extra libs).
+ * - Add page indicator dots below both carousels (capped count, current emphasized).
+ * - Ensure postgame receives full player payload for all game types.
  */
 
 const INITIAL_TIME = 120; // 2 minutes
 const AI_FACT_TIMEOUT_MS = 9000;
+const MAX_DOTS = 9; // cap dots so they fit nicely
+
 function fetchWithTimeout(url, options = {}, ms = AI_FACT_TIMEOUT_MS) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), ms);
@@ -726,6 +731,9 @@ export default function LiveGameMobile() {
   // UI
   // -------------------------
   const screenW = Dimensions.get('window').width;
+  const pageGap = 12;
+  const innerPad = 16;
+  const pageWidth = screenW - innerPad * 2; // fits inside white cards
 
   return (
     <Animated.View style={{ flex: 1, backgroundColor: '#f6f7fb', transform: [{ translateX: shakeX }] }}>
@@ -868,57 +876,25 @@ export default function LiveGameMobile() {
             {loadingTransfers ? (
               <Text style={styles.loadingTxt}>Loading transfers…</Text>
             ) : (
-              <TransfersList transfers={transferHistory} />
+              <TransfersPager
+                transfers={transferHistory}
+                pageWidth={pageWidth}
+                pageGap={pageGap}
+                maxDots={MAX_DOTS}
+              />
             )}
           </View>
 
           {/* Hints */}
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>Hints</Text>
-
-            <HintButton
-              label="Player's Age"
-              multiplier="×0.90"
-              disabled={usedHints.age || !gameData?.age}
-              onPress={() => reveal('age')}
-              valueShown={usedHints.age ? String(gameData?.age) : null}
-            />
-            <HintButton
-              label="Nationality"
-              multiplier="×0.90"
-              disabled={usedHints.nationality || !gameData?.nationality}
-              onPress={() => reveal('nationality')}
-              valueShown={usedHints.nationality ? String(gameData?.nationality) : null}
-            />
-            <HintButton
-              label="Player's Position"
-              multiplier="×0.80"
-              disabled={usedHints.position || !gameData?.position}
-              onPress={() => reveal('position')}
-              valueShown={usedHints.position ? String(gameData?.position) : null}
-            />
-            <HintButton
-              label="Player's Image"
-              multiplier="×0.50"
-              disabled={usedHints.partialImage || !gameData?.photo}
-              onPress={() => reveal('partialImage')}
-              valueShown={
-                usedHints.partialImage ? (
-                  <View style={styles.hintCropBox}>
-                    <Image
-                      source={{ uri: gameData?.photo }}
-                      style={styles.hintCroppedImage}
-                    />
-                  </View>
-                ) : null
-              }
-            />
-            <HintButton
-              label="Player's First Letter"
-              multiplier="×0.25"
-              disabled={usedHints.firstLetter || !gameData?.name}
-              onPress={() => reveal('firstLetter')}
-              valueShown={usedHints.firstLetter ? String(gameData?.name?.[0]?.toUpperCase() || '') : null}
+            <HintsPager
+              gameData={gameData}
+              usedHints={usedHints}
+              reveal={reveal}
+              pageWidth={pageWidth}
+              pageGap={pageGap}
+              maxDots={MAX_DOTS}
             />
           </View>
 
@@ -946,7 +922,29 @@ export default function LiveGameMobile() {
 // -------------------------
 // Subcomponents
 // -------------------------
-function HintButton({ label, multiplier, onPress, disabled, valueShown }) {
+function PageDots({ count, index, max = 9 }) {
+  if (!Number.isFinite(count) || count <= 1) return null;
+  const total = Math.max(1, count);
+  const capped = Math.min(max, total);
+
+  let start = 0;
+  if (total > capped) {
+    const half = Math.floor(capped / 2);
+    start = Math.min(Math.max(0, index - half), total - capped);
+  }
+  const items = Array.from({ length: Math.min(capped, total) }, (_, i) => start + i);
+
+  return (
+    <View style={styles.dotsRow}>
+      {items.map((i) => {
+        const active = i === index;
+        return <View key={i} style={[styles.dot, active && styles.dotActive]} />;
+      })}
+    </View>
+  );
+}
+
+function HintButton({ label, multiplier, onPress, disabled, valueShown, style }) {
   const hasValue = valueShown !== null && valueShown !== undefined && valueShown !== '';
   return (
     <TouchableOpacity
@@ -956,6 +954,7 @@ function HintButton({ label, multiplier, onPress, disabled, valueShown }) {
       style={[
         styles.hintBtn,
         hasValue ? styles.hintBtnRevealed : disabled ? styles.hintBtnDisabled : null,
+        style,
       ]}
     >
       <View style={styles.hintHeader}>
@@ -977,48 +976,76 @@ function HintButton({ label, multiplier, onPress, disabled, valueShown }) {
   );
 }
 
-function TransfersList({ transfers }) {
+// Horizontal, paging-enabled Transfers carousel + dots
+function TransfersPager({ transfers, pageWidth, pageGap, maxDots }) {
+  const [index, setIndex] = useState(0);
+
   if (!transfers?.length) {
     return <Text style={styles.emptyTransfers}>No transfers found.</Text>;
   }
 
+  const snap = pageWidth + pageGap;
+
+  const onScroll = (e) => {
+    const x = e.nativeEvent.contentOffset.x;
+    const i = Math.round(x / snap);
+    if (i !== index) setIndex(Math.max(0, Math.min(i, transfers.length - 1)));
+  };
+
   return (
-    <View style={{ gap: 12 }}>
-      {transfers.map((t, idx) => {
-        const isFuture = (() => {
-          if (!t?.date) return false;
-          const d = new Date(t.date);
-          if (isNaN(d.getTime())) return false;
-          return d > new Date();
-        })();
+    <View>
+      <ScrollView
+        horizontal
+        pagingEnabled
+        decelerationRate="fast"
+        snapToInterval={snap}
+        snapToAlignment="start"
+        showsHorizontalScrollIndicator={false}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        contentContainerStyle={{ paddingHorizontal: 0 }}
+        style={{ marginHorizontal: -16 }} // stretch to card edges
+      >
+        <View style={{ flexDirection: 'row', gap: pageGap, paddingHorizontal: 16 }}>
+          {transfers.map((t, idx) => (
+            <TransferSlide key={`${t.date || t.season || 'row'}-${idx}`} t={t} width={pageWidth} />
+          ))}
+        </View>
+      </ScrollView>
+      <PageDots count={transfers.length} index={index} max={maxDots} />
+    </View>
+  );
+}
 
-        return (
-          <View
-            key={`${t.date || t.season || 'row'}-${idx}`}
-            style={[styles.transferRow, isFuture && styles.transferRowFuture]}
-          >
-            {/* Season + Date */}
-            <View style={styles.transferColA}>
-              <View style={styles.chip}><Text style={styles.chipText}>{t.season || '—'}</Text></View>
-              <Text style={styles.transferDate}>{t.date || '—'}</Text>
-            </View>
+function TransferSlide({ t, width }) {
+  const isFuture = (() => {
+    if (!t?.date) return false;
+    const d = new Date(t.date);
+    if (isNaN(d.getTime())) return false;
+    return d > new Date();
+  })();
 
-            {/* From → To */}
-            <View style={styles.transferColB}>
-              <ClubPill logo={t.out?.logo} name={t.out?.name} flag={t.out?.flag} />
-              <Text style={styles.arrow}>{'→'}</Text>
-              <ClubPill logo={t.in?.logo} name={t.in?.name} flag={t.in?.flag} />
-            </View>
+  return (
+    <View style={[styles.transferSlide, { width }]}>
+      {/* Season + Date */}
+      <View style={styles.transferColA}>
+        <View style={styles.chip}><Text style={styles.chipText}>{t.season || '—'}</Text></View>
+        <Text style={styles.transferDate}>{t.date || '—'}</Text>
+      </View>
 
-            {/* Value + Type + Future */}
-            <View style={styles.transferColC}>
-              <View className="chip"><Text style={styles.chipText}>{formatFee(t.valueRaw ?? '')}</Text></View>
-              {!!t.type && <View style={styles.chip}><Text style={styles.chipText}>{t.type}</Text></View>}
-              {isFuture && <View style={[styles.chip, styles.chipFuture]}><Text style={[styles.chipText, styles.chipFutureText]}>Future Transfer</Text></View>}
-            </View>
-          </View>
-        );
-      })}
+      {/* From → To */}
+      <View style={styles.transferColB}>
+        <ClubPill logo={t.out?.logo} name={t.out?.name} flag={t.out?.flag} />
+        <Text style={styles.arrow}>{'→'}</Text>
+        <ClubPill logo={t.in?.logo} name={t.in?.name} flag={t.in?.flag} />
+      </View>
+
+      {/* Value + Type + Future */}
+      <View style={styles.transferColC}>
+        <View style={styles.chip}><Text style={styles.chipText}>{formatFee(t.valueRaw ?? '')}</Text></View>
+        {!!t.type && <View style={styles.chip}><Text style={styles.chipText}>{t.type}</Text></View>}
+        {isFuture && <View style={[styles.chip, styles.chipFuture]}><Text style={[styles.chipText, styles.chipFutureText]}>Future Transfer</Text></View>}
+      </View>
     </View>
   );
 }
@@ -1031,6 +1058,93 @@ function ClubPill({ logo, name, flag }) {
         {flag ? <Image source={{ uri: flag }} style={styles.clubFlag} /> : null}
       </View>
       <Text numberOfLines={1} style={styles.clubName}>{name || 'Unknown'}</Text>
+    </View>
+  );
+}
+
+// Horizontal, paging-enabled Hints carousel (tap to reveal, swipe to switch) + dots
+function HintsPager({ gameData, usedHints, reveal, pageWidth, pageGap, maxDots }) {
+  const [index, setIndex] = useState(0);
+  const snap = pageWidth + pageGap;
+
+  const slides = [
+    {
+      key: 'age',
+      label: "Player's Age",
+      mult: '×0.90',
+      disabled: usedHints.age || !gameData?.age,
+      value: usedHints.age ? String(gameData?.age) : null,
+    },
+    {
+      key: 'nationality',
+      label: 'Nationality',
+      mult: '×0.90',
+      disabled: usedHints.nationality || !gameData?.nationality,
+      value: usedHints.nationality ? String(gameData?.nationality) : null,
+    },
+    {
+      key: 'position',
+      label: "Player's Position",
+      mult: '×0.80',
+      disabled: usedHints.position || !gameData?.position,
+      value: usedHints.position ? String(gameData?.position) : null,
+    },
+    {
+      key: 'partialImage',
+      label: "Player's Image",
+      mult: '×0.50',
+      disabled: usedHints.partialImage || !gameData?.photo,
+      value: usedHints.partialImage
+        ? (
+          <View style={styles.hintCropBox}>
+            <Image source={{ uri: gameData?.photo }} style={styles.hintCroppedImage} />
+          </View>
+        ) : null,
+    },
+    {
+      key: 'firstLetter',
+      label: "Player's First Letter",
+      mult: '×0.25',
+      disabled: usedHints.firstLetter || !gameData?.name,
+      value: usedHints.firstLetter ? String(gameData?.name?.[0]?.toUpperCase() || '') : null,
+    },
+  ];
+
+  const onScroll = (e) => {
+    const x = e.nativeEvent.contentOffset.x;
+    const i = Math.round(x / snap);
+    if (i !== index) setIndex(Math.max(0, Math.min(i, slides.length - 1)));
+  };
+
+  return (
+    <View>
+      <ScrollView
+        horizontal
+        pagingEnabled
+        decelerationRate="fast"
+        snapToInterval={snap}
+        snapToAlignment="start"
+        showsHorizontalScrollIndicator={false}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        contentContainerStyle={{ paddingHorizontal: 0 }}
+        style={{ marginHorizontal: -16 }}
+      >
+        <View style={{ flexDirection: 'row', gap: pageGap, paddingHorizontal: 16 }}>
+          {slides.map((s) => (
+            <HintButton
+              key={s.key}
+              label={s.label}
+              multiplier={s.mult}
+              disabled={s.disabled}
+              onPress={() => !s.disabled && reveal(s.key)}
+              valueShown={s.value}
+              style={{ width: pageWidth }}
+            />
+          ))}
+        </View>
+      </ScrollView>
+      <PageDots count={slides.length} index={index} max={maxDots} />
     </View>
   );
 }
@@ -1187,7 +1301,13 @@ const styles = StyleSheet.create({
   sugAvatarFallbackText: { fontSize: 12, color: '#6b7280', fontWeight: '700', fontFamily: 'Tektur_700Bold' },
   sugName: { fontSize: 14, color: '#111827', fontFamily: 'Tektur_400Regular' },
 
-  hintBtn: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, padding: 12, marginBottom: 10 },
+  // Hints & Transfers paging
+  transferSlide: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 12, padding: 12 },
+  dotsRow: { flexDirection: 'row', alignSelf: 'center', gap: 6, marginTop: 10 },
+  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#e5e7eb' },
+  dotActive: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#374151' },
+
+  hintBtn: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, padding: 12 },
   hintBtnDisabled: { backgroundColor: '#f9fafb' },
   hintBtnRevealed: { backgroundColor: '#ecfdf5', borderColor: '#bbf7d0' },
   hintHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -1203,8 +1323,6 @@ const styles = StyleSheet.create({
   hintCroppedImage: { width: 128, height: 192, resizeMode: 'cover' },
 
   emptyTransfers: { color: '#6b7280', textAlign: 'center', fontFamily: 'Tektur_400Regular' },
-  transferRow: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 12, padding: 10 },
-  transferRowFuture: { backgroundColor: '#f9fafb' },
   transferColA: { alignItems: 'center', marginBottom: 8 },
   transferDate: { fontSize: 12, color: '#6b7280', marginTop: 2, fontFamily: 'Tektur_400Regular' },
   transferColB: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginVertical: 6 },
@@ -1239,3 +1357,4 @@ function formatFee(raw) {
   s = s.replace(/^\$/, '€').replace(/\$/g, '€').trim();
   return s || '—';
 }
+""

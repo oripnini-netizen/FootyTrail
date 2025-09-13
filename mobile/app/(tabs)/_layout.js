@@ -243,7 +243,7 @@ export default function TabsLayout() {
         <Tabs.Screen
           name="leaderboard"
           options={{
-            title: 'Leaderboard',
+            title: 'FootyTrail Leaderboard',
             tabBarIcon: ({ color, size, focused }) => (
               <MaterialCommunityIcons name="trophy-outline" size={size} color={focused ? THEME_GREEN : color} />
             ),
@@ -252,7 +252,7 @@ export default function TabsLayout() {
         <Tabs.Screen
           name="elimination"
           options={{
-            title: 'Elimination',
+            title: 'Elimination Challenges',
             tabBarIcon: ({ color, size, focused }) => (
               <MaterialCommunityIcons name="axe" size={size} color={focused ? THEME_GREEN : color} />
             ),
@@ -273,7 +273,7 @@ export default function TabsLayout() {
         <Tabs.Screen
           name="leagues"
           options={{
-            title: 'Leagues',
+            title: 'My Leagues',
             tabBarIcon: ({ color, size, focused }) => (
               <MaterialCommunityIcons name="shield-crown-outline" size={size} color={focused ? THEME_GREEN : color} />
             ),
@@ -282,7 +282,7 @@ export default function TabsLayout() {
         <Tabs.Screen
           name="about"
           options={{
-            title: 'About',
+            title: 'About FootyTrail',
             tabBarIcon: ({ color, size, focused }) => (
               <Ionicons
                 name="information-circle-outline"

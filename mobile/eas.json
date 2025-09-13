@@ -7,7 +7,7 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
-       "env": {
+      "env": {
         "EXPO_PUBLIC_API_BASE": "https://footytrail.up.railway.app/api",
         "EXPO_NO_CAPABILITY_SYNC": "1"
       },
@@ -16,9 +16,15 @@
       }
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "store",
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_BASE": "https://footytrail.up.railway.app/api",
+        "EXPO_NO_CAPABILITY_SYNC": "1"
+      }
     },
     "production": {
+      "distribution": "store",
       "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_API_BASE": "https://footytrail.up.railway.app/api",
@@ -27,6 +33,15 @@
     }
   },
   "submit": {
-    "production": {}
+    "preview": {
+      "ios": {
+        "ascAppId": "6752524682"
+      }
+    },
+    "production": {
+      "ios": {
+        "ascAppId": "6752524682"
+      }
+    }
   }
 }
