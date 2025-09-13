@@ -8,6 +8,7 @@
       "developmentClient": true,
       "distribution": "internal",
        "env": {
+        "EXPO_PUBLIC_API_BASE": "https://footytrail.up.railway.app/api",
         "EXPO_NO_CAPABILITY_SYNC": "1"
       },
       "ios": {
@@ -20,7 +21,8 @@
     "production": {
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_BASE": "https://footytrail.up.railway.app/api"
+        "EXPO_PUBLIC_API_BASE": "https://footytrail.up.railway.app/api",
+        "EXPO_NO_CAPABILITY_SYNC": "1"
       }
     }
   },

@@ -10,6 +10,7 @@ import {
   StyleSheet,
   TextInput,
   Image,
+  DeviceEventEmitter, // <-- ADDED
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -146,6 +147,16 @@ export default function GameScreen() {
   const router = useRouter();
   const countdown = useCountdownToTomorrow();
   const isFocused = useIsFocused();
+
+  // >>> ADDED: ref + listener to handle FT_SCROLL_TO_TOP_GAME
+  const scrollRef = useRef(null);
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener("FT_SCROLL_TO_TOP_GAME", () => {
+      // scroll the top-level ScrollView to the top
+      scrollRef.current?.scrollTo?.({ y: 0, animated: true });
+    });
+    return () => sub.remove();
+  }, []);
 
   // >>> NEW (fonts) <<<
   const [fontsLoaded] = useFonts({
@@ -527,10 +538,22 @@ export default function GameScreen() {
         Alert.alert("No players found", "Try adjusting your filters.");
         return;
       }
+
+       // ✅ CALCULATE & SEND POTENTIAL POINTS FROM HERE
+      const potentialPoints = Math.max(0, Number(poolCount) * 5);
+
       // ✅ Navigate to /live-game with a JSON payload for live-game.js
       router.push({
         pathname: "/live-game",
-        params: { payload: JSON.stringify({ ...player, isDaily: false }) },
+        params: {
+          payload: JSON.stringify({
+            ...player,
+            isDaily: false,
+            potentialPoints,                 // <-- send calculated potential
+            // (filters only for context/fallback; harmless if unused)
+            filters: { potentialPoints },    // <-- send alongside for consistency
+          }),
+        },
       });
     } catch (e) {
       Alert.alert("Failed to start game", String(e?.message || e));
@@ -666,7 +689,11 @@ export default function GameScreen() {
   }
 
   return (
-    <ScrollView style={{ backgroundColor: "#f7faf7" }} contentContainerStyle={styles.container}>
+    <ScrollView
+      ref={scrollRef} // <-- ADDED
+      style={{ backgroundColor: "#f7faf7" }}
+      contentContainerStyle={styles.container}
+    >
       {/* Daily Challenge */}
       <View style={styles.card}>
         <View style={[styles.cardTitle, { textAlign: "center" }]}>
@@ -691,12 +718,12 @@ export default function GameScreen() {
           ]}
         >
           <Text style={styles.buttonText}>
-            {limits.dailyPlayed ? "Already Played" : dailyLoading ? "Loading…" : "Try the Daily Challenge"}
+            {limits.dailyPlayed ? "Daily Challenge Played" : dailyLoading ? "Loading…" : "Try the Daily Challenge"}
           </Text>
         </Pressable>
 
         {daily && limits.dailyPlayed && (
-          <View style={{ marginTop: 10 }}>
+          <View style={{ alignItems: "center", marginTop: 10 }}>
             {limits.dailyPlayerPhoto ? (
               <View style={{ alignItems: "center", marginBottom: 8 }}>
                 <Image

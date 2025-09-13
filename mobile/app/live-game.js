@@ -39,6 +39,12 @@ import Logo from '../assets/images/footytrail_logo.png';
  */
 
 const INITIAL_TIME = 120; // 2 minutes
+const AI_FACT_TIMEOUT_MS = 9000;
+function fetchWithTimeout(url, options = {}, ms = AI_FACT_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), ms);
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(id));
+}
 
 const normalize = (str) =>
   (str || '')
@@ -130,6 +136,9 @@ export default function LiveGameMobile() {
   });
 
   const [displayName, setDisplayName] = useState('Player');
+  // Avatar (same as postgame)
+  const [avatarUrl, setAvatarUrl] = useState(null);
+
 
   const [timeSec, setTimeSec] = useState(INITIAL_TIME);
   const timerRef = useRef(null);
@@ -139,6 +148,10 @@ export default function LiveGameMobile() {
   const [loadingTransfers, setLoadingTransfers] = useState(true);
 
   const [computedPotential, setComputedPotential] = useState(null);
+
+  // AI fact
+  const [aiFact, setAiFact] = useState('');
+  const aiFactRef = useRef('');
 
   const [showConfetti, setShowConfetti] = useState(false);
 
@@ -204,6 +217,30 @@ export default function LiveGameMobile() {
       try {
         const th = await fetchTransfersLocal(gameData.id);
         setTransferHistory(Array.isArray(th) ? th : []);
+        // Generate AI 'Did you know?' fact early
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          const resp = await fetchWithTimeout(`${API_BASE}/ai/generate-player-fact`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+            },
+            body: JSON.stringify({
+              player: {
+                id: gameData.id,
+                name: gameData.name,
+                nationality: gameData.nationality,
+                position: gameData.position,
+                age: gameData.age,
+              },
+              transferHistory: Array.isArray(th) ? th : [],
+            }),
+          }, AI_FACT_TIMEOUT_MS);
+          const j = await resp.json().catch(() => ({}));
+          const fact = String(j?.fact || j?.aiGeneratedFact || '').trim();
+          if (fact) { aiFactRef.current = fact; setAiFact(fact); }
+        } catch {}
       } catch {
         setTransferHistory([]);
       } finally {
@@ -239,7 +276,26 @@ export default function LiveGameMobile() {
     };
   }, [gameData?.id, gameData?.name]);
 
-  // -------------------------
+  
+  // Avatar (load from users.profile_photo_url)
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const { data: authData } = await supabase.auth.getUser();
+        const userId = authData?.user?.id;
+        if (!userId) return;
+        const { data } = await supabase
+          .from('users')
+          .select('profile_photo_url')
+          .eq('id', userId)
+          .maybeSingle();
+        if (mounted && data?.profile_photo_url) setAvatarUrl(data.profile_photo_url);
+      } catch {}
+    })();
+    return () => { mounted = false; };
+  }, []);
+// -------------------------
   // Potential points
   // -------------------------
   useEffect(() => {
@@ -579,9 +635,7 @@ export default function LiveGameMobile() {
   };
 
   const goPostgame = ({ didWin, pointsEarned, elapsed, guessesUsed, outroLine }) => {
-    router.replace({
-      pathname: '/postgame',
-      params: {
+    router.replace({ pathname: '/postgame', params: { aiFact: aiFactRef.current || aiFact || '',
         didWin: didWin ? '1' : '0',
         player: JSON.stringify({
           id: gameData.id,
@@ -619,6 +673,7 @@ export default function LiveGameMobile() {
   const timeTone =
     timeSec <= 30 ? styles.timeRed :
     timeSec <= 60 ? styles.timeYellow : styles.timeNormal;
+  const guessesTone = guessesLeft <= 1 ? styles.guessRed : (guessesLeft === 2 ? styles.guessWarn : styles.guessNormal);
 
   const displayPotential = Number(potentialPointsSource || 0);
 
@@ -681,7 +736,13 @@ export default function LiveGameMobile() {
           <Image source={Logo} style={styles.headerLogo} />
         </View>
         <Text style={styles.headerTitle}>{headerTitle}</Text>
-        <View style={styles.headerSide} />
+        <View style={[styles.headerSide, { alignItems: 'flex-end' }]}>
+          {avatarUrl ? (
+            <Image source={{ uri: avatarUrl }} style={styles.headerAvatar} />
+          ) : (
+            <View style={[styles.headerAvatar, { backgroundColor: '#d1d5db' }]} />
+          )}
+        </View>
       </View>
 
       {/* Sticky overlays */}
@@ -692,7 +753,7 @@ export default function LiveGameMobile() {
             <Text style={styles.subtle}>Time left</Text>
           </View>
           <View style={[styles.card, styles.flex1, styles.center, { paddingVertical: 8 }]}>
-            <Text style={styles.bigNumber}>{guessesLeft}</Text>
+            <Text style={[styles.bigNumber, guessesTone]}>{guessesLeft}</Text>
             <Text style={styles.subtle}>Guesses left</Text>
           </View>
         </View>
@@ -757,7 +818,7 @@ export default function LiveGameMobile() {
               <Text style={styles.subtle}>Time left</Text>
             </View>
             <View style={[styles.card, styles.flex1, styles.center]}>
-              <Text style={styles.bigNumber}>{guessesLeft}</Text>
+              <Text style={[styles.bigNumber, guessesTone]}>{guessesLeft}</Text>
               <Text style={styles.subtle}>Guesses left</Text>
             </View>
           </View>
@@ -953,7 +1014,7 @@ function TransfersList({ transfers }) {
             <View style={styles.transferColC}>
               <View className="chip"><Text style={styles.chipText}>{formatFee(t.valueRaw ?? '')}</Text></View>
               {!!t.type && <View style={styles.chip}><Text style={styles.chipText}>{t.type}</Text></View>}
-              {isFuture && <View style={styles.chip}><Text style={styles.chipText}>Future Transfer</Text></View>}
+              {isFuture && <View style={[styles.chip, styles.chipFuture]}><Text style={[styles.chipText, styles.chipFutureText]}>Future Transfer</Text></View>}
             </View>
           </View>
         );
@@ -977,7 +1038,7 @@ function ClubPill({ logo, name, flag }) {
 /** Emoji Rain overlay (loss effect) - JS-only, no parent state updates */
 function EmojiRain() {
   const { width, height } = Dimensions.get('window');
-  const EMOJIS = ['😭', '💀', '☠️', '🥲'];
+  const EMOJIS = ['😭', '💀', '☠️', '😫', '🤬', '😢'];
   const COUNT = 26;
   const DURATION = 2000;
 
@@ -1058,7 +1119,7 @@ const styles = StyleSheet.create({
     zIndex: 50,
   },
   headerSide: { width: 56, alignItems: 'flex-start', justifyContent: 'center' },
-  headerLogo: { width: 28, height: 28, borderRadius: 6, resizeMode: 'contain' },
+  headerLogo: { width: 40, height: 40, borderRadius: 6, resizeMode: 'contain' },
   headerTitle: { flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '800', color: '#111827', fontFamily: 'Tektur_700Bold' },
 
   stickyRow: {
@@ -1157,7 +1218,14 @@ const styles = StyleSheet.create({
 
   chip: { borderWidth: 1, borderRadius: 999, paddingVertical: 4, paddingHorizontal: 8, borderColor: '#e2e8f0' },
   chipText: { fontSize: 12, fontWeight: '700', fontFamily: 'Tektur_700Bold' },
-});
+
+  chipFuture: { backgroundColor: '#dbeafe', borderColor: '#bfdbfe' },
+  chipFutureText: { color: '#1e40af' },
+  guessNormal: { color: '#111827' },
+  guessWarn: { color: '#ca8a04' },
+  guessRed: { color: '#dc2626' },
+  headerAvatar: { width: 28, height: 28, borderRadius: 14 },
+  fxOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 9999, elevation: 9999 },});
 
 /* ------------------------- helpers ------------------------- */
 function safeStr(v) { return v == null ? '' : String(v); }

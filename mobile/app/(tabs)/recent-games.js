@@ -55,7 +55,6 @@ export default function RecentGamesScreen() {
   return (
     <View style={styles.screen}>
       <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Recent Games</Text>
         {recent?.length ? (
           <FlatList
             data={recent}

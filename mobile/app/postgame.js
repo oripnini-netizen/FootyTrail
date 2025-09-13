@@ -1,86 +1,594 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image } from 'react-native';
+// mobile/app/postgame.js
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  ScrollView,
+  Image,
+  ActivityIndicator,
+  Pressable,
+  Platform,
+  Share as RNShare,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { supabase } from '../lib/supabase';
+import { getRandomPlayer } from '../lib/api';
 import Logo from '../assets/images/footytrail_logo.png';
 
-export default function PostgamePlaceholder() {
+/* icons */
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+
+/* === Share whole card as image === */
+import ViewShot from 'react-native-view-shot';
+import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
+
+/**
+ * Postgame (Mobile)
+ * Params expected via useLocalSearchParams:
+ * - didWin: '1'|'0'
+ * - isDaily: '1'|'0'
+ * - elimination: stringified JSON or null
+ * - player: stringified JSON { id,name,photo/nationality/position/age,... }
+ * - stats: stringified JSON { pointsEarned,timeSec,guessesUsed,guessHistory,usedHints }
+ * - outroLine: string
+ * - aiFact: string   // (optional) generated in live-game and passed here
+ * - filters: stringified JSON of the pool filters used for this round
+ * - potentialPoints: string (pool size-based potential points used this round)
+ */
+
+export default function PostgameMobile() {
   const router = useRouter();
   const params = useLocalSearchParams();
 
+  // ---------- Parse inbound params ----------
   const didWin = String(params?.didWin ?? '0') === '1';
-  const points = Number(params?.pointsEarned ?? 0);
-  const outro = params?.outroLine ? String(params.outroLine) : null;
-
-  // read context to pick title like the live page
   const isDaily = String(params?.isDaily ?? '0') === '1';
-  const elimination = (() => { try { return params?.elimination ? JSON.parse(String(params.elimination)) : null; } catch { return null; }})();
-  const headerTitle = elimination ? 'Elimination' : (isDaily ? 'Daily Challenge' : 'Regular Daily');
 
+  const elimination = useMemo(() => {
+    try { return params?.elimination ? JSON.parse(String(params.elimination)) : null; }
+    catch { return null; }
+  }, [params?.elimination]);
+
+  const player = useMemo(() => {
+    try { return params?.player ? JSON.parse(String(params.player)) : null; }
+    catch { return null; }
+  }, [params?.player]);
+
+  const stats = useMemo(() => {
+    try { return params?.stats ? JSON.parse(String(params.stats)) : null; }
+    catch { return null; }
+  }, [params?.stats]);
+
+  const filters = useMemo(() => {
+    try { return params?.filters ? JSON.parse(String(params.filters)) : null; }
+    catch { return null; }
+  }, [params?.filters]);
+
+  const prevPotentialPoints = Number(params?.potentialPoints ?? 0);
+
+  const outroLine = params?.outroLine ? String(params.outroLine) : '';
+  const aiFact = params?.aiFact ? String(params.aiFact) : '';
+
+  const headerTitle = elimination ? 'Elimination' : (isDaily ? 'Daily Challenge' : 'Regular Game');
+
+  // ---------- Avatar (same behavior as in tabs layout) ----------
+  const [avatarUrl, setAvatarUrl] = useState(null);
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData?.user?.id;
+      if (!userId) return;
+      const { data } = await supabase
+        .from('users')
+        .select('profile_photo_url')
+        .eq('id', userId)
+        .maybeSingle();
+      if (mounted && data?.profile_photo_url) setAvatarUrl(data.profile_photo_url);
+    })();
+    return () => { mounted = false; };
+  }, []); // mirrors tabs header behavior
+
+  // ---------- Derived display ----------
+  const guessesUsed = useMemo(() => {
+    if (!stats) return 0;
+    if (Array.isArray(stats.guessHistory)) return Math.max(0, stats.guessHistory.length);
+    const n = Number(stats.guessesUsed);
+    return Number.isFinite(n) ? Math.max(0, n) : 0;
+  }, [stats]);
+
+  const hintsUsed = useMemo(() => {
+    if (!stats?.usedHints) return 0;
+    try { return Object.values(stats.usedHints).filter(Boolean).length; }
+    catch { return 0; }
+  }, [stats?.usedHints]);
+
+  const displayAge = getDisplayedAge(player);
+  const playerPhoto = player?.player_photo || player?.photo || null;
+
+  // ---------- Daily countdown (UTC) ----------
+  const [countdown, setCountdown] = useState(formatHMS(msUntilNextUtcMidnight()));
+  useEffect(() => {
+    const id = setInterval(() => setCountdown(formatHMS(msUntilNextUtcMidnight())), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // ---------- NEW: Games left today (UTC), excluding elimination and daily) ----------
+  const [gamesLeft, setGamesLeft] = useState(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data: authData } = await supabase.auth.getUser();
+        const userId = authData?.user?.id;
+        if (!userId) return;
+
+        const { start, end } = dayRangeUtc(new Date());
+        const { data, error } = await supabase
+          .from('games_records')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('is_daily_challenge', false)
+          .eq('is_elimination_game', false)
+          .gte('created_at', start)
+          .lt('created_at', end);
+
+        if (error) throw error;
+        const played = data?.length || 0;
+        setGamesLeft(Math.max(0, 10 - played));
+      } catch {
+        setGamesLeft(null);
+      }
+    })();
+  }, []); // only fetch for the label, logic unchanged
+
+  // ---------- Share (capture the card as image) ----------
+  const shareText = useMemo(() => {
+    const outcome = didWin ? 'succeeded phenomenally' : 'failed miserably';
+    const name = player?.name ? ` — ${player.name}` : '';
+    // Add the invite link like on the web
+    return `Look at the player I just ${outcome} to identify on FootyTrail${name}!\nCome join the fun at https://footy-trail.vercel.app`;
+  }, [didWin, player?.name]);
+
+  const cardShotRef = useRef(null);
+  const [shareBusy, setShareBusy] = useState(false);
+
+  const onShare = async () => {
+    if (shareBusy) return;
+    setShareBusy(true);
+    try {
+      // Capture the visible post-game card (WITHOUT the buttons row) as a PNG tmp file
+      const uri = await cardShotRef.current?.capture?.({
+        format: 'png',
+        quality: 1,
+        result: 'tmpfile',
+      });
+
+      if (uri) {
+        // Prefer RN Share so we can include BOTH text and the image URL
+        try {
+          await RNShare.share({
+            title: 'Share your FootyTrail game',
+            message: shareText,
+            url: uri, // file:// path to the captured PNG
+          });
+        } catch (e) {
+          // Fallback to expo-sharing if RN Share fails unexpectedly
+          const canNativeShare = await Sharing.isAvailableAsync();
+          if (canNativeShare) {
+            await Sharing.shareAsync(uri, {
+              mimeType: 'image/png',
+              dialogTitle: 'Share your FootyTrail game',
+              UTI: 'public.png',
+            });
+          } else {
+            // Last resort: just share text
+            await RNShare.share({ message: shareText });
+          }
+        }
+
+        // optional cleanup
+        try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+      } else {
+        // If capture failed: just share text
+        await RNShare.share({ message: shareText });
+      }
+    } catch {
+      // If anything goes wrong, share just the text
+      try { await RNShare.share({ message: shareText }); } catch {}
+    } finally {
+      setShareBusy(false);
+    }
+  };
+
+  // ---------- Banner ----------
+  const bannerText = useMemo(() => {
+    if (elimination) {
+      const pts = Number(stats?.pointsEarned ?? 0);
+      const lines = [
+        `Let's see if ${pts} point${pts === 1 ? '' : 's'} keeps you alive...`,
+        `Will ${pts} be your golden ticket to the next round — or your doom?`,
+        `Time to learn if ${pts} points means glory… or elimination.`,
+      ];
+      return lines[pts % lines.length];
+    }
+    if (outroLine) return outroLine;
+    if (didWin) return 'Great job! You guessed it!';
+    return player?.name ? `Not quite! The player was ${player.name}` : 'Round over!';
+  }, [didWin, elimination, outroLine, player?.name, stats?.pointsEarned]);
+
+  // ---------- Play Again (non-daily, non-elimination) ----------
+  const [playAgainBusy, setPlayAgainBusy] = useState(false);
+  const canPlayAgain = !isDaily && !elimination && filters && Number.isFinite(prevPotentialPoints) && prevPotentialPoints > 5;
+
+  const onPlayAgain = async () => {
+    if (!canPlayAgain || playAgainBusy) return;
+    setPlayAgainBusy(true);
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData?.user?.id || null;
+
+      const competitions = Array.isArray(filters?.competitions) ? filters.competitions : [];
+      const seasons = Array.isArray(filters?.seasons) ? filters.seasons : [];
+      const minMarketValue = Number(filters?.minMarketValue ?? 0) || 0;
+      const minAppearances = Number(filters?.minAppearances ?? 0) || 0;
+
+      // pool shrinks by 1 (≈5 points per player), mirroring web logic
+      const nextPotential = prevPotentialPoints - 5;
+
+      const nextCard = await getRandomPlayer(
+        { competitions, seasons, minMarketValue, minAppearances },
+        userId
+      ); // API call shape mirrors mobile lib/api.js
+
+      // Navigate to live-game with a single payload param (clean handoff)
+      router.replace({
+        pathname: '/live-game',
+        params: {
+          payload: JSON.stringify({
+            ...nextCard,
+            isDaily: false,
+            filters: { competitions, seasons, minMarketValue, minAppearances },
+            potentialPoints: nextPotential,
+            fromPostGame: true,
+          }),
+        },
+      });
+    } catch (e) {
+      console.error('Play Again error:', e);
+      setPlayAgainBusy(false);
+    }
+  };
+
+  // ---------- UI ----------
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: '#f6f7fb' }} contentContainerStyle={{ padding: 16 }}>
-      {/* Header bar below status bar */}
+    <ScrollView style={{ flex: 1, backgroundColor: '#f6f7fb' }} contentContainerStyle={{ paddingBottom: 24 }}>
+      {/* Header */}
       <SafeAreaView edges={['top']} style={styles.safeArea}>
         <View style={styles.header}>
           <View style={styles.headerSide}>
             <Image source={Logo} style={styles.headerLogo} />
           </View>
           <Text style={styles.headerTitle}>{headerTitle}</Text>
-          <View style={styles.headerSide} />
+          <View style={[styles.headerSide, { alignItems: 'flex-end' }]}>
+            <Pressable hitSlop={8}>
+              {avatarUrl ? (
+                <Image source={{ uri: avatarUrl }} style={styles.headerAvatar} />
+              ) : (
+                <View style={[styles.headerAvatar, { backgroundColor: '#d1d5db' }]} />
+              )}
+            </Pressable>
+          </View>
         </View>
       </SafeAreaView>
 
-      <View style={styles.card}>
-        <Text style={styles.title}>{didWin ? 'You Won!' : 'Round Over'}</Text>
-        <Text style={styles.subtitle}>
-          {didWin ? `Points earned: ${points}` : `Better luck next time.`}
-        </Text>
-        {outro ? <Text style={styles.outro}>{outro}</Text> : null}
+      {/* Card (wrapped with ViewShot so we can share image of the card) */}
+      {/* NOTE: Buttons row is OUTSIDE ViewShot so it won't be captured */}
+      <View style={{ marginHorizontal: 16, marginTop: 8 }}>
+        <ViewShot ref={cardShotRef} options={{ format: 'png', quality: 1, result: 'tmpfile' }}>
+          <View style={styles.container}>
+            {/* Top banner */}
+            <View style={[styles.banner, didWin ? styles.bannerWin : styles.bannerLose]}>
+              <Text style={[styles.bannerText, didWin ? styles.bannerTextWin : styles.bannerTextLose]}>
+                {bannerText}
+              </Text>
+            </View>
 
-        <TouchableOpacity
-          onPress={() => router.replace('/(tabs)/game')}
-          style={styles.btn}
-          activeOpacity={0.85}
-        >
-          <Text style={styles.btnTxt}>Back to Game</Text>
-        </TouchableOpacity>
+            {/* Player section */}
+            <View style={styles.playerRow}>
+              {playerPhoto ? (
+                <Image source={{ uri: playerPhoto }} style={styles.playerPhoto} />
+              ) : (
+                <View style={[styles.playerPhoto, styles.photoFallback]}>
+                  <Text style={{ color: '#9ca3af', fontSize: 28 }}>👤</Text>
+                </View>
+              )}
+
+              <View style={{ flex: 1 }}>
+                <Text style={styles.playerName}>{player?.name || 'Unknown Player'}</Text>
+                <Text style={styles.playerMeta}>Age: {displayAge}</Text>
+                <Text style={styles.playerMeta}>Nationality: {player?.nationality || '—'}</Text>
+                <Text style={styles.playerMeta}>Position: {player?.position || '—'}</Text>
+              </View>
+            </View>
+
+            {/* Did you know? */}
+            {!!aiFact && (
+              <View style={styles.factBox}>
+                <Text style={styles.factText}>{aiFact}</Text>
+                <Text style={styles.factFootnote}>And now you'll have to google that to see if I made it all up...</Text>
+              </View>
+            )}
+
+            {/* Stats */}
+            <View style={styles.statsGrid}>
+              <Stat label="Points Earned" value={String(stats?.pointsEarned ?? '—')} />
+              <Stat label="Time Taken" value={`${String(stats?.timeSec ?? '—')}s`} />
+              <Stat label="Guesses Used" value={String(guessesUsed)} />
+              <Stat label="Hints Used" value={String(hintsUsed)} />
+            </View>
+
+            {/* Daily body (texts only; actions live outside for sharing) */}
+            {isDaily && (
+              <View style={styles.dailyWrap}>
+                <Text style={styles.dailyTitle}>This was today's Daily Challenge!</Text>
+                <Text style={styles.dailyText}>
+                  {didWin
+                    ? `Congratulations! You won and earned ${Number(stats?.pointsEarned ?? 0)} points!`
+                    : 'Better luck next time! Try again tomorrow for another chance at 10,000 points.'}
+                </Text>
+                <Text style={styles.dailyCountdown}>
+                  Next daily challenge in <Text style={styles.dailyCountdownStrong}>{countdown}</Text>
+                </Text>
+              </View>
+            )}
+          </View>
+        </ViewShot>
+
+        {/* Actions (outside ViewShot so they are NOT included in the share) */}
+        {isDaily ? (
+          <View style={styles.rowActions}>
+            <TouchableOpacity onPress={onShare} activeOpacity={0.85} style={styles.btnIconShare} disabled={shareBusy}>
+              {shareBusy ? <ActivityIndicator color="#fff" /> : <MaterialCommunityIcons name="share-variant" size={22} color="#fff" />}
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => router.replace('/(tabs)/game')}
+              activeOpacity={0.85}
+              style={[styles.btn, styles.btnSecondary]}
+            >
+              <Text style={[styles.btnTxt, styles.btnTxtDark]}>Back to Game</Text>
+            </TouchableOpacity>
+          </View>
+        ) : elimination ? (
+          <View style={styles.rowActions}>
+            <TouchableOpacity onPress={onShare} activeOpacity={0.85} style={styles.btnIconShare} disabled={shareBusy}>
+              {shareBusy ? <ActivityIndicator color="#fff" /> : <MaterialCommunityIcons name="share-variant" size={22} color="#fff" />}
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => router.replace('/(tabs)/elimination')}
+              activeOpacity={0.85}
+              style={[styles.btn, styles.btnPrimary]}
+            >
+              <Text style={styles.btnTxt}>Back to Elimination</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View style={styles.rowActions}>
+            <TouchableOpacity
+              onPress={() => router.replace('/(tabs)/game')}
+              activeOpacity={0.85}
+              style={[styles.iconBtn]}
+            >
+              <Text style={styles.iconBtnTxt}>←</Text>
+            </TouchableOpacity>
+
+            {/* NEW: Play Again with remaining games label */}
+            <TouchableOpacity
+              onPress={onPlayAgain}
+              activeOpacity={0.85}
+              disabled={!canPlayAgain || playAgainBusy}
+              style={[
+                styles.btn,
+                styles.btnPrimary,
+                (!canPlayAgain || playAgainBusy) && { opacity: 0.6 },
+              ]}
+            >
+              {playAgainBusy ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.btnTxt}>
+                  {`Play Again${gamesLeft !== null ? ` (${gamesLeft} left)` : ''}`}
+                </Text>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity onPress={onShare} activeOpacity={0.85} style={styles.btnIconShare} disabled={shareBusy}>
+              {shareBusy ? <ActivityIndicator color="#fff" /> : <MaterialCommunityIcons name="share-variant" size={22} color="#fff" />}
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
     </ScrollView>
   );
 }
+
+/* =========================
+   Helpers
+   ========================= */
+
+function formatHMS(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = String(Math.floor(total / 3600)).padStart(2, '0');
+  const m = String(Math.floor((total % 3600) / 60)).padStart(2, '0');
+  const s = String(total % 60).padStart(2, '0');
+  return `${h}:${m}:${s}`;
+}
+
+function msUntilNextUtcMidnight() {
+  const now = new Date();
+  const next = new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate() + 1,
+    0, 0, 0, 0
+  ));
+  return next.getTime() - now.getTime();
+}
+
+/* NEW: UTC day range for games-left calc */
+function dayRangeUtc(dateLike) {
+  const d = new Date(dateLike);
+  const start = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0));
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
+function getDisplayedAge(p) {
+  if (!p) return '—';
+  const dobAgeStr =
+    p.player_dob_age || p.dob_age || p.player_dob || p.dob || '';
+
+  const birthDate = parseBirthDate(dobAgeStr);
+  const computed = birthDate ? computeAgeFromDate(birthDate) : null;
+  const fallback = p.age ?? p.player_age ?? '—';
+  return computed != null ? String(computed) : String(fallback);
+}
+
+// Accepts "30.04.1992 (29)", "dd/mm/yyyy", "dd-mm-yyyy", "yyyy-mm-dd"
+function parseBirthDate(str) {
+  if (!str) return null;
+  const s = String(str);
+
+  let m = s.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+  if (m) {
+    const d = parseInt(m[1], 10);
+    const mo = parseInt(m[2], 10);
+    const y = parseInt(m[3], 10);
+    if (validYMD(y, mo, d)) return new Date(Date.UTC(y, mo - 1, d));
+  }
+
+  m = s.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (m) {
+    const d = parseInt(m[1], 10);
+    const mo = parseInt(m[2], 10);
+    const y = parseInt(m[3], 10);
+    if (validYMD(y, mo, d)) return new Date(Date.UTC(y, mo - 1, d));
+  }
+
+  m = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) {
+    const y = parseInt(m[1], 10);
+    const mo = parseInt(m[2], 10);
+    const d = parseInt(m[3], 10);
+    if (validYMD(y, mo, d)) return new Date(Date.UTC(y, mo - 1, d));
+  }
+
+  return null;
+}
+
+function validYMD(y, m, d) {
+  if (y < 1900 || y > 2100) return false;
+  if (m < 1 || m > 12) return false;
+  if (d < 1 || d > 31) return false;
+  return true;
+}
+
+function computeAgeFromDate(birthDate) {
+  if (!(birthDate instanceof Date)) return null;
+  const now = new Date();
+  let age = now.getUTCFullYear() - birthDate.getUTCFullYear();
+  const mo = now.getUTCMonth() - birthDate.getUTCMonth();
+  if (mo < 0 || (mo === 0 && now.getUTCDate() < birthDate.getUTCDate())) {
+    age--;
+  }
+  return Math.max(0, age);
+}
+
+/* =========================
+   Small UI subcomponents
+   ========================= */
+
+function Stat({ label, value }) {
+  return (
+    <View style={styles.statCard}>
+      <Text style={styles.statLabel}>{label}</Text>
+      <Text style={styles.statValue}>{value}</Text>
+    </View>
+  );
+}
+
+/* =========================
+   Styles
+   ========================= */
 
 const styles = StyleSheet.create({
   safeArea: { backgroundColor: 'white' },
   header: {
     height: 56,
     backgroundColor: 'white',
-    borderBottomWidth: 1,
+    borderBottomWidth: Platform.OS === 'ios' ? 0.5 : 0.7,
     borderBottomColor: '#e5e7eb',
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
-    marginBottom: 12,
+    marginBottom: 8,
   },
   headerSide: { width: 56, alignItems: 'flex-start', justifyContent: 'center' },
-  headerLogo: { width: 28, height: 28, borderRadius: 6, resizeMode: 'contain' },
+  headerLogo: { width: 40, height: 40, borderRadius: 6, resizeMode: 'contain' },
+  headerAvatar: { width: 32, height: 32, borderRadius: 16 },
   headerTitle: { flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '800', color: '#111827' },
 
-  card: {
+  container: {
     backgroundColor: 'white',
     borderRadius: 16,
-    padding: 20,
+    padding: 16,
     borderColor: '#eef1f6',
     borderWidth: 1,
     shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 4 },
   },
-  title: { fontSize: 20, fontWeight: '800', textAlign: 'center', marginBottom: 6 },
-  subtitle: { fontSize: 14, color: '#374151', textAlign: 'center', marginBottom: 12 },
-  outro: { fontSize: 14, color: '#6b7280', textAlign: 'center', marginBottom: 16 },
-  btn: {
-    backgroundColor: '#0f766e',
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
+
+  banner: { borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 12, borderWidth: 1 },
+  bannerWin: { backgroundColor: '#dcfce7', borderColor: '#bbf7d0' },
+  bannerLose: { backgroundColor: '#fee2e2', borderColor: '#fecaca' },
+  bannerText: { textAlign: 'center', fontSize: 16, fontWeight: '800' },
+  bannerTextWin: { color: '#166534' },
+  bannerTextLose: { color: '#991b1b' },
+
+  playerRow: { flexDirection: 'row', gap: 12, marginBottom: 12, alignItems: 'center' },
+  playerPhoto: { width: 96, height: 96, borderRadius: 12, borderWidth: 1, borderColor: '#e5e7eb', objectFit: 'cover' },
+  photoFallback: { backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center' },
+  playerName: { fontSize: 20, fontWeight: '800', marginBottom: 4, color: '#111827' },
+  playerMeta: { fontSize: 14, color: '#4b5563' },
+
+  factBox: { backgroundColor: '#eff6ff', borderRadius: 12, padding: 12, marginBottom: 12 },
+  factText: { fontStyle: 'italic', color: '#111827' },
+  factFootnote: { marginTop: 4, fontSize: 11, color: '#6b7280' },
+
+  statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  statCard: { flexBasis: '48%', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12 },
+  statLabel: { color: '#6b7280', fontSize: 12, marginBottom: 4 },
+  statValue: { color: '#111827', fontSize: 18, fontWeight: '700' },
+
+  rowActions: { flexDirection: 'row', gap: 8, alignItems: 'center', marginTop: 8 },
+  iconBtn: { width: 44, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f3f4f6' },
+  iconBtnTxt: { fontSize: 18, fontWeight: '800', color: '#374151' },
+
+  btn: { flex: 1, borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
+  btnPrimary: { backgroundColor: '#16a34a' },
+  btnShare: { backgroundColor: '#4f46e5' }, // legacy (unused for icon-only)
+  btnSecondary: { backgroundColor: '#eef2f7' },
   btnTxt: { color: 'white', fontWeight: '700', fontSize: 16 },
+  btnTxtDark: { color: '#111827' },
+
+  // NEW: compact icon-only Share button
+  btnIconShare: { width: 44, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#4f46e5' },
+
+  dailyWrap: { alignItems: 'center', marginTop: 4 },
+  dailyTitle: { fontSize: 18, fontWeight: '800', color: '#713f12', marginBottom: 4 },
+  dailyText: { fontSize: 15, color: '#374151', textAlign: 'center' },
+  dailyCountdown: { marginTop: 6, fontSize: 13, color: '#6b7280' },
+  dailyCountdownStrong: { fontWeight: '700', color: '#111827' },
 });

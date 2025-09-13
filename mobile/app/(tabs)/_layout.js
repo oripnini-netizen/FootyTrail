@@ -1,6 +1,6 @@
 // mobile/app/(tabs)/_layout.js
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Image, View, Pressable, Platform, Text, Animated, TouchableOpacity, StyleSheet } from 'react-native';
+import { Image, View, Pressable, Platform, Text, Animated, TouchableOpacity, StyleSheet, DeviceEventEmitter } from 'react-native';
 import { Tabs, useRouter, useSegments } from 'expo-router';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
@@ -65,7 +65,7 @@ function TopNav({ title, avatarUrl, onAvatarPress, titleFontFamily }) {
 }
 
 // Floating middle tab button (Daily)
-function FloatingCenterButton({ onPress, focused }) {
+function FloatingCenterButton({ onNavigate, focused }) {
   const scale = useRef(new Animated.Value(focused ? 1.04 : 0.96)).current;
 
   useEffect(() => {
@@ -86,7 +86,15 @@ function FloatingCenterButton({ onPress, focused }) {
 
   return (
     <Pressable
-      onPress={onPress}
+      onPress={() => {
+        if (focused) {
+          // Already on Game tab → ask it to scroll to top
+          DeviceEventEmitter.emit('FT_SCROLL_TO_TOP_GAME');
+        } else {
+          // Not focused → navigate like normal
+          onNavigate?.();
+        }
+      }}
       style={{ top: lift, justifyContent: 'center', alignItems: 'center' }}
       android_ripple={{ color: '#e5e7eb', borderless: true }}
     >
@@ -230,7 +238,7 @@ export default function TabsLayout() {
         {/* Hidden pages to inherit nav bars */}
         <Tabs.Screen name="profile-info" options={{ href: null, title: 'Profile Info' }} />
         <Tabs.Screen name="default-filters" options={{ href: null, title: 'Default Filters' }} />
-        <Tabs.Screen name="recent-games" options={{ href: null, title: 'Recent Games' }} />
+        <Tabs.Screen name="recent-games" options={{ href: null, title: 'My Recent Games' }} />
 
         <Tabs.Screen
           name="leaderboard"
@@ -257,7 +265,7 @@ export default function TabsLayout() {
             tabBarButton: (props) => (
               <FloatingCenterButton
                 focused={isGameFocused}
-                onPress={props.onPress}
+                onNavigate={props.onPress}
               />
             ),
           }}
@@ -309,7 +317,7 @@ export default function TabsLayout() {
               onPress={() => { setMenuOpen(false); router.push('/(tabs)/recent-games'); }}
             >
               <MaterialCommunityIcons name="timelapse" size={18} color="#0b3d24" style={styles.menuIcon} />
-              <Text style={[styles.menuText, { fontFamily: fontsLoaded ? 'Tektur_700Bold' : undefined }]}>Recent Games</Text>
+              <Text style={[styles.menuText, { fontFamily: fontsLoaded ? 'Tektur_700Bold' : undefined }]}>My Recent Games</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
