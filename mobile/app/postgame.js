@@ -330,11 +330,10 @@ export default function PostgameMobile() {
             {/* Daily body (texts only; actions live outside for sharing) */}
             {isDaily && (
               <View style={styles.dailyWrap}>
-                <Text style={styles.dailyTitle}>This was today's Daily Challenge!</Text>
-                <Text style={styles.dailyText}>
+                <Text style={styles.dailyTitle}>
                   {didWin
-                    ? `Congratulations! You won and earned ${Number(stats?.pointsEarned ?? 0)} points!`
-                    : 'Better luck next time! Try again tomorrow for another chance at 10,000 points.'}
+                    ? `Congratulations! You won today's daily challenge and earned ${Number(stats?.pointsEarned ?? 0)} points!`
+                    : 'Better luck next time! Try the daily challenge again tomorrow for another chance at 10,000 points.'}
                 </Text>
                 <Text style={styles.dailyCountdown}>
                   Next daily challenge in <Text style={styles.dailyCountdownStrong}>{countdown}</Text>
@@ -583,7 +582,7 @@ const styles = StyleSheet.create({
   btnIconShare: { width: 44, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#4f46e5' },
 
   dailyWrap: { alignItems: 'center', marginTop: 4 },
-  dailyTitle: { fontSize: 18, fontWeight: '800', color: '#713f12', marginBottom: 4 },
+  dailyTitle: { fontSize: 18, fontWeight: '800', color: '#713f12', marginBottom: 4, textAlign: 'center' },
   dailyText: { fontSize: 15, color: '#374151', textAlign: 'center' },
   dailyCountdown: { marginTop: 6, fontSize: 13, color: '#6b7280' },
   dailyCountdownStrong: { fontWeight: '700', color: '#111827' },

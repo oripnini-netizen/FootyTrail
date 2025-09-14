@@ -119,17 +119,21 @@ export default function LeaderboardScreen() {
     }
 
     try {
-      // Daily Champions (today’s daily winners)
-      const todayStartIso = new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
-
-      const dailyPromise = supabase
-        .from("games_records")
-        .select("id, user_id, points_earned, player_name, created_at, won")
-        .eq("is_daily_challenge", true)
-        .gte("created_at", todayStartIso)
-        .eq("won", true)
-        .order("points_earned", { ascending: false })
-        .limit(10);
+      // Only fetch Daily Champions if the "Today" tab is selected
+      let dailyPromise;
+      if (tab === "Today") {
+        const todayStartIso = new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
+        dailyPromise = supabase
+          .from("games_records")
+          .select("id, user_id, points_earned, player_name, created_at, won")
+          .eq("is_daily_challenge", true)
+          .gte("created_at", todayStartIso)
+          .eq("won", true)
+          .order("points_earned", { ascending: false })
+          .limit(10);
+      } else {
+        dailyPromise = Promise.resolve({ data: [], error: null });
+      }
 
       // Main leaderboard
       const now = new Date();
@@ -158,9 +162,9 @@ export default function LeaderboardScreen() {
       if (gamesErr) throw gamesErr;
       if (txErr) throw txErr;
 
-      // Wire daily champions with users table
+      // Wire daily champions with users table (if Today)
       let champions = [];
-      if (daily?.length) {
+      if (tab === "Today" && daily?.length) {
         const ids = Array.from(new Set(daily.map((d) => d.user_id)));
         let users = [];
         if (ids.length) {
@@ -340,65 +344,6 @@ export default function LeaderboardScreen() {
 
   return (
     <View style={{ flex: 1 }}>
-      {/* Daily Champions */}
-      <View style={styles.dailyCard}>
-        <Text style={styles.dailyHeader}>☆ Today's Daily Challenge Champions</Text>
-        {dailyChampions.length === 0 ? (
-          <View style={styles.dailyEmpty}>
-            <Text style={styles.dailyEmptyStar}>⭐</Text>
-            <Text style={styles.dailyEmptyTitle}>No champions yet today!</Text>
-            <Text style={styles.dailyEmptySub}>
-              Be the first to conquer today's daily challenge.
-            </Text>
-          </View>
-        ) : (
-          <FlatList
-            contentContainerStyle={{ padding: 12 }}
-            data={dailyChampions}
-            keyExtractor={(it) => String(it.id)}
-            renderItem={({ item, index }) => {
-              const user = item.user || {};
-              return (
-                <View style={styles.dailyItem}>
-                  <View style={styles.dailyRankBubble}>
-                    <Text style={styles.dailyRankText}>{index + 1}</Text>
-                  </View>
-                  {user.profile_photo_url ? (
-                    <Image source={{ uri: user.profile_photo_url }} style={styles.avatarSm} />
-                  ) : (
-                    <View style={styles.avatarSmFallback}>
-                      <Text style={styles.avatarSmFallbackText}>
-                        {(user.full_name || "?").slice(0, 1)}
-                      </Text>
-                    </View>
-                  )}
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Pressable
-                      onPress={() =>
-                        openUserModal({
-                          userId: item.user_id,
-                          name: user.full_name || "Unknown Player",
-                          profilePhoto: user.profile_photo_url || "",
-                          memberSince: user.created_at
-                            ? new Date(user.created_at).toLocaleDateString()
-                            : "—",
-                        })
-                      }
-                    >
-                      <Text style={styles.dailyName} numberOfLines={1} ellipsizeMode="tail">
-                        {user.full_name || "Unknown Player"}
-                      </Text>
-                    </Pressable>
-                    <Text style={styles.dailyPoints}>{item.points_earned} points</Text>
-                  </View>
-                </View>
-              );
-            }}
-            ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
-          />
-        )}
-      </View>
-
       {/* Tabs row — centered and wrapped */}
       <View style={styles.filtersRow}>
         {TABS.map((t) => (
@@ -411,6 +356,67 @@ export default function LeaderboardScreen() {
           </Pressable>
         ))}
       </View>
+
+      {/* Daily Champions — ONLY for Today, and specifically between the chips and the Per Game toggle */}
+      {tab === "Today" && (
+        <View style={styles.dailyCard}>
+          <Text style={styles.dailyHeader}>☆ Today's Daily Challenge Champions</Text>
+          {dailyChampions.length === 0 ? (
+            <View style={styles.dailyEmpty}>
+              <Text style={styles.dailyEmptyStar}>⭐</Text>
+              <Text style={styles.dailyEmptyTitle}>No champions yet today!</Text>
+              <Text style={styles.dailyEmptySub}>
+                Be the first to conquer today's daily challenge.
+              </Text>
+            </View>
+          ) : (
+            <FlatList
+              contentContainerStyle={{ padding: 12 }}
+              data={dailyChampions}
+              keyExtractor={(it) => String(it.id)}
+              renderItem={({ item, index }) => {
+                const user = item.user || {};
+                return (
+                  <View style={styles.dailyItem}>
+                    <View style={styles.dailyRankBubble}>
+                      <Text style={styles.dailyRankText}>{index + 1}</Text>
+                    </View>
+                    {user.profile_photo_url ? (
+                      <Image source={{ uri: user.profile_photo_url }} style={styles.avatarSm} />
+                    ) : (
+                      <View style={styles.avatarSmFallback}>
+                        <Text style={styles.avatarSmFallbackText}>
+                          {(user.full_name || "?").slice(0, 1)}
+                        </Text>
+                      </View>
+                    )}
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Pressable
+                        onPress={() =>
+                          openUserModal({
+                            userId: item.user_id,
+                            name: user.full_name || "Unknown Player",
+                            profilePhoto: user.profile_photo_url || "",
+                            memberSince: user.created_at
+                              ? new Date(user.created_at).toLocaleDateString()
+                              : "—",
+                          })
+                        }
+                      >
+                        <Text style={styles.dailyName} numberOfLines={1} ellipsizeMode="tail">
+                          {user.full_name || "Unknown Player"}
+                        </Text>
+                      </Pressable>
+                      <Text style={styles.dailyPoints}>{item.points_earned} points</Text>
+                    </View>
+                  </View>
+                );
+              }}
+              ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+            />
+          )}
+        </View>
+      )}
 
       {/* Metric switch (Per Game) */}
       <View style={styles.switchRow}>
@@ -592,7 +598,10 @@ export default function LeaderboardScreen() {
                             {g.is_elimination_game ? (
                               <>
                                 {" "}
-                                • <Text style={{ color: "#7c3aed", fontFamily: "Tektur_400Regular" }}>Elimination</Text>
+                                •{" "}
+                                <Text style={{ color: "#7c3aed", fontFamily: "Tektur_400Regular" }}>
+                                  Elimination
+                                </Text>
                               </>
                             ) : (
                               ""

@@ -25,25 +25,9 @@ import { supabase } from '../lib/supabase';
 import { saveGameCompleted, getCounts, API_BASE } from '../lib/api';
 import Logo from '../assets/images/footytrail_logo.png';
 
-/**
- * Fixes in this version:
- * - Vibrates on "Give up".
- * - Ensures Emoji Rain runs on 3rd wrong guess without triggering the useInsertionEffect warning
- *   (removed parent state update after animation; schedule show via microtask).
- * - Closes suggestions immediately on any guess (including loss and Give up).
- *
- * New in this edit (requested):
- * - Ensure suggestions dropdown closes after game finishes and stays closed until navigation.
- * - Apply Tektur Google font across the page (400/700).
- * - Keep confetti/emoji rain visible during the finishing "loading" state until navigating.
- * - Swipeable, paging-enabled carousels for Transfer History and Hints (no extra libs).
- * - Add page indicator dots below both carousels (capped count, current emphasized).
- * - Ensure postgame receives full player payload for all game types.
- */
-
 const INITIAL_TIME = 120; // 2 minutes
 const AI_FACT_TIMEOUT_MS = 9000;
-const MAX_DOTS = 9; // cap dots so they fit nicely
+const MAX_DOTS = 9; // (no longer used for lists, kept to avoid style churn)
 
 function fetchWithTimeout(url, options = {}, ms = AI_FACT_TIMEOUT_MS) {
   const controller = new AbortController();
@@ -144,7 +128,6 @@ export default function LiveGameMobile() {
   // Avatar (same as postgame)
   const [avatarUrl, setAvatarUrl] = useState(null);
 
-
   const [timeSec, setTimeSec] = useState(INITIAL_TIME);
   const timerRef = useRef(null);
   const endedRef = useRef(false);
@@ -178,8 +161,11 @@ export default function LiveGameMobile() {
   const stickyTop = insets.top + headerHeight; // overlays anchor here
   const stickyOffset = headerHeight + 8;
 
+  // Scroll ref (to scroll to top before FX)
+  const scrollRef = useRef(null);
+
   // -------------------------
-  // Bootstrapping + Timer
+  // Bootstrapping (no timer here anymore)
   // -------------------------
   useEffect(() => {
     if (!gameData?.id || !gameData?.name) {
@@ -187,35 +173,6 @@ export default function LiveGameMobile() {
       router.replace('/(tabs)/game');
       return;
     }
-
-    // Timer tick
-    timerRef.current = setInterval(() => {
-      setTimeSec((t) => {
-        if (t <= 1) {
-          clearInterval(timerRef.current);
-          if (!endedRef.current) {
-            endedRef.current = true;
-            setIsFinishing(true);          // NEW: lock UI
-            setSuggestions([]);            // NEW: ensure dropdown closes
-            Keyboard.dismiss();            // NEW
-            setTimeout(() => setShowEmojiRain(true), 0); // schedule on next microtask
-            setTimeout(async () => {
-              await saveGameRecord(false);
-              await writeElimEntryAndAdvance(false, 0);
-              const outroLine = await generateOutro(false, 0, 3, INITIAL_TIME);
-              goPostgame({
-                didWin: false,
-                pointsEarned: 0,
-                elapsed: INITIAL_TIME,
-                guessesUsed: 3,
-                outroLine,
-              });
-            }, 1200);
-          }
-        }
-        return t - 1;
-      });
-    }, 1000);
 
     // Transfers
     (async () => {
@@ -281,7 +238,42 @@ export default function LiveGameMobile() {
     };
   }, [gameData?.id, gameData?.name]);
 
-  
+  // Start countdown ONLY after transfers are fully loaded
+  useEffect(() => {
+    clearInterval(timerRef.current);
+    if (loadingTransfers || endedRef.current) return;
+    timerRef.current = setInterval(() => {
+      setTimeSec((t) => {
+        if (t <= 1) {
+          clearInterval(timerRef.current);
+          if (!endedRef.current) {
+            endedRef.current = true;
+            setIsFinishing(true);
+            setSuggestions([]);
+            Keyboard.dismiss();
+            // Scroll to top BEFORE rain
+            try { scrollRef.current?.scrollTo({ y: 0, animated: true }); } catch {}
+            setTimeout(() => setShowEmojiRain(true), 180);
+            setTimeout(async () => {
+              await saveGameRecord(false);
+              await writeElimEntryAndAdvance(false, 0);
+              const outroLine = await generateOutro(false, 0, 3, INITIAL_TIME);
+              goPostgame({
+                didWin: false,
+                pointsEarned: 0,
+                elapsed: INITIAL_TIME,
+                guessesUsed: 3,
+                outroLine,
+              });
+            }, 1200);
+          }
+        }
+        return t - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timerRef.current);
+  }, [loadingTransfers]);
+
   // Avatar (load from users.profile_photo_url)
   useEffect(() => {
     let mounted = true;
@@ -300,7 +292,8 @@ export default function LiveGameMobile() {
     })();
     return () => { mounted = false; };
   }, []);
-// -------------------------
+
+  // -------------------------
   // Potential points
   // -------------------------
   useEffect(() => {
@@ -401,6 +394,7 @@ export default function LiveGameMobile() {
       p = Math.floor(p * multipliers[k]);
     });
 
+    // Time decay begins only once countdown actually runs (we don't decrement before transfers load)
     const timeElapsed = INITIAL_TIME - timeSec;
     const timeDecay = Math.pow(0.99, timeElapsed);
     p = Math.floor(p * timeDecay);
@@ -444,11 +438,13 @@ export default function LiveGameMobile() {
 
     if (correct) {
       endedRef.current = true;
-      setIsFinishing(true);      // NEW: lock UI and keep animations visible
+      setIsFinishing(true);
       clearInterval(timerRef.current);
 
-      // 🎉 Confetti until navigation (component remains mounted)
-      setShowConfetti(true);
+      // Scroll to top BEFORE confetti
+      try { scrollRef.current?.scrollTo({ y: 0, animated: true }); } catch {}
+      setTimeout(() => setShowConfetti(true), 180);
+
       setTimeout(async () => {
         await saveGameRecord(true);
         await writeElimEntryAndAdvance(true, points);
@@ -472,13 +468,15 @@ export default function LiveGameMobile() {
 
     if (guessesLeft <= 1) {
       endedRef.current = true;
-      setIsFinishing(true);        // NEW
+      setIsFinishing(true);
       clearInterval(timerRef.current);
 
-      // Ensure suggestions are closed at loss and schedule rain in the next microtask.
       setSuggestions([]);
       Keyboard.dismiss();
-      setTimeout(() => setShowEmojiRain(true), 0);
+
+      // Scroll to top BEFORE emoji rain
+      try { scrollRef.current?.scrollTo({ y: 0, animated: true }); } catch {}
+      setTimeout(() => setShowEmojiRain(true), 180);
 
       setTimeout(async () => {
         await saveGameRecord(false);
@@ -501,7 +499,7 @@ export default function LiveGameMobile() {
   const loseNow = () => {
     if (endedRef.current) return;
     endedRef.current = true;
-    setIsFinishing(true);          // NEW
+    setIsFinishing(true);
     clearInterval(timerRef.current);
 
     // Vibrate on Give up, close suggestions & keyboard
@@ -509,8 +507,9 @@ export default function LiveGameMobile() {
     setSuggestions([]);
     Keyboard.dismiss();
 
-    // Show emoji rain for loss
-    setTimeout(() => setShowEmojiRain(true), 0);
+    // Scroll to top BEFORE emoji rain
+    try { scrollRef.current?.scrollTo({ y: 0, animated: true }); } catch {}
+    setTimeout(() => setShowEmojiRain(true), 180);
 
     setTimeout(async () => {
       await saveGameRecord(false);
@@ -731,9 +730,9 @@ export default function LiveGameMobile() {
   // UI
   // -------------------------
   const screenW = Dimensions.get('window').width;
-  const pageGap = 12;
   const innerPad = 16;
-  const pageWidth = screenW - innerPad * 2; // fits inside white cards
+
+  const disabledUI = loadingTransfers; // disable interactions + dim until transfers are loaded
 
   return (
     <Animated.View style={{ flex: 1, backgroundColor: '#f6f7fb', transform: [{ translateX: shakeX }] }}>
@@ -756,11 +755,11 @@ export default function LiveGameMobile() {
       {/* Sticky overlays */}
       {showStickyTimer && (
         <View style={[styles.stickyRow, { top: stickyTop }]}>
-          <View style={[styles.card, styles.flex1, styles.center, { paddingVertical: 8 }]}>
+          <View style={[styles.card, styles.flex1, styles.center, { paddingVertical: 8, opacity: disabledUI ? 0.5 : 1 }]}>
             <Text style={[styles.timer, timeTone]}>{formatTime(timeSec)}</Text>
             <Text style={styles.subtle}>Time left</Text>
           </View>
-          <View style={[styles.card, styles.flex1, styles.center, { paddingVertical: 8 }]}>
+          <View style={[styles.card, styles.flex1, styles.center, { paddingVertical: 8, opacity: disabledUI ? 0.5 : 1 }]}>
             <Text style={[styles.bigNumber, guessesTone]}>{guessesLeft}</Text>
             <Text style={styles.subtle}>Guesses left</Text>
           </View>
@@ -769,7 +768,7 @@ export default function LiveGameMobile() {
 
       {showStickyInput && (
         <View style={[styles.stickyInput, { top: stickyTop + 84 /* under timer row */ }]}>
-          <View style={[styles.card, { padding: 10 }]}>
+          <View style={[styles.card, { padding: 10, opacity: disabledUI ? 0.5 : 1 }]} pointerEvents={disabledUI ? 'none' : 'auto'}>
             <View style={styles.inputRow}>
               <TextInput
                 value={guess}
@@ -779,9 +778,9 @@ export default function LiveGameMobile() {
                 style={styles.input}
                 autoCapitalize="none"
                 autoCorrect={false}
-                editable={!isFinishing && !endedRef.current} // NEW: lock input after finish
+                editable={!isFinishing && !endedRef.current && !disabledUI}
               />
-              <TouchableOpacity onPress={loseNow} style={styles.giveUpBtn} activeOpacity={0.8} disabled={isFinishing}>
+              <TouchableOpacity onPress={loseNow} style={styles.giveUpBtn} activeOpacity={0.8} disabled={isFinishing || disabledUI}>
                 <Text style={styles.giveUpText}>Give up</Text>
               </TouchableOpacity>
             </View>
@@ -798,109 +797,150 @@ export default function LiveGameMobile() {
         behavior={Platform.select({ ios: 'padding', android: undefined })}
         keyboardVerticalOffset={0}
       >
-        <ScrollView
-          style={styles.screen}
-          contentContainerStyle={[styles.screenContent, { paddingTop: headerHeight + 8 }]}
-          contentInsetAdjustmentBehavior="never" // prevent extra iOS automatic inset
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
-          onScroll={(e) => {
-            const y = e.nativeEvent.contentOffset.y;
-            setShowStickyTimer(y >= (timerYRef.current ?? 0) - stickyOffset);
-            setShowStickyInput(y >= (inputYRef.current ?? 0) - stickyOffset);
-          }}
-          scrollEventThrottle={16}
-        >
-          {/* Warning */}
-          <View style={styles.warnBox}>
-            <Text style={styles.warnText}>⚠️ Don’t leave this screen — backgrounding the app will count as a loss.</Text>
-          </View>
-
-          {/* Timer + Guesses */}
-          <View
-            style={styles.row}
-            onLayout={(e) => { timerYRef.current = e.nativeEvent.layout.y; }}
+        <View style={{ flex: 1 }} pointerEvents={disabledUI ? 'none' : 'auto'}>
+          <ScrollView
+            ref={scrollRef}
+            style={styles.screen}
+            contentContainerStyle={[styles.screenContent, { paddingTop: headerHeight + 8, opacity: disabledUI ? 0.5 : 1 }]}
+            contentInsetAdjustmentBehavior="never"
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            onScroll={(e) => {
+              const y = e.nativeEvent.contentOffset.y;
+              setShowStickyTimer(y >= (timerYRef.current ?? 0) - stickyOffset);
+              setShowStickyInput(y >= (inputYRef.current ?? 0) - stickyOffset);
+            }}
+            scrollEventThrottle={16}
           >
-            <View style={[styles.card, styles.flex1, styles.center]}>
-              <Text style={[styles.timer, timeTone]}>{formatTime(timeSec)}</Text>
-              <Text style={styles.subtle}>Time left</Text>
-            </View>
-            <View style={[styles.card, styles.flex1, styles.center]}>
-              <Text style={[styles.bigNumber, guessesTone]}>{guessesLeft}</Text>
-              <Text style={styles.subtle}>Guesses left</Text>
-            </View>
-          </View>
-
-          {/* Current points */}
-          <View style={styles.row}>
-            <View style={[styles.card, styles.flex1, styles.center]}>
-              <Text style={styles.potentialInline}>
-                Potential: <Text style={styles.potentialStrong}>{displayPotential}</Text>
-              </Text>
-              <Text style={styles.pointsNow}>{points}</Text>
-              <Text style={styles.subtle}>Current points</Text>
-            </View>
-          </View>
-
-          {/* Guess input row */}
-          <View
-            style={styles.card}
-            onLayout={(e) => { inputYRef.current = e.nativeEvent.layout.y; }}
-          >
-            <Text style={styles.sectionTitle}>Who are ya?!</Text>
-
-            <View style={styles.inputRow}>
-              <TextInput
-                value={guess}
-                onChangeText={(t) => setGuess(String(t))}
-                placeholder="Type a player's name"
-                autoFocus={false}
-                style={styles.input}
-                autoCapitalize="none"
-                autoCorrect={false}
-                editable={!isFinishing && !endedRef.current} // NEW
-              />
-
-              <TouchableOpacity onPress={loseNow} style={styles.giveUpBtn} activeOpacity={0.8} disabled={isFinishing}>
-                <Text style={styles.giveUpText}>Give up</Text>
-              </TouchableOpacity>
+            {/* Warning */}
+            <View style={styles.warnBox}>
+              <Text style={styles.warnText}>⚠️ Don’t leave this screen — backgrounding the app will count as a loss.</Text>
             </View>
 
-            {/* Only render suggestions here when NOT sticky */}
-            {!showStickyInput && renderSuggestions()}
-          </View>
+            {/* Timer + Guesses */}
+            <View
+              style={styles.row}
+              onLayout={(e) => { timerYRef.current = e.nativeEvent.layout.y; }}
+            >
+              <View style={[styles.card, styles.flex1, styles.center]}>
+                <Text style={[styles.timer, timeTone]}>{formatTime(timeSec)}</Text>
+                <Text style={styles.subtle}>Time left</Text>
+              </View>
+              <View style={[styles.card, styles.flex1, styles.center]}>
+                <Text style={[styles.bigNumber, guessesTone]}>{guessesLeft}</Text>
+                <Text style={styles.subtle}>Guesses left</Text>
+              </View>
+            </View>
 
-          {/* Transfer History */}
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Transfer History</Text>
-            {loadingTransfers ? (
-              <Text style={styles.loadingTxt}>Loading transfers…</Text>
-            ) : (
-              <TransfersPager
-                transfers={transferHistory}
-                pageWidth={pageWidth}
-                pageGap={pageGap}
-                maxDots={MAX_DOTS}
-              />
-            )}
-          </View>
+            {/* Current points */}
+            <View style={styles.row}>
+              <View style={[styles.card, styles.flex1, styles.center]}>
+                <Text style={styles.potentialInline}>
+                  Potential: <Text style={styles.potentialStrong}>{displayPotential}</Text>
+                </Text>
+                <Text style={styles.pointsNow}>{points}</Text>
+                <Text style={styles.subtle}>Current points</Text>
+              </View>
+            </View>
 
-          {/* Hints */}
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Hints</Text>
-            <HintsPager
-              gameData={gameData}
-              usedHints={usedHints}
-              reveal={reveal}
-              pageWidth={pageWidth}
-              pageGap={pageGap}
-              maxDots={MAX_DOTS}
-            />
-          </View>
+            {/* Guess input row */}
+            <View
+              style={styles.card}
+              onLayout={(e) => { inputYRef.current = e.nativeEvent.layout.y; }}
+            >
+              <Text style={styles.sectionTitle}>Who are ya?!</Text>
 
-          {/* Bottom spacer */}
-          <View style={{ height: 40 }} />
-        </ScrollView>
+              <View style={styles.inputRow}>
+                <TextInput
+                  value={guess}
+                  onChangeText={(t) => setGuess(String(t))}
+                  placeholder="Type a player's name"
+                  autoFocus={false}
+                  style={styles.input}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  editable={!isFinishing && !endedRef.current && !disabledUI}
+                />
+
+                <TouchableOpacity onPress={loseNow} style={styles.giveUpBtn} activeOpacity={0.8} disabled={isFinishing || disabledUI}>
+                  <Text style={styles.giveUpText}>Give up</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Only render suggestions here when NOT sticky */}
+              {!showStickyInput && renderSuggestions()}
+            </View>
+
+            {/* Transfer History — LIST (no swipe) */}
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>Transfer History</Text>
+              {loadingTransfers ? (
+                <Text style={styles.loadingTxt}>Loading transfers…</Text>
+              ) : (
+                <View style={{ gap: 12 }}>
+                  {transferHistory?.length
+                    ? transferHistory.map((t, idx) => (
+                        <TransferSlide key={`${t.date || t.season || 'row'}-${idx}`} t={t} /* width auto in list */ />
+                      ))
+                    : <Text style={styles.emptyTransfers}>No transfers found.</Text>}
+                </View>
+              )}
+            </View>
+
+            {/* Hints — LIST (no swipe) */}
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>Hints</Text>
+              <View style={{ gap: 12 }}>
+                <HintButton
+                  label={"Player's Age"}
+                  multiplier="×0.90"
+                  disabled={usedHints.age || !gameData?.age || disabledUI}
+                  onPress={() => !disabledUI && !usedHints.age && reveal('age')}
+                  valueShown={usedHints.age ? String(gameData?.age) : null}
+                />
+                <HintButton
+                  label="Nationality"
+                  multiplier="×0.90"
+                  disabled={usedHints.nationality || !gameData?.nationality || disabledUI}
+                  onPress={() => !disabledUI && !usedHints.nationality && reveal('nationality')}
+                  valueShown={usedHints.nationality ? String(gameData?.nationality) : null}
+                />
+                <HintButton
+                  label={"Player's Position"}
+                  multiplier="×0.80"
+                  disabled={usedHints.position || !gameData?.position || disabledUI}
+                  onPress={() => !disabledUI && !usedHints.position && reveal('position')}
+                  valueShown={usedHints.position ? String(gameData?.position) : null}
+                />
+                <HintButton
+                  label={"Player's Image"}
+                  multiplier="×0.50"
+                  disabled={usedHints.partialImage || !gameData?.photo || disabledUI}
+                  onPress={() => !disabledUI && !usedHints.partialImage && reveal('partialImage')}
+                  valueShown={
+                    usedHints.partialImage
+                      ? (
+                        <View style={styles.hintCropBox}>
+                          <Image source={{ uri: gameData?.photo }} style={styles.hintCroppedImage} />
+                        </View>
+                      )
+                      : null
+                  }
+                />
+                <HintButton
+                  label={"Player's First Letter"}
+                  multiplier="×0.25"
+                  disabled={usedHints.firstLetter || !gameData?.name || disabledUI}
+                  onPress={() => !disabledUI && !usedHints.firstLetter && reveal('firstLetter')}
+                  valueShown={usedHints.firstLetter ? String(gameData?.name?.[0]?.toUpperCase() || '') : null}
+                />
+              </View>
+            </View>
+
+            {/* Bottom spacer */}
+            <View style={{ height: 40 }} />
+          </ScrollView>
+        </View>
       </KeyboardAvoidingView>
 
       {/* Confetti (win) */}
@@ -922,28 +962,6 @@ export default function LiveGameMobile() {
 // -------------------------
 // Subcomponents
 // -------------------------
-function PageDots({ count, index, max = 9 }) {
-  if (!Number.isFinite(count) || count <= 1) return null;
-  const total = Math.max(1, count);
-  const capped = Math.min(max, total);
-
-  let start = 0;
-  if (total > capped) {
-    const half = Math.floor(capped / 2);
-    start = Math.min(Math.max(0, index - half), total - capped);
-  }
-  const items = Array.from({ length: Math.min(capped, total) }, (_, i) => start + i);
-
-  return (
-    <View style={styles.dotsRow}>
-      {items.map((i) => {
-        const active = i === index;
-        return <View key={i} style={[styles.dot, active && styles.dotActive]} />;
-      })}
-    </View>
-  );
-}
-
 function HintButton({ label, multiplier, onPress, disabled, valueShown, style }) {
   const hasValue = valueShown !== null && valueShown !== undefined && valueShown !== '';
   return (
@@ -976,47 +994,6 @@ function HintButton({ label, multiplier, onPress, disabled, valueShown, style })
   );
 }
 
-// Horizontal, paging-enabled Transfers carousel + dots
-function TransfersPager({ transfers, pageWidth, pageGap, maxDots }) {
-  const [index, setIndex] = useState(0);
-
-  if (!transfers?.length) {
-    return <Text style={styles.emptyTransfers}>No transfers found.</Text>;
-  }
-
-  const snap = pageWidth + pageGap;
-
-  const onScroll = (e) => {
-    const x = e.nativeEvent.contentOffset.x;
-    const i = Math.round(x / snap);
-    if (i !== index) setIndex(Math.max(0, Math.min(i, transfers.length - 1)));
-  };
-
-  return (
-    <View>
-      <ScrollView
-        horizontal
-        pagingEnabled
-        decelerationRate="fast"
-        snapToInterval={snap}
-        snapToAlignment="start"
-        showsHorizontalScrollIndicator={false}
-        onScroll={onScroll}
-        scrollEventThrottle={16}
-        contentContainerStyle={{ paddingHorizontal: 0 }}
-        style={{ marginHorizontal: -16 }} // stretch to card edges
-      >
-        <View style={{ flexDirection: 'row', gap: pageGap, paddingHorizontal: 16 }}>
-          {transfers.map((t, idx) => (
-            <TransferSlide key={`${t.date || t.season || 'row'}-${idx}`} t={t} width={pageWidth} />
-          ))}
-        </View>
-      </ScrollView>
-      <PageDots count={transfers.length} index={index} max={maxDots} />
-    </View>
-  );
-}
-
 function TransferSlide({ t, width }) {
   const isFuture = (() => {
     if (!t?.date) return false;
@@ -1026,7 +1003,7 @@ function TransferSlide({ t, width }) {
   })();
 
   return (
-    <View style={[styles.transferSlide, { width }]}>
+    <View style={[styles.transferSlide, width ? { width } : null]}>
       {/* Season + Date */}
       <View style={styles.transferColA}>
         <View style={styles.chip}><Text style={styles.chipText}>{t.season || '—'}</Text></View>
@@ -1062,99 +1039,11 @@ function ClubPill({ logo, name, flag }) {
   );
 }
 
-// Horizontal, paging-enabled Hints carousel (tap to reveal, swipe to switch) + dots
-function HintsPager({ gameData, usedHints, reveal, pageWidth, pageGap, maxDots }) {
-  const [index, setIndex] = useState(0);
-  const snap = pageWidth + pageGap;
-
-  const slides = [
-    {
-      key: 'age',
-      label: "Player's Age",
-      mult: '×0.90',
-      disabled: usedHints.age || !gameData?.age,
-      value: usedHints.age ? String(gameData?.age) : null,
-    },
-    {
-      key: 'nationality',
-      label: 'Nationality',
-      mult: '×0.90',
-      disabled: usedHints.nationality || !gameData?.nationality,
-      value: usedHints.nationality ? String(gameData?.nationality) : null,
-    },
-    {
-      key: 'position',
-      label: "Player's Position",
-      mult: '×0.80',
-      disabled: usedHints.position || !gameData?.position,
-      value: usedHints.position ? String(gameData?.position) : null,
-    },
-    {
-      key: 'partialImage',
-      label: "Player's Image",
-      mult: '×0.50',
-      disabled: usedHints.partialImage || !gameData?.photo,
-      value: usedHints.partialImage
-        ? (
-          <View style={styles.hintCropBox}>
-            <Image source={{ uri: gameData?.photo }} style={styles.hintCroppedImage} />
-          </View>
-        ) : null,
-    },
-    {
-      key: 'firstLetter',
-      label: "Player's First Letter",
-      mult: '×0.25',
-      disabled: usedHints.firstLetter || !gameData?.name,
-      value: usedHints.firstLetter ? String(gameData?.name?.[0]?.toUpperCase() || '') : null,
-    },
-  ];
-
-  const onScroll = (e) => {
-    const x = e.nativeEvent.contentOffset.x;
-    const i = Math.round(x / snap);
-    if (i !== index) setIndex(Math.max(0, Math.min(i, slides.length - 1)));
-  };
-
-  return (
-    <View>
-      <ScrollView
-        horizontal
-        pagingEnabled
-        decelerationRate="fast"
-        snapToInterval={snap}
-        snapToAlignment="start"
-        showsHorizontalScrollIndicator={false}
-        onScroll={onScroll}
-        scrollEventThrottle={16}
-        contentContainerStyle={{ paddingHorizontal: 0 }}
-        style={{ marginHorizontal: -16 }}
-      >
-        <View style={{ flexDirection: 'row', gap: pageGap, paddingHorizontal: 16 }}>
-          {slides.map((s) => (
-            <HintButton
-              key={s.key}
-              label={s.label}
-              multiplier={s.mult}
-              disabled={s.disabled}
-              onPress={() => !s.disabled && reveal(s.key)}
-              valueShown={s.value}
-              style={{ width: pageWidth }}
-            />
-          ))}
-        </View>
-      </ScrollView>
-      <PageDots count={slides.length} index={index} max={maxDots} />
-    </View>
-  );
-}
-
 /** Emoji Rain overlay (loss effect) - JS-only, no parent state updates */
 function EmojiRain() {
   const { width, height } = Dimensions.get('window');
   const EMOJIS = ['😭', '💀', '☠️', '😫', '🤬', '😢'];
   const COUNT = 26;
-  const DURATION = 2000;
 
   const items = useRef(
     Array.from({ length: COUNT }).map(() => ({
@@ -1170,12 +1059,11 @@ function EmojiRain() {
     const anims = items.map((it) =>
       Animated.timing(it.fall, {
         toValue: 1,
-        duration: DURATION + Math.floor(Math.random() * 1200),
+        duration: 2000 + Math.floor(Math.random() * 1200),
         delay: it.delay,
         useNativeDriver: true,
       })
     );
-    // no parent state updates here
     Animated.stagger(70, anims).start();
   }, [items]);
 
@@ -1200,7 +1088,7 @@ function EmojiRain() {
               top: -40,
               transform: [{ translateY }, { rotate }],
               fontSize: it.size,
-              fontFamily: 'Tektur_400Regular', // font on emoji too (doesn't affect glyph)
+              fontFamily: 'Tektur_400Regular',
             }}
           >
             {emoji}
@@ -1301,11 +1189,8 @@ const styles = StyleSheet.create({
   sugAvatarFallbackText: { fontSize: 12, color: '#6b7280', fontWeight: '700', fontFamily: 'Tektur_700Bold' },
   sugName: { fontSize: 14, color: '#111827', fontFamily: 'Tektur_400Regular' },
 
-  // Hints & Transfers paging
+  // Hints & Transfers (list styles reuse existing)
   transferSlide: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 12, padding: 12 },
-  dotsRow: { flexDirection: 'row', alignSelf: 'center', gap: 6, marginTop: 10 },
-  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#e5e7eb' },
-  dotActive: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#374151' },
 
   hintBtn: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, padding: 12 },
   hintBtnDisabled: { backgroundColor: '#f9fafb' },
@@ -1343,7 +1228,8 @@ const styles = StyleSheet.create({
   guessWarn: { color: '#ca8a04' },
   guessRed: { color: '#dc2626' },
   headerAvatar: { width: 28, height: 28, borderRadius: 14 },
-  fxOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 9999, elevation: 9999 },});
+  fxOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 9999, elevation: 9999 },
+});
 
 /* ------------------------- helpers ------------------------- */
 function safeStr(v) { return v == null ? '' : String(v); }
@@ -1357,4 +1243,3 @@ function formatFee(raw) {
   s = s.replace(/^\$/, '€').replace(/\$/g, '€').trim();
   return s || '—';
 }
-""

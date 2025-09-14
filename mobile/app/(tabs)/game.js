@@ -11,6 +11,7 @@ import {
   TextInput,
   Image,
   DeviceEventEmitter, // <-- ADDED
+  RefreshControl,     // <-- ADDED for pull-to-refresh
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -33,6 +34,8 @@ import {
   Tektur_400Regular,
   Tektur_700Bold,
 } from "@expo-google-fonts/tektur";
+
+import { API_BASE } from "../../lib/api";
 
 /* ---------------- helpers ---------------- */
 
@@ -216,6 +219,9 @@ export default function GameScreen() {
 
   // Buttons
   const [gameLoading, setGameLoading] = useState(false);
+
+  // Pull-to-refresh
+  const [refreshing, setRefreshing] = useState(false); // <-- ADDED
 
   /* --------- SAME loading method as default-filters.js --------- */
   async function fetchFromWebAPI() {
@@ -522,80 +528,100 @@ export default function GameScreen() {
   /* -------- Start game actions -------- */
 
   const startRegular = async () => {
-    try {
-      setGameLoading(true);
-      const player = await getRandomPlayer(
-        {
-          competitions: selectedCompetitionIds,
-          seasons: selectedSeasons,
-          minMarketValue: Number(minMarketValue) || 0,
-          minAppearances: Number(minAppearances) || 0,
-          userId: user?.id,
-        },
-        user?.id
-      );
-      if (!player) {
-        Alert.alert("No players found", "Try adjusting your filters.");
-        return;
-      }
+  try {
+    setGameLoading(true);
 
-       // ✅ CALCULATE & SEND POTENTIAL POINTS FROM HERE
-      const potentialPoints = Math.max(0, Number(poolCount) * 5);
+    // 1) Build the exact same filters the server uses for the pool
+    const roundFilters = {
+      competitions: selectedCompetitionIds.map(String),
+      seasons: selectedSeasons.map(String),
+      minMarketValue: Number(minMarketValue) || 0,
+      minAppearances: Number(minAppearances) || 0,
+      userId: user?.id,
+    };
 
-      // ✅ Navigate to /live-game with a JSON payload for live-game.js
-      router.push({
-        pathname: "/live-game",
-        params: {
-          payload: JSON.stringify({
-            ...player,
-            isDaily: false,
-            potentialPoints,                 // <-- send calculated potential
-            // (filters only for context/fallback; harmless if unused)
-            filters: { potentialPoints },    // <-- send alongside for consistency
-          }),
-        },
-      });
-    } catch (e) {
-      Alert.alert("Failed to start game", String(e?.message || e));
-    } finally {
-      setGameLoading(false);
+    // 2) Get a player using those filters (this returns a complete player)
+    const player = await getRandomPlayer(roundFilters, user?.id);
+    if (!player) {
+      Alert.alert("No players found", "Try adjusting your filters.");
+      return;
     }
-  };
 
-  const startDaily = async () => {
-    try {
-      setDailyLoading(true);
-      const d = daily || (await getDailyChallenge());
-      if (!d?.player_id && !d?.id) {
-        Alert.alert("No daily challenge available");
-        return;
-      }
+    // 3) Potential points from the current pool size
+    const potentialPoints = Math.max(0, Number(poolCount) * 5);
 
-      // Build the minimal-but-complete payload that live-game.js expects (id & name required)
-      const payload = {
-        id: String(d.player_id ?? d.id),
-        name: d.player_name ?? d.name,
-        age: d.age ?? null,
-        nationality: d.player_nationality ?? d.nationality ?? null,
-        position: d.player_position ?? d.position ?? null,
-        photo: d.player_photo ?? d.photo ?? null,
-        potentialPoints: 10000,
-        isDaily: true,
-        // filters only used for PostGame context & fallback potential
-        filters: { potentialPoints: 10000 },
-      };
+    // 4) Navigate with a full payload: full player + real filters
+    router.push({
+      pathname: "/live-game",
+      params: {
+        payload: JSON.stringify({
+          ...player,
+          isDaily: false,
+          potentialPoints,
+          filters: {
+            competitions: roundFilters.competitions,
+            seasons: roundFilters.seasons,
+            minMarketValue: roundFilters.minMarketValue,
+            minAppearances: roundFilters.minAppearances,
+          },
+        }),
+      },
+    });
+  } catch (e) {
+    Alert.alert("Failed to start game", String(e?.message || e));
+  } finally {
+    setGameLoading(false);
+  }
+};
 
-      // ✅ Navigate to /live-game with JSON payload
-      router.push({
-        pathname: "/live-game",
-        params: { payload: JSON.stringify(payload) },
-      });
-    } catch (e) {
-      Alert.alert("Failed to start daily", String(e?.message || e));
-    } finally {
-      setDailyLoading(false);
+const startDaily = async () => {
+  try {
+    setDailyLoading(true);
+
+    const d = daily || (await getDailyChallenge());
+    if (!d?.player_id && !d?.id) {
+      Alert.alert("No daily challenge available");
+      return;
     }
-  };
+    const playerId = String(d.player_id ?? d.id);
+
+    // 1) Fetch the full player record by id so the payload is complete
+    //    (same source live-game uses for transfers/facts)
+    const res = await fetch(`${API_BASE}/player/${encodeURIComponent(playerId)}`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) throw new Error("Failed to load daily player");
+    const full = await res.json();
+
+    // 2) Build the player object from canonical fields
+    const player = {
+      id: playerId,
+      name: full.name ?? full.player_name ?? d.player_name ?? d.name,
+      age: full.age ?? full.player_age ?? null,
+      nationality: full.nationality ?? full.player_nationality ?? null,
+      position: full.position ?? full.player_position ?? null,
+      photo: full.photo || full.player_photo || full.player_photo_url || null,
+      funFact: full.funFact ?? null,
+    };
+
+    // 3) Daily has fixed potential; no pool filters (and Postgame won’t show “Play Again” for daily)
+    router.push({
+      pathname: "/live-game",
+      params: {
+        payload: JSON.stringify({
+          ...player,
+          isDaily: true,
+          potentialPoints: 10000,
+          filters: {}, // keep structure consistent, not used for Daily
+        }),
+      },
+    });
+  } catch (e) {
+    Alert.alert("Failed to start daily", String(e?.message || e));
+  } finally {
+    setDailyLoading(false);
+  }
+};
 
   /* ---------- NON-elimination daily metrics (as on web) ---------- */
   const [nonElimTodayCount, setNonElimTodayCount] = useState(null);
@@ -677,6 +703,43 @@ export default function GameScreen() {
   // >>> NEW (lockout): reached daily limit?
   const reachedLimit = gamesTodayEffective >= maxGames;
 
+  // === ADDED: pull-to-refresh handler ===
+  const handleRefresh = async () => {
+    if (!user?.id) return;
+    setRefreshing(true);
+    try {
+      // Refresh limits & daily
+      const [lim, d] = await Promise.all([
+        getLimits(user.id).catch(() => null),
+        getDailyChallenge().catch(() => null),
+      ]);
+      if (lim) setLimits((l) => ({ ...l, ...lim }));
+      setDaily(d || null);
+
+      // Refresh counts for current filters
+      setCountsError("");
+      setLoadingCounts(true);
+      const payload = {
+        competitions: selectedCompetitionIds,
+        seasons: selectedSeasons,
+        minMarketValue: Number(minMarketValue) || 0,
+        minAppearances: Number(minAppearances) || 0,
+        userId: user.id,
+      };
+      const res = await getCounts(payload).catch((e) => {
+        setCountsError(String(e?.message || e));
+        return null;
+      });
+      if (res) {
+        setPoolCount(res?.poolCount || 0);
+        setTotalCount(res?.totalCount || 0);
+      }
+    } finally {
+      setLoadingCounts(false);
+      setRefreshing(false);
+    }
+  };
+
   /* ---------------- UI ---------------- */
 
   if (bootLoading || !fontsLoaded) {
@@ -693,15 +756,17 @@ export default function GameScreen() {
       ref={scrollRef} // <-- ADDED
       style={{ backgroundColor: "#f7faf7" }}
       contentContainerStyle={styles.container}
+      refreshControl={          /* <-- ADDED: pull-to-refresh */
+        <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+      }
     >
       {/* Daily Challenge */}
       <View style={styles.card}>
         <View style={[styles.cardTitle, { textAlign: "center" }]}>
           <Text style={[styles.cardTitle, { textAlign: "center", marginLeft: 6 }]}>🌟Daily Challenge🌟</Text>
         </View>
-
-        {/* Sentence ABOVE the button */}
-        <Text style={[styles.cardText, { textAlign: "center", marginTop: 8 }]}>
+        
+        <Text style={[styles.cardText, { textAlign: "center" }]}>
           {!limits.dailyPlayed
             ? "Today's Daily Challenge is live! Guess a star and grab 10,000 points and an extra game."
             : <>Next challenge in <Text style={styles.countdown}>{countdown}</Text></>}
@@ -777,7 +842,7 @@ export default function GameScreen() {
         {!reachedLimit ? (
           <>
             <Text style={[styles.cardText, { textAlign: "center", marginTop: 8 }]}>
-              Ready for a fresh challenge? Use filters to tune difficulty.
+              Ready for a fresh challenge?
             </Text>
             <Pressable
               onPress={startRegular}
@@ -788,9 +853,14 @@ export default function GameScreen() {
                 (gameLoading || poolCount === 0) && styles.buttonDisabled,
               ]}
             >
-              <Text style={styles.buttonText}>
-                {gameLoading ? "Generating Random Player…" : "Play a Daily Game"}
-              </Text>
+              {gameLoading ? (
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <ActivityIndicator color="#fff" />
+                  <Text style={styles.buttonText}>Generating Random Player…</Text>
+                </View>
+              ) : (
+                <Text style={styles.buttonText}>Play a Daily Game</Text>
+              )}
             </Pressable>
 
             {/* Potential points + Player Pool */}
@@ -1141,7 +1211,7 @@ const styles = StyleSheet.create({
     padding: 12,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "#e5e7eb",
-    marginBottom: 12,
+    marginBottom: 4,
   },
   subCard: {
     backgroundColor: "#ffffff",
@@ -1149,7 +1219,7 @@ const styles = StyleSheet.create({
     padding: 10,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "#e5e7eb",
-    marginBottom: 10,
+    marginBottom: 4,
   },
   cardHeader: {
     flexDirection: "row",
@@ -1160,7 +1230,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "700",
     color: "#0b3d24",
-    marginBottom: 8,
+    marginBottom: 4,
     fontFamily: "Tektur_700Bold", // font only
   },
   cardText: {
