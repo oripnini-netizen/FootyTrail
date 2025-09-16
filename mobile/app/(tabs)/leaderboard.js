@@ -11,6 +11,7 @@ import {
   Image,
   ScrollView,
   Switch,
+  Dimensions,
 } from "react-native";
 import { supabase } from "../../lib/supabase";
 
@@ -22,41 +23,63 @@ const TABS = ["Today", "Week", "Month", "All Time"];
 const METRIC_TOTAL = "Total Points";
 const METRIC_PPG = "Points/Game";
 
-// Helpers
+// Helpers (UTC-aligned)
 const periodStartFromTab = (now, tab) => {
-  if (tab === "Today") return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  // Anchor to UTC midnight of "today"
+  const utcMidnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  if (tab === "Today") return utcMidnight;
   if (tab === "Week") {
-    const d = new Date(now);
-    d.setDate(now.getDate() - 7);
+    const d = new Date(utcMidnight);
+    d.setUTCDate(d.getUTCDate() - 7);
     return d;
   }
   if (tab === "Month") {
-    const d = new Date(now);
-    d.setMonth(now.getMonth() - 1);
+    const d = new Date(utcMidnight);
+    d.setUTCMonth(d.getUTCMonth() - 1);
     return d;
   }
   return null; // All Time
 };
-const isToday = (isoOrDate) => {
+
+// Use UTC to decide "today"
+const isTodayUtc = (isoOrDate) => {
   const d = new Date(isoOrDate);
   const now = new Date();
   return (
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate()
+    d.getUTCFullYear() === now.getUTCFullYear() &&
+    d.getUTCMonth() === now.getUTCMonth() &&
+    d.getUTCDate() === now.getUTCDate()
   );
 };
+
 const formatTime = (seconds) => {
   const s = Number(seconds) || 0;
   const mins = Math.floor(s / 60);
   const secs = s % 60;
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 };
+
 const rankDisplay = (index) => {
   if (index === 0) return "🥇";
   if (index === 1) return "🥈";
   if (index === 2) return "🥉";
   return String(index + 1);
+};
+
+// UTC date-time formatter for modal game rows
+const formatUtcDateTime = (iso) => {
+  try {
+    const d = new Date(iso);
+    if (isNaN(d)) return "—";
+    const yyyy = d.getUTCFullYear();
+    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(d.getUTCDate()).padStart(2, "0");
+    const hh = String(d.getUTCHours()).padStart(2, "0");
+    const min = String(d.getUTCMinutes()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd} ${hh}:${min} UTC`;
+  } catch {
+    return "—";
+  }
 };
 
 export default function LeaderboardScreen() {
@@ -71,7 +94,6 @@ export default function LeaderboardScreen() {
     Text.defaultProps = Text.defaultProps || {};
     Text.defaultProps.style = [{ fontFamily: "Tektur_400Regular" }];
   } else if (Text?.defaultProps?.style) {
-    // ensure Tektur takes effect even if default style exists
     const base = Array.isArray(Text.defaultProps.style)
       ? Text.defaultProps.style
       : [Text.defaultProps.style];
@@ -119,15 +141,19 @@ export default function LeaderboardScreen() {
     }
 
     try {
+      const now = new Date(); // define before any use
       // Only fetch Daily Champions if the "Today" tab is selected
       let dailyPromise;
       if (tab === "Today") {
-        const todayStartIso = new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
+        const todayUtcStart = new Date(
+          Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+        ).toISOString();
+
         dailyPromise = supabase
           .from("games_records")
           .select("id, user_id, points_earned, player_name, created_at, won")
           .eq("is_daily_challenge", true)
-          .gte("created_at", todayStartIso)
+          .gte("created_at", todayUtcStart)
           .eq("won", true)
           .order("points_earned", { ascending: false })
           .limit(10);
@@ -136,7 +162,6 @@ export default function LeaderboardScreen() {
       }
 
       // Main leaderboard
-      const now = new Date();
       const start = periodStartFromTab(now, tab);
       const startIso = start ? start.toISOString() : null;
 
@@ -241,12 +266,8 @@ export default function LeaderboardScreen() {
           points: totalPoints,
           gamesCount: base.gamesCount,
           avgTime: base.gamesCount ? Math.round(base.totalTime / base.gamesCount) : 0,
-          successRate: base.gamesCount
-            ? Math.round((base.wins / base.gamesCount) * 100)
-            : 0,
-          avgPoints: base.gamesCount
-            ? Math.round(totalPoints / base.gamesCount)
-            : totalPoints,
+          successRate: base.gamesCount ? Math.round((base.wins / base.gamesCount) * 100) : 0,
+          avgPoints: base.gamesCount ? Math.round(totalPoints / base.gamesCount) : totalPoints,
         });
       }
 
@@ -333,6 +354,28 @@ export default function LeaderboardScreen() {
     }
   };
 
+  // ---------- "Daily Challenge" as a swipeable tab (Today only) ----------
+  const screenW = Dimensions.get("window").width;
+  const [subTab, setSubTab] = useState("Overall"); // "Overall" | "Daily"
+  const pagerRef = useRef(null);
+
+  // Reset subTab when leaving Today
+  useEffect(() => {
+    if (tab !== "Today") setSubTab("Overall");
+  }, [tab]);
+
+  const goToSubTab = (name) => {
+    setSubTab(name);
+    if (pagerRef.current) {
+      pagerRef.current.scrollTo({ x: name === "Overall" ? 0 : screenW, animated: true });
+    }
+  };
+
+  const onPagerScrollEnd = (e) => {
+    const page = Math.round(e.nativeEvent.contentOffset.x / screenW);
+    setSubTab(page === 0 ? "Overall" : "Daily");
+  };
+
   // Block until fonts are ready so typography is consistent
   if (!fontsLoaded || loading) {
     return (
@@ -357,67 +400,6 @@ export default function LeaderboardScreen() {
         ))}
       </View>
 
-      {/* Daily Champions — ONLY for Today, and specifically between the chips and the Per Game toggle */}
-      {tab === "Today" && (
-        <View style={styles.dailyCard}>
-          <Text style={styles.dailyHeader}>☆ Today's Daily Challenge Champions</Text>
-          {dailyChampions.length === 0 ? (
-            <View style={styles.dailyEmpty}>
-              <Text style={styles.dailyEmptyStar}>⭐</Text>
-              <Text style={styles.dailyEmptyTitle}>No champions yet today!</Text>
-              <Text style={styles.dailyEmptySub}>
-                Be the first to conquer today's daily challenge.
-              </Text>
-            </View>
-          ) : (
-            <FlatList
-              contentContainerStyle={{ padding: 12 }}
-              data={dailyChampions}
-              keyExtractor={(it) => String(it.id)}
-              renderItem={({ item, index }) => {
-                const user = item.user || {};
-                return (
-                  <View style={styles.dailyItem}>
-                    <View style={styles.dailyRankBubble}>
-                      <Text style={styles.dailyRankText}>{index + 1}</Text>
-                    </View>
-                    {user.profile_photo_url ? (
-                      <Image source={{ uri: user.profile_photo_url }} style={styles.avatarSm} />
-                    ) : (
-                      <View style={styles.avatarSmFallback}>
-                        <Text style={styles.avatarSmFallbackText}>
-                          {(user.full_name || "?").slice(0, 1)}
-                        </Text>
-                      </View>
-                    )}
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Pressable
-                        onPress={() =>
-                          openUserModal({
-                            userId: item.user_id,
-                            name: user.full_name || "Unknown Player",
-                            profilePhoto: user.profile_photo_url || "",
-                            memberSince: user.created_at
-                              ? new Date(user.created_at).toLocaleDateString()
-                              : "—",
-                          })
-                        }
-                      >
-                        <Text style={styles.dailyName} numberOfLines={1} ellipsizeMode="tail">
-                          {user.full_name || "Unknown Player"}
-                        </Text>
-                      </Pressable>
-                      <Text style={styles.dailyPoints}>{item.points_earned} points</Text>
-                    </View>
-                  </View>
-                );
-              }}
-              ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
-            />
-          )}
-        </View>
-      )}
-
       {/* Metric switch (Per Game) */}
       <View style={styles.switchRow}>
         <Text style={styles.switchLabel}>Per Game</Text>
@@ -427,63 +409,224 @@ export default function LeaderboardScreen() {
         />
       </View>
 
-      {/* Leaderboard list */}
-      <Text style={styles.sectionTitle}>Overall Rankings</Text>
-      <FlatList
-        contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 }}
-        data={rows}
-        keyExtractor={(item) => item.userId}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        renderItem={({ item, index }) => (
-          <Pressable onPress={() => openUserModal(item)} style={styles.cardRow}>
-            {/* Left: rank (medals) + avatar */}
-            <View style={styles.leftCol}>
-              <Text style={styles.rankText}>{rankDisplay(index)}</Text>
-              {item.profilePhoto ? (
-                <Image source={{ uri: item.profilePhoto }} style={styles.avatar} />
-              ) : (
-                <View style={styles.avatarFallback}>
-                  <Text style={styles.avatarFallbackText}>
-                    {(item.name || "?").slice(0, 1)}
+      {tab === "Today" ? (
+        <>
+          {/* Dual header row: Overall (left) • Daily Challenge (right, gold) */}
+          <View style={styles.subHeaderRow}>
+            <Pressable onPress={() => goToSubTab("Overall")}>
+              <Text
+                style={[
+                  styles.sectionTitle,
+                  subTab === "Overall" ? styles.subHeaderActive : styles.subHeaderInactive,
+                ]}
+              >
+                Overall Rankings
+              </Text>
+            </Pressable>
+
+            <Pressable onPress={() => goToSubTab("Daily")}>
+              <Text
+                style={[
+                  styles.sectionTitle,
+                  styles.dailyHeaderGold,
+                  subTab === "Daily" ? styles.subHeaderActive : styles.subHeaderInactive,
+                ]}
+              >
+                Daily Challenge
+              </Text>
+            </Pressable>
+          </View>
+
+          {/* Swipeable pager: page 1 = Overall list, page 2 = Daily Champions */}
+          <ScrollView
+            ref={pagerRef}
+            horizontal
+            pagingEnabled
+            onMomentumScrollEnd={onPagerScrollEnd}
+            showsHorizontalScrollIndicator={false}
+          >
+            {/* Page 1: Overall list */}
+            <View style={{ width: screenW }}>
+              <FlatList
+                contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 }}
+                data={rows}
+                keyExtractor={(item) => item.userId}
+                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+                renderItem={({ item, index }) => (
+                  <Pressable onPress={() => openUserModal(item)} style={styles.cardRow}>
+                    {/* Left: rank (medals) + avatar */}
+                    <View style={styles.leftCol}>
+                      <Text style={styles.rankText}>{rankDisplay(index)}</Text>
+                      {item.profilePhoto ? (
+                        <Image source={{ uri: item.profilePhoto }} style={styles.avatar} />
+                      ) : (
+                        <View style={styles.avatarFallback}>
+                          <Text style={styles.avatarFallbackText}>
+                            {(item.name || "?").slice(0, 1)}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+
+                    {/* Middle: name + joined */}
+                    <View style={styles.midCol}>
+                      <Text style={styles.playerName} numberOfLines={1} ellipsizeMode="tail">
+                        {item.name}
+                      </Text>
+                      <Text style={styles.memberSince} numberOfLines={1} ellipsizeMode="tail">
+                        Joined {item.memberSince}
+                      </Text>
+                    </View>
+
+                    {/* Right: points + compact stats */}
+                    <View style={styles.rightCol}>
+                      <Text style={styles.pointsValue}>
+                        {metric === METRIC_TOTAL
+                          ? Number(item.points || 0).toLocaleString()
+                          : item.avgPoints}
+                      </Text>
+                      <Text style={styles.pointsLabel}>
+                        {metric === METRIC_TOTAL ? "points" : "pts/game"}
+                      </Text>
+                      <Text style={styles.compactStats}>
+                        {item.gamesCount} • {formatTime(item.avgTime)} • {item.successRate}%
+                      </Text>
+                    </View>
+                  </Pressable>
+                )}
+                ListEmptyComponent={
+                  <View style={styles.emptyBox}>
+                    <Text style={{ color: "#6b7280", fontFamily: "Tektur_400Regular" }}>
+                      No leaderboard data for the selected period.
+                    </Text>
+                  </View>
+                }
+              />
+            </View>
+
+            {/* Page 2: Daily Champions (card moved from top into pager) */}
+            <View style={{ width: screenW, paddingBottom: 24 }}>
+              <View style={styles.dailyCard}>
+                <Text style={styles.dailyHeaderCardTitle}>☆ Today's Daily Challenge Champions</Text>
+                {dailyChampions.length === 0 ? (
+                  <View style={styles.dailyEmpty}>
+                    <Text style={styles.dailyEmptyStar}>⭐</Text>
+                    <Text style={styles.dailyEmptyTitle}>No champions yet today!</Text>
+                    <Text style={styles.dailyEmptySub}>
+                      Be the first to conquer today's daily challenge.
+                    </Text>
+                  </View>
+                ) : (
+                  <FlatList
+                    contentContainerStyle={{ padding: 12 }}
+                    data={dailyChampions}
+                    keyExtractor={(it) => String(it.id)}
+                    renderItem={({ item, index }) => {
+                      const user = item.user || {};
+                      return (
+                        <View style={styles.dailyItem}>
+                          <View style={styles.dailyRankBubble}>
+                            <Text style={styles.dailyRankText}>{index + 1}</Text>
+                          </View>
+                          {user.profile_photo_url ? (
+                            <Image source={{ uri: user.profile_photo_url }} style={styles.avatarSm} />
+                          ) : (
+                            <View style={styles.avatarSmFallback}>
+                              <Text style={styles.avatarSmFallbackText}>
+                                {(user.full_name || "?").slice(0, 1)}
+                              </Text>
+                            </View>
+                          )}
+                          <View style={{ flex: 1, minWidth: 0 }}>
+                            <Pressable
+                              onPress={() =>
+                                openUserModal({
+                                  userId: item.user_id,
+                                  name: user.full_name || "Unknown Player",
+                                  profilePhoto: user.profile_photo_url || "",
+                                  memberSince: user.created_at
+                                    ? new Date(user.created_at).toLocaleDateString()
+                                    : "—",
+                                })
+                              }
+                            >
+                              <Text style={styles.dailyName} numberOfLines={1} ellipsizeMode="tail">
+                                {user.full_name || "Unknown Player"}
+                              </Text>
+                            </Pressable>
+                            <Text style={styles.dailyPoints}>{item.points_earned} points</Text>
+                          </View>
+                        </View>
+                      );
+                    }}
+                    ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+                  />
+                )}
+              </View>
+            </View>
+          </ScrollView>
+        </>
+      ) : (
+        <>
+          {/* Non-Today tabs: keep single Overall list */}
+          <Text style={styles.sectionTitle}>Overall Rankings</Text>
+          <FlatList
+            contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 }}
+            data={rows}
+            keyExtractor={(item) => item.userId}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+            renderItem={({ item, index }) => (
+              <Pressable onPress={() => openUserModal(item)} style={styles.cardRow}>
+                {/* Left: rank (medals) + avatar */}
+                <View style={styles.leftCol}>
+                  <Text style={styles.rankText}>{rankDisplay(index)}</Text>
+                  {item.profilePhoto ? (
+                    <Image source={{ uri: item.profilePhoto }} style={styles.avatar} />
+                  ) : (
+                    <View style={styles.avatarFallback}>
+                      <Text style={styles.avatarFallbackText}>
+                        {(item.name || "?").slice(0, 1)}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+
+                {/* Middle: name + joined */}
+                <View style={styles.midCol}>
+                  <Text style={styles.playerName} numberOfLines={1} ellipsizeMode="tail">
+                    {item.name}
+                  </Text>
+                  <Text style={styles.memberSince} numberOfLines={1} ellipsizeMode="tail">
+                    Joined {item.memberSince}
                   </Text>
                 </View>
-              )}
-            </View>
 
-            {/* Middle: name + joined */}
-            <View style={styles.midCol}>
-              <Text style={styles.playerName} numberOfLines={1} ellipsizeMode="tail">
-                {item.name}
-              </Text>
-              <Text style={styles.memberSince} numberOfLines={1} ellipsizeMode="tail">
-                Joined {item.memberSince}
-              </Text>
-            </View>
-
-            {/* Right: points + compact stats */}
-            <View style={styles.rightCol}>
-              <Text style={styles.pointsValue}>
-                {metric === METRIC_TOTAL
-                  ? Number(item.points || 0).toLocaleString()
-                  : item.avgPoints}
-              </Text>
-              <Text style={styles.pointsLabel}>
-                {metric === METRIC_TOTAL ? "points" : "pts/game"}
-              </Text>
-              <Text style={styles.compactStats}>
-                {item.gamesCount} • {formatTime(item.avgTime)} • {item.successRate}%
-              </Text>
-            </View>
-          </Pressable>
-        )}
-        ListEmptyComponent={
-          <View style={styles.emptyBox}>
-            <Text style={{ color: "#6b7280", fontFamily: "Tektur_400Regular" }}>
-              No leaderboard data for the selected period.
-            </Text>
-          </View>
-        }
-      />
+                {/* Right: points + compact stats */}
+                <View style={styles.rightCol}>
+                  <Text style={styles.pointsValue}>
+                    {metric === METRIC_TOTAL
+                      ? Number(item.points || 0).toLocaleString()
+                      : item.avgPoints}
+                  </Text>
+                  <Text style={styles.pointsLabel}>
+                    {metric === METRIC_TOTAL ? "points" : "pts/game"}
+                  </Text>
+                  <Text style={styles.compactStats}>
+                    {item.gamesCount} • {formatTime(item.avgTime)} • {item.successRate}%
+                  </Text>
+                </View>
+              </Pressable>
+            )}
+            ListEmptyComponent={
+              <View style={styles.emptyBox}>
+                <Text style={{ color: "#6b7280", fontFamily: "Tektur_400Regular" }}>
+                  No leaderboard data for the selected period.
+                </Text>
+              </View>
+            }
+          />
+        </>
+      )}
 
       {/* User Modal */}
       <Modal
@@ -555,7 +698,7 @@ export default function LeaderboardScreen() {
                 <ScrollView>
                   {userGames.map((g) => {
                     const maskedName =
-                      g.is_daily_challenge && isToday(g.created_at)
+                      g.is_daily_challenge && isTodayUtc(g.created_at)
                         ? "Daily Challenge Player"
                         : g.player_name || "Unknown Player";
 
@@ -574,10 +717,8 @@ export default function LeaderboardScreen() {
                           <Text style={titleStyle} numberOfLines={1} ellipsizeMode="tail">
                             {maskedName}
                           </Text>
-                          {/* LEFT-ALIGNED played time */}
-                          <Text style={styles.gameSubLeft}>
-                            {new Date(g.created_at).toLocaleString()}
-                          </Text>
+                          {/* LEFT-ALIGNED played time in UTC */}
+                          <Text style={styles.gameSubLeft}>{formatUtcDateTime(g.created_at)}</Text>
                         </View>
 
                         <View style={{ alignItems: "flex-end" }}>
@@ -625,7 +766,7 @@ export default function LeaderboardScreen() {
 const styles = StyleSheet.create({
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
 
-  // Daily champions
+  // Daily champions (card)
   dailyCard: {
     margin: 12,
     borderRadius: 14,
@@ -633,7 +774,8 @@ const styles = StyleSheet.create({
     borderColor: "#fde68a",
     backgroundColor: "#fffbeb",
   },
-  dailyHeader: {
+  // Title at top of the daily card (inside pager)
+  dailyHeaderCardTitle: {
     borderBottomWidth: 1,
     borderBottomColor: "#fef3c7",
     textAlign: "center",
@@ -718,7 +860,7 @@ const styles = StyleSheet.create({
   },
   switchLabel: { color: "#374151", fontFamily: "Tektur_700Bold" },
 
-  // Section title
+  // Section title (reused)
   sectionTitle: {
     marginTop: 4,
     marginHorizontal: 12,
@@ -727,6 +869,19 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: "Tektur_700Bold",
   },
+
+  // sub header row for Today pager
+  subHeaderRow: {
+    marginTop: 4,
+    marginHorizontal: 12,
+    marginBottom: 6,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  subHeaderActive: { opacity: 1 },
+  subHeaderInactive: { opacity: 0.7 },
+  dailyHeaderGold: { color: "#a16207" }, // gold-ish
 
   // Leaderboard rows
   cardRow: {
@@ -832,9 +987,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   gameTitle: { fontFamily: "Tektur_700Bold" },
-  // RIGHT-aligned meta used on the right column lines
   gameSub: { color: "#6b7280", fontSize: 12, marginTop: 2, textAlign: "right" },
-  // LEFT-aligned time line (requested change)
   gameSubLeft: { color: "#6b7280", fontSize: 12, marginTop: 2, textAlign: "left" },
   gamePoints: { fontFamily: "Tektur_700Bold", textAlign: "right" },
 });

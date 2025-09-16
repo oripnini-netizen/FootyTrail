@@ -1,3 +1,4 @@
+// mobile/app/elimination.js
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
@@ -8,12 +9,16 @@ import {
   Pressable,
   TouchableOpacity,
   StyleSheet,
+  Modal,
+  Image,
+  Animated,
+  Easing,
   Dimensions,
 } from "react-native";
+import { supabase } from "../../lib/supabase";
 import { useRouter } from "expo-router";
-import { supabase } from "../../lib/supabase"; // fixed path
 
-// ---------- Small utils ----------
+/* ------------------------------- Small utils ------------------------------ */
 function fmtDuration(ms) {
   if (!Number.isFinite(ms) || ms <= 0) return "—";
   const s = Math.floor(ms / 1000);
@@ -25,7 +30,11 @@ function fmtDuration(ms) {
   return `${ss}s`;
 }
 function fmtDateTime(iso) {
-  try { return new Date(iso).toLocaleString(); } catch { return "—"; }
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return "—";
+  }
 }
 function useCountdown(endIso) {
   const [left, setLeft] = useState(() => compute(endIso));
@@ -43,27 +52,42 @@ function useCountdown(endIso) {
   }
 }
 
-// ---------- Screen ----------
+// deterministic pseudo-random (so avatars don't jump every render)
+function seededRand(seed) {
+  // xorshift32
+  let x = seed | 0;
+  x ^= x << 13;
+  x ^= x >>> 17;
+  x ^= x << 5;
+  // map to [0,1)
+  return ((x >>> 0) % 100000) / 100000;
+}
+function strHash(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+/* ---------------------------------- Page ---------------------------------- */
 export default function EliminationScreen() {
   const router = useRouter();
   const [userId, setUserId] = useState(null);
 
-  const [lobby, setLobby] = useState([]);
+  const [upcoming, setUpcoming] = useState([]); // “lobby”
   const [live, setLive] = useState([]);
   const [finished, setFinished] = useState([]);
 
-  const [loading, setLoading] = useState({ lobby: true, live: true, finished: true });
-  const [error, setError] = useState({ lobby: "", live: "", finished: "" });
+  const [loading, setLoading] = useState({ upcoming: true, live: true, finished: true });
+  const [error, setError] = useState({ upcoming: "", live: "", finished: "" });
   const [refreshing, setRefreshing] = useState(false);
+  const [showAllFinished, setShowAllFinished] = useState(false);
 
   const [refreshToken, setRefreshToken] = useState(0);
   const [hardRefreshToken, setHardRefreshToken] = useState(0);
   const autoStartTriedRef = useRef(new Set());
-
-  // swipe state
-  const [tabIndex, setTabIndex] = useState(0);
-  const scrollRef = useRef(null);
-  const { width } = Dimensions.get("window");
 
   // get user id
   useEffect(() => {
@@ -73,682 +97,1147 @@ export default function EliminationScreen() {
       if (!alive) return;
       setUserId(error ? null : data?.user?.id ?? null);
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
 
   const reloadLists = useCallback(async () => {
     if (!userId) {
-      setLobby([]); setLive([]); setFinished([]);
-      setLoading({ lobby: false, live: false, finished: false });
-      setError({ lobby: "", live: "", finished: "" });
+      setUpcoming([]);
+      setLive([]);
+      setFinished([]);
+      setLoading({ upcoming: false, live: false, finished: false });
+      setError({ upcoming: "", live: "", finished: "" });
       return;
     }
 
-    // Lobby
-    setLoading(s => ({ ...s, lobby: true }));
-    setError(e => ({ ...e, lobby: "" }));
+    // ----------------------------- Upcoming -----------------------------
+    setLoading((s) => ({ ...s, upcoming: true }));
+    setError((e) => ({ ...e, upcoming: "" }));
     try {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
-        .select("id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id")
+        .select(
+          "id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id"
+        )
         .eq("status", "lobby")
         .order("created_at", { ascending: false });
       if (err) throw err;
 
       const all = Array.isArray(data) ? data : [];
-      const pub = all.filter(t => ((t?.filters || {}).visibility || "private") === "public");
-      const priv = all.filter(t => ((t?.filters || {}).visibility || "private") !== "public");
+      const pub = all.filter((t) => ((t?.filters || {}).visibility || "private") === "public");
+      const priv = all.filter((t) => ((t?.filters || {}).visibility || "private") !== "public");
+
       let canSeePriv = [];
       if (priv.length) {
-        const ids = priv.map(t => t.id);
+        const ids = priv.map((t) => t.id);
         const { data: mine } = await supabase
           .from("elimination_participants")
           .select("tournament_id, invite_status")
           .eq("user_id", userId)
           .in("tournament_id", ids);
-        const allowedIds = new Set((mine || []).map(r => r.tournament_id));
-        canSeePriv = priv.filter(t => t.owner_id === userId || allowedIds.has(t.id));
+        const allowedIds = new Set((mine || []).map((r) => r.tournament_id));
+        canSeePriv = priv.filter((t) => t.owner_id === userId || allowedIds.has(t.id));
       }
-      const list = [...pub, ...canSeePriv].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-      setLobby(list);
+      const list = [...pub, ...canSeePriv].sort(
+        (a, b) => new Date(b.created_at) - new Date(a.created_at)
+      );
+      setUpcoming(list);
 
-      // Opportunistic autostart
-      const due = list.filter(t => {
+      // Opportunistic auto-start for due upcoming tournaments
+      const due = list.filter((t) => {
         const dl = t?.join_deadline ? new Date(t.join_deadline) : null;
         const isDue = !!dl && dl <= new Date();
         const notTried = !autoStartTriedRef.current.has(t.id);
         return isDue && notTried;
       });
       if (due.length) {
-        due.forEach(t => autoStartTriedRef.current.add(t.id));
+        due.forEach((t) => autoStartTriedRef.current.add(t.id));
         await Promise.allSettled(
-          due.map(t => supabase.rpc("start_elimination_tournament", { p_tournament_id: t.id }))
+          due.map((t) => supabase.rpc("start_elimination_tournament", { p_tournament_id: t.id }))
         );
       }
     } catch (e) {
-      setError(s => ({ ...s, lobby: e?.message || "Failed to load." }));
-      setLobby([]);
+      setError((s) => ({ ...s, upcoming: e?.message || "Failed to load." }));
+      setUpcoming([]);
     } finally {
-      setLoading(s => ({ ...s, lobby: false }));
+      setLoading((s) => ({ ...s, upcoming: false }));
     }
 
-    // Live
-    setLoading(s => ({ ...s, live: true }));
-    setError(e => ({ ...e, live: "" }));
+    // --------------------------------- Live ---------------------------------
+    setLoading((s) => ({ ...s, live: true }));
+    setError((e) => ({ ...e, live: "" }));
     try {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
-        .select("id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id")
+        .select(
+          "id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id"
+        )
         .eq("status", "live")
         .order("created_at", { ascending: false });
       if (err) throw err;
+
       const all = Array.isArray(data) ? data : [];
-      const ids = all.map(t => t.id);
+      const ids = all.map((t) => t.id);
       const { data: myRows } = await supabase
         .from("elimination_participants")
         .select("tournament_id, invite_status")
         .eq("user_id", userId)
         .in("tournament_id", ids);
-      const accepted = new Set((myRows || []).filter(r => (r.invite_status || "").toLowerCase() === "accepted").map(r => r.tournament_id));
-      setLive(all.filter(t => accepted.has(t.id)));
+      const accepted = new Set(
+        (myRows || [])
+          .filter((r) => (r.invite_status || "").toLowerCase() === "accepted")
+          .map((r) => r.tournament_id)
+      );
+      setLive(all.filter((t) => accepted.has(t.id)));
     } catch (e) {
-      setError(s => ({ ...s, live: e?.message || "Failed to load." }));
+      setError((s) => ({ ...s, live: e?.message || "Failed to load." }));
       setLive([]);
     } finally {
-      setLoading(s => ({ ...s, live: false }));
+      setLoading((s) => ({ ...s, live: false }));
     }
 
-    // Finished
-    setLoading(s => ({ ...s, finished: true }));
-    setError(e => ({ ...e, finished: "" }));
+    // ------------------------------- Finished -------------------------------
+    setLoading((s) => ({ ...s, finished: true }));
+    setError((e) => ({ ...e, finished: "" }));
     try {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
-        .select("id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id")
+        .select(
+          "id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id"
+        )
         .eq("status", "finished")
         .order("created_at", { ascending: false });
       if (err) throw err;
       setFinished(Array.isArray(data) ? data : []);
     } catch (e) {
-      setError(s => ({ ...s, finished: e?.message || "Failed to load." }));
+      setError((s) => ({ ...s, finished: e?.message || "Failed to load." }));
       setFinished([]);
     } finally {
-      setLoading(s => ({ ...s, finished: false }));
-      setRefreshToken(t => t + 1);
+      setLoading((s) => ({ ...s, finished: false }));
+      setRefreshToken((t) => t + 1);
     }
   }, [userId]);
 
+  // initial + on user change
   useEffect(() => {
     if (!userId) return;
     reloadLists();
   }, [userId, reloadLists]);
 
-  useEffect(() => {
-    if ((lobby.length || live.length) === 0) return;
-    const id = setInterval(() => reloadLists(), 30000);
-    return () => clearInterval(id);
-  }, [lobby.length, live.length, reloadLists]);
-
-  // realtime subscriptions
+  // ------------------------- Realtime (no polling) -------------------------
   useEffect(() => {
     const ch = supabase
       .channel("elim-mobile-realtime")
-      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_tournaments" }, payload => {
-        const isInsert = payload?.eventType === "INSERT";
-        const stakeChanged = (payload?.old?.stake_points ?? null) !== (payload?.new?.stake_points ?? null);
-        if (isInsert || stakeChanged) setHardRefreshToken(t => t + 1);
+      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_tournaments" }, () =>
+        reloadLists()
+      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_rounds" }, () => {
+        setHardRefreshToken((t) => t + 1);
         reloadLists();
       })
-      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_rounds" }, payload => {
-        const wasOpen = payload?.old?.closed_at == null;
-        const nowClosed = payload?.new?.closed_at != null;
-        if (wasOpen && nowClosed) setHardRefreshToken(t => t + 1);
-        reloadLists();
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_round_entries" }, () => reloadLists())
-      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_participants" }, payload => {
-        const isInsert = payload?.eventType === "INSERT";
-        if (isInsert) setHardRefreshToken(t => t + 1);
-        reloadLists();
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "point_transactions" }, () => reloadLists())
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "elimination_round_entries" },
+        () => reloadLists()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "elimination_participants" },
+        () => {
+          setHardRefreshToken((t) => t + 1);
+          reloadLists();
+        }
+      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "point_transactions" }, () =>
+        reloadLists()
+      )
       .subscribe();
-    return () => { supabase.removeChannel(ch); };
+
+    return () => {
+      supabase.removeChannel(ch);
+    };
   }, [reloadLists]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    try { await reloadLists(); } finally { setRefreshing(false); }
+    try {
+      await reloadLists();
+    } finally {
+      setRefreshing(false);
+    }
   }, [reloadLists]);
 
-  // swipe helpers
-  const goToTab = (index) => {
-    setTabIndex(index);
-    if (scrollRef.current) {
-      scrollRef.current.scrollTo({ x: width * index, animated: true });
-    }
-  };
-  const onMomentumEnd = (e) => {
-    const page = Math.round(e.nativeEvent.contentOffset.x / width);
-    if (page !== tabIndex) setTabIndex(page);
-  };
-
-  // Section renderers
-  const renderList = (items, statusKey) => {
-    const isLoading = loading[statusKey];
-    const err = error[statusKey];
-
-    if (isLoading) {
-      return (
-        <View style={styles.loadingRow}>
-          <ActivityIndicator />
-          <Text style={styles.loadingText}>Loading…</Text>
-        </View>
-      );
-    }
-    if (err) {
-      return (
-        <View style={styles.errorBox}>
-          <Text style={styles.errorTitle}>Couldn’t load</Text>
-          <Text style={styles.errorText}>{String(err)}</Text>
-        </View>
-      );
-    }
-    if (!items.length) {
-      return <Text style={styles.emptyText}>No challenges here.</Text>;
-    }
-
-    return (
-      <View style={{ gap: 12 }}>
-        {items.map((t) => (
-          <TournamentCardMobileBR
-            key={t.id}
-            tournament={t}
-            userId={userId}
-            refreshToken={refreshToken}
-            hardRefreshToken={hardRefreshToken}
-            onChanged={reloadLists}
-          />
-        ))}
-      </View>
-    );
-  };
+  // finished visible subset control
+  const visibleFinished = useMemo(
+    () => (showAllFinished ? finished : finished.slice(0, 1)),
+    [showAllFinished, finished]
+  );
 
   return (
-    <View style={{ flex: 1 }}>
-      {/* Tabs header */}
-      <View style={styles.tabsHeader}>
-        {["Lobby", "Live", "Finished"].map((label, i) => (
-          <TouchableOpacity key={label} onPress={() => goToTab(i)} style={[styles.tabBtn, tabIndex === i && styles.tabBtnActive]}>
-            <Text style={[styles.tabText, tabIndex === i && styles.tabTextActive]}>{label}</Text>
-          </TouchableOpacity>
-        ))}
-        <TouchableOpacity style={styles.createBtn} onPress={() => router.push("/elimination-create")}>
-          <Text style={styles.createBtnText}>+ Create</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Swipeable pages */}
+    <View style={{ flex: 1, backgroundColor: "#0a0f0b" }}>
       <ScrollView
-        ref={scrollRef}
-        horizontal
-        pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        onMomentumScrollEnd={onMomentumEnd}
+        contentContainerStyle={{ padding: 12, paddingBottom: 32 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        <View style={[styles.page, { width }]}>{renderList(lobby, "lobby")}</View>
-        <View style={[styles.page, { width }]}>{renderList(live, "live")}</View>
-        <View style={[styles.page, { width }]}>{renderList(finished.slice(0, 1), "finished")}</View>
+        {/* --------- Top CTA: Create Challenge --------- */}
+        <View style={{ marginBottom: 12 }}>
+          <TouchableOpacity
+            style={[styles.primaryBtn, { alignSelf: "flex-start", paddingHorizontal: 14 }]}
+            onPress={() => useRouter().push("/elimination-create")}
+          >
+            <Text style={styles.primaryBtnText}>+ Create Challenge</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* ------------------------------- Live ------------------------------- */}
+        <SectionHeader title={`Live (${live.length})`} />
+        {loading.live ? (
+          <Skeleton />
+        ) : error.live ? (
+          <ErrorBox message={error.live} />
+        ) : live.length === 0 ? (
+          <EmptyText text="No live challenges." />
+        ) : (
+          <View style={{ gap: 12 }}>
+            {live.map((t) => (
+              <TournamentCardMobileBR
+                key={t.id}
+                tournament={t}
+                userId={userId}
+                refreshToken={refreshToken}
+                hardRefreshToken={hardRefreshToken}
+                onChanged={reloadLists}
+                defaultCollapsed={false /* Live expanded by default */}
+              />
+            ))}
+          </View>
+        )}
+
+        {/* ----------------------------- Upcoming ---------------------------- */}
+        <SectionHeader title={`Upcoming (${upcoming.length})`} />
+        {loading.upcoming ? (
+          <Skeleton />
+        ) : error.upcoming ? (
+          <ErrorBox message={error.upcoming} />
+        ) : upcoming.length === 0 ? (
+          <EmptyText text="No upcoming challenges." />
+        ) : (
+          <View style={{ gap: 12 }}>
+            {upcoming.map((t) => (
+              <TournamentCardMobileBR
+                key={t.id}
+                tournament={t}
+                userId={userId}
+                refreshToken={refreshToken}
+                hardRefreshToken={hardRefreshToken}
+                onChanged={reloadLists}
+                defaultCollapsed={true /* Upcoming collapsed by default */}
+              />
+            ))}
+          </View>
+        )}
+
+        {/* ----------------------------- Finished ---------------------------- */}
+        <SectionHeader title={`Finished (${finished.length})`} />
+        {loading.finished ? (
+          <Skeleton />
+        ) : error.finished ? (
+          <ErrorBox message={error.finished} />
+        ) : finished.length === 0 ? (
+          <EmptyText text="No finished challenges yet." />
+        ) : (
+          <>
+            <View style={{ gap: 12 }}>
+              {visibleFinished.map((t) => (
+                <TournamentCardMobileBR
+                  key={t.id}
+                  tournament={t}
+                  userId={userId}
+                  refreshToken={refreshToken}
+                  hardRefreshToken={hardRefreshToken}
+                  onChanged={reloadLists}
+                  defaultCollapsed={true}
+                />
+              ))}
+            </View>
+            {finished.length > 1 && (
+              <View style={{ alignItems: "center", marginTop: 8 }}>
+                <TouchableOpacity
+                  onPress={() => setShowAllFinished((v) => !v)}
+                  style={styles.showMoreBtn}
+                >
+                  <Text style={styles.showMoreText}>
+                    {showAllFinished
+                      ? "Hide previous finished challenges"
+                      : `Show previous finished challenges (${finished.length - 1})`}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </>
+        )}
+        <View style={{ height: 24 }} />
       </ScrollView>
     </View>
   );
 }
 
-// ---------- Battle-Royale styled tournament card (React-Native port) ----------
+/* --------------------------- Small UI atoms --------------------------- */
+function SectionHeader({ title }) {
+  return (
+    <View style={{ paddingVertical: 6 }}>
+      <Text style={{ fontSize: 18, fontWeight: "800", color: "#a7f3d0" }}>{title}</Text>
+    </View>
+  );
+}
+function EmptyText({ text }) {
+  return <Text style={{ color: "#94a3b8" }}>{text}</Text>;
+}
+function ErrorBox({ message }) {
+  return (
+    <View style={styles.errorBox}>
+      <Text style={styles.errorTitle}>Couldn’t load</Text>
+      <Text style={styles.errorText}>{String(message)}</Text>
+    </View>
+  );
+}
+function Skeleton() {
+  return (
+    <View style={{ gap: 12 }}>
+      {[0, 1].map((i) => (
+        <View key={i} style={styles.skeleton} />
+      ))}
+    </View>
+  );
+}
+
+/* --------------- Battle-Royale styled tournament card (RN) --------------- */
 function TournamentCardMobileBR({
   tournament,
   userId,
   refreshToken,
   hardRefreshToken,
   onChanged,
+  defaultCollapsed = true,
 }) {
-  const isLobby = tournament.status === "lobby";
+  const router = useRouter();
+  const isUpcoming = tournament.status === "lobby";
   const isLive = tournament.status === "live";
   const isFinished = tournament.status === "finished";
   const timeLimitMin = Math.round((tournament.round_time_limit_seconds || 0) / 60);
   const roundsToElim = Math.max(1, Number(tournament.rounds_to_elimination || 1));
 
   const [loading, setLoading] = useState(true);
-  const [participants, setParticipants] = useState([]); // users with invite+state
-  const [rounds, setRounds] = useState([]);             // rounds meta
+  const [participants, setParticipants] = useState([]); // from elimination_participants
+  const [rounds, setRounds] = useState([]); // rounds meta
   const [entriesByRound, setEntriesByRound] = useState({}); // round_id -> entries
-  const [availableToday, setAvailableToday] = useState(null);
+  const [usersById, setUsersById] = useState({}); // ANY user we need (participants or entries)
+  const [youEliminatedRound, setYouEliminatedRound] = useState(null);
   const [busy, setBusy] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  // pulsing aura (kept)
+  const pulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 1200, easing: Easing.out(Easing.quad), useNativeDriver: false }),
+        Animated.timing(pulse, { toValue: 0, duration: 1200, easing: Easing.in(Easing.quad), useNativeDriver: false }),
+      ])
+    ).start();
+  }, [pulse]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
       try {
+        // participants (may be empty in your data)
         const { data: partRows } = await supabase
           .from("elimination_participants")
-          .select("user_id, state, invite_status")
+          .select("user_id, state, invite_status, eliminated_at_round")
           .eq("tournament_id", tournament.id);
 
-        const ids = (partRows || []).map(r => r.user_id);
-        let users = [];
-        if (ids.length) {
-          const { data: usersRows } = await supabase
-            .from("users")
-            .select("id, full_name, email, profile_photo_url")
-            .in("id", ids);
-          users = usersRows || [];
-        }
-        const withMeta = (users || []).map(u => {
-          const p = (partRows || []).find(x => x.user_id === u.id);
-          return { ...u, state: p?.state || null, invite_status: p?.invite_status || "pending" };
-        });
+        const participantIds = (partRows || []).map((r) => r.user_id);
 
+        // rounds
         const { data: roundRows } = await supabase
           .from("elimination_rounds")
           .select("id, round_number, started_at, ends_at, closed_at, player_id, is_elimination")
           .eq("tournament_id", tournament.id)
           .order("round_number", { ascending: true });
 
+        // entries per round (include game_record_id so we can mark "played")
         const entriesMap = {};
-        for (const r of (roundRows || [])) {
+        let entryUserIds = new Set();
+        for (const r of roundRows || []) {
           const { data: ent } = await supabase
             .from("elimination_round_entries")
-            .select("user_id, points_earned")
+            .select("user_id, points_earned, started, game_record_id")
             .eq("round_id", r.id);
-          entriesMap[r.id] = Array.isArray(ent) ? ent : [];
+          const arr = Array.isArray(ent) ? ent : [];
+          entriesMap[r.id] = arr;
+          arr.forEach((e) => entryUserIds.add(e.user_id));
         }
 
-        let avail = null;
-        try {
-          const { data } = await supabase.rpc("pt_available_today", { p_uid: userId });
-          avail = Number(data || 0);
-        } catch { /* ignore */ }
+        // fetch users for participants + users who appear in entries
+        const allIds = Array.from(new Set([...participantIds, ...entryUserIds]));
+        let usersRows = [];
+        if (allIds.length) {
+          const { data: uRows } = await supabase
+            .from("users")
+            .select("id, full_name, email, profile_photo_url")
+            .in("id", allIds);
+          usersRows = uRows || [];
+        }
+        const usersByIdNext = Object.fromEntries(usersRows.map((u) => [u.id, u]));
+
+        // attach meta to participants (if any)
+        const withMeta = (participantIds.length ? participantIds : allIds).map((uid) => {
+          const u = usersByIdNext[uid] || { id: uid };
+          const p = (partRows || []).find((x) => x.user_id === uid);
+          return {
+            ...u,
+            state: p?.state || null,
+            invite_status: p?.invite_status || "accepted", // assume accepted if he started
+            eliminated_at_round: p?.eliminated_at_round ?? null,
+          };
+        });
 
         if (!cancelled) {
           setParticipants(withMeta);
           setRounds(Array.isArray(roundRows) ? roundRows : []);
           setEntriesByRound(entriesMap);
-          setAvailableToday(avail);
+          setUsersById(usersByIdNext);
+
+          const me = withMeta.find((u) => u.id === userId);
+          setYouEliminatedRound(me?.eliminated_at_round ?? null);
         }
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [tournament.id, refreshToken, hardRefreshToken, userId]);
 
-  // compute live round & countdown
-  const activeRound = useMemo(() => {
-    if (!rounds?.length) return null;
-    const open = [...rounds].reverse().find(r => !r.closed_at);
-    return open || null;
-  }, [rounds]);
-  const countdown = useCountdown(activeRound?.ends_at || null);
-
-  // acceptance / decline
-  const acceptInvite = useCallback(async () => {
-    setBusy("accept");
-    try {
-      const { error } = await supabase.rpc("accept_tournament_invite", { p_tournament_id: tournament.id });
-      if (error) throw error;
-      onChanged && onChanged();
-    } catch (e) {
-      console.warn("[elim] accept failed", e);
-    } finally { setBusy(""); }
-  }, [tournament.id, onChanged]);
-
-  const declineInvite = useCallback(async () => {
-    setBusy("decline");
-    try {
-      const { error } = await supabase.rpc("decline_tournament_invite", { p_tournament_id: tournament.id });
-      if (error) throw error;
-      onChanged && onChanged();
-    } catch (e) {
-      console.warn("[elim] decline failed", e);
-    } finally { setBusy(""); }
-  }, [tournament.id, onChanged]);
-
-  // derive battle-royale datasets
-  const acceptedUsers = useMemo(
-    () => participants.filter(p => (p.invite_status || "").toLowerCase() === "accepted"),
+  const acceptedCount = useMemo(
+    () => participants.filter((p) => (p.invite_status || "").toLowerCase() === "accepted").length,
     [participants]
   );
-  const survivorsSet = useMemo(() => {
-    // build elimination via block-sum logic at elim rounds
-    let activeSet = new Set(acceptedUsers.map(u => u.id));
-    let blockPoints = new Map([...activeSet].map(uid => [uid, 0]));
-    const ordered = [...rounds].sort((a,b) => (a.round_number||0) - (b.round_number||0));
-    for (const r of ordered) {
-      const entries = entriesByRound[r.id] || [];
-      const ptsByUser = new Map(entries.map(e => [e.user_id, Number(e.points_earned ?? 0)]));
-      for (const uid of activeSet) {
-        const prev = blockPoints.get(uid) ?? 0;
-        blockPoints.set(uid, prev + (ptsByUser.get(uid) ?? 0));
-      }
-      const isElimination = typeof r.is_elimination === "boolean"
-        ? r.is_elimination
-        : ((Number(r.round_number) || 0) % Math.max(1, Number(tournament.rounds_to_elimination || 1)) === 0);
-      if (!isElimination) continue;
-
-      let minSum = Infinity, maxSum = -Infinity;
-      for (const uid of activeSet) {
-        const v = blockPoints.get(uid) ?? 0;
-        if (v < minSum) minSum = v;
-        if (v > maxSum) maxSum = v;
-      }
-      const allTied = Number.isFinite(minSum) && minSum === maxSum;
-      if (!allTied && maxSum > minSum) {
-        for (const uid of Array.from(activeSet)) {
-          if ((blockPoints.get(uid) ?? 0) === minSum) activeSet.delete(uid);
-        }
-      }
-      blockPoints = new Map([...activeSet].map(uid => [uid, 0]));
-    }
-    return activeSet;
-  }, [acceptedUsers, rounds, entriesByRound, tournament.rounds_to_elimination]);
-
-  const eliminatedMap = useMemo(() => {
-    // map userId -> elimination round (first elim round where they dropped)
-    const map = new Map();
-    let activeSet = new Set(acceptedUsers.map(u => u.id));
-    let blockPoints = new Map([...activeSet].map(uid => [uid, 0]));
-    const ordered = [...rounds].sort((a,b) => (a.round_number||0) - (b.round_number||0));
-    for (const r of ordered) {
-      const entries = entriesByRound[r.id] || [];
-      const ptsByUser = new Map(entries.map(e => [e.user_id, Number(e.points_earned ?? 0)]));
-      for (const uid of activeSet) {
-        const prev = blockPoints.get(uid) ?? 0;
-        blockPoints.set(uid, prev + (ptsByUser.get(uid) ?? 0));
-      }
-      const isElimination = typeof r.is_elimination === "boolean"
-        ? r.is_elimination
-        : ((Number(r.round_number) || 0) % Math.max(1, Number(tournament.rounds_to_elimination || 1)) === 0);
-      if (!isElimination) continue;
-
-      let minSum = Infinity, maxSum = -Infinity;
-      for (const uid of activeSet) {
-        const v = blockPoints.get(uid) ?? 0;
-        if (v < minSum) minSum = v;
-        if (v > maxSum) maxSum = v;
-      }
-      const allTied = Number.isFinite(minSum) && minSum === maxSum;
-      if (!allTied && maxSum > minSum) {
-        for (const uid of Array.from(activeSet)) {
-          if ((blockPoints.get(uid) ?? 0) === minSum) {
-            map.set(uid, r.round_number || 0);
-            activeSet.delete(uid);
-          }
-        }
-      }
-      blockPoints = new Map([...activeSet].map(uid => [uid, 0]));
-    }
-    return map;
-  }, [acceptedUsers, rounds, entriesByRound, tournament.rounds_to_elimination]);
-
-  const survivorsCount = survivorsSet.size;
-  const youElimRound = eliminatedMap.get(userId) || null;
-  const youStatusText = youElimRound ? `Eliminated R${youElimRound}` : "You’re still in!";
-
-  const inviteStats = useMemo(() => {
-    let a = 0, p = 0, d = 0, mine = null;
-    for (const u of participants) {
-      const s = (u.invite_status || "pending").toLowerCase();
-      if (s === "accepted") a++; else if (s === "declined") d++; else p++;
-      if (u.id === userId) mine = s;
-    }
-    return { acceptedCount: a, pendingCount: p, declinedCount: d, myInviteStatus: mine };
+  const pot = useMemo(
+    () => Number(tournament.stake_points || 0) * Number(acceptedCount || 0),
+    [tournament.stake_points, acceptedCount]
+  );
+  const joinCountdown = useCountdown(isUpcoming ? tournament.join_deadline : null);
+  const userHasJoined = useMemo(() => {
+    const me = participants.find((p) => p.id === userId);
+    return (me?.invite_status || "").toLowerCase() === "accepted";
   }, [participants, userId]);
 
-  const pot = (Number(tournament.stake_points || 0) * inviteStats.acceptedCount) || 0;
+  async function handleJoin() {
+    if (!isUpcoming || userHasJoined || busy) return;
+    setBusy("join");
+    try {
+      const res = await supabase.rpc("accept_tournament_invite", {
+        p_tournament_id: tournament.id,
+        p_user_id: userId,
+      });
+      if (res?.error) {
+        // fallback
+        await supabase.from("elimination_participants").upsert({
+          tournament_id: tournament.id,
+          user_id: userId,
+          invite_status: "accepted",
+          state: "active",
+        });
+      }
+    } finally {
+      setBusy("");
+      onChanged && onChanged();
+    }
+  }
 
-  // round history chips (player names are optional)
-  const roundHistory = useMemo(() => {
-    return (rounds || []).map(r => {
-      const isClosed = !!r.closed_at || (r.ends_at ? new Date(r.ends_at) <= new Date() : false);
-      return {
-        roundNumber: r.round_number,
-        endsAt: r.ends_at,
-        isClosed,
-      };
-    });
-  }, [rounds]);
+  const roundsAsc = useMemo(() => [...rounds].sort((a, b) => (a.round_number || 0) - (b.round_number || 0)), [rounds]);
+  const roundsDesc = useMemo(() => [...roundsAsc].reverse(), [roundsAsc]);
+
+  // Winner / You styling
+  const winnerUserId = tournament.winner_user_id || null;
+  const youWon = !!winnerUserId && winnerUserId === userId;
+
+  // Accumulated points across all rounds (global)
+  const totalPointsByUserAll = useMemo(() => {
+    const m = new Map();
+    for (const rId in entriesByRound) {
+      for (const e of entriesByRound[rId] || []) {
+        m.set(e.user_id, (m.get(e.user_id) || 0) + (Number(e.points_earned) || 0));
+      }
+    }
+    return m;
+  }, [entriesByRound]);
+
+  // Filters -> chips
+  const filterChips = useMemo(() => {
+    const f = tournament?.filters || {};
+    const chips = [];
+    if (Array.isArray(f.competitions) && f.competitions.length) {
+      chips.push(...f.competitions.map((c) => ({ label: "League", value: String(c) })));
+    }
+    if (Array.isArray(f.seasons) && f.seasons.length) {
+      chips.push(...f.seasons.map((s) => ({ label: "Season", value: String(s) })));
+    }
+    if (Number.isFinite(Number(f.minMarketValue)) && Number(f.minMarketValue) > 0) {
+      chips.push({ label: "Min MV", value: String(f.minMarketValue) });
+    }
+    if (Number.isFinite(Number(f.minAppearances)) && Number(f.minAppearances) > 0) {
+      chips.push({ label: "Min Apps", value: String(f.minAppearances) });
+    }
+    return chips;
+  }, [tournament?.filters]);
 
   return (
-    <View style={styles.brCard}>
-      {/* Header */}
-      <View style={styles.brHeader}>
+    <View style={styles.card}>
+      {/* ----- Header ----- */}
+      <View
+        style={[
+          styles.cardHeader,
+          youWon && isFinished ? styles.winnerHeader : styles.battleHeader,
+        ]}
+      >
         <View style={{ flex: 1 }}>
-          <Text style={styles.brTitle}>{tournament.name || "Elimination"}</Text>
-          <Text style={styles.brMeta}>
-            {isLobby ? "Lobby" : isLive ? "Live" : "Finished"} • Stake {Number(tournament.stake_points || 0)} pts
-            {Number.isFinite(timeLimitMin) && timeLimitMin > 0 ? ` • ${timeLimitMin}m rounds` : ""}
-            {roundsToElim ? ` • ELIM each ${roundsToElim}r` : ""}
+          <Text style={styles.cardTitle}>{tournament.name || "Untitled"}</Text>
+          <Text style={styles.cardSub}>
+            {isUpcoming ? "Upcoming" : isLive ? "Live" : "Finished"}
           </Text>
         </View>
-        <View style={[styles.statusPill, youElimRound ? styles.pillDanger : styles.pillSuccess]}>
-          <Text style={[styles.pillText, youElimRound ? styles.pillTextDanger : styles.pillTextSuccess]}>
-            {youStatusText}
-          </Text>
-        </View>
+
+        {/* Right side header actions for Upcoming / Finished */}
+        {isUpcoming ? (
+          <View style={{ alignItems: "flex-end", gap: 6 }}>
+            <Text style={styles.smallMuted}>
+              Participants: <Text style={styles.bold}>{acceptedCount}</Text>
+            </Text>
+            {userHasJoined ? (
+              <View style={styles.joinedChip}>
+                <Text style={styles.joinedChipText}>Joined</Text>
+              </View>
+            ) : (
+              <TouchableOpacity
+                style={[styles.primaryBtn, busy && { opacity: 0.6 }]}
+                disabled={busy === "join"}
+                onPress={handleJoin}
+              >
+                <Text style={styles.primaryBtnText}>Join Challenge</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        ) : isFinished ? (
+          <View style={{ alignItems: "flex-end", gap: 6 }}>
+            {youWon ? (
+              <Text style={[styles.smallMuted, { fontWeight: "700", color: "#fef08a" }]}>
+                ⭐ You won!
+              </Text>
+            ) : youEliminatedRound ? (
+              <View style={styles.elimChip}>
+                <Text style={styles.elimChipText}>Eliminated R{youEliminatedRound}</Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
       </View>
 
-      {/* Body grid */}
-      <View style={styles.brBody}>
-        {/* Arena */}
-        <ArenaCircle survivorsCount={survivorsCount} currentRound={activeRound?.round_number || Math.max(...rounds.map(r => r.round_number || 0), 1)} totalRounds={Math.max(...rounds.map(r => r.round_number || 0), 1)} />
+      {/* ----- Summary row (always visible) ----- */}
+      <View style={styles.row}>
+        <InfoChip label="Stake" value={`${Number(tournament.stake_points || 0)} pts`} />
+        <InfoChip label="Pot" value={`${pot} pts`} />
+        <InfoChip label="Min/Round" value={`${timeLimitMin} min`} />
+        <InfoChip label="Elim every" value={`${roundsToElim} rnds`} />
+        {isUpcoming ? <InfoChip label="Join ends in" value={joinCountdown} tone="danger" /> : null}
+      </View>
 
-        {/* Right side: chips + log + lobby actions */}
-        <View style={{ flex: 1, gap: 10 }}>
-          {/* Round history */}
-          <View style={styles.roundHistoryBox}>
-            <View style={styles.rowBetween}>
-              <Text style={styles.rhTitle}>Round History</Text>
-              {isLive && activeRound?.ends_at ? <Text style={styles.rhCountdown}>⏳ {useCountdown(activeRound.ends_at)}</Text> : null}
-            </View>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-              {roundHistory.map(r => (
-                <View key={r.roundNumber} style={[styles.rhChip, r.isClosed ? styles.rhChipClosed : styles.rhChipOpen]}>
-                  <Text style={[styles.rhChipText, r.isClosed ? styles.rhChipTextClosed : styles.rhChipTextOpen]}>
-                    R{r.roundNumber}
-                  </Text>
+      {/* ----- Filters (collapsible, collapsed by default) ----- */}
+      {!!filterChips.length && (
+        <View style={[styles.filtersBox, { paddingTop: 10 }]}>
+          <Pressable
+            onPress={() => setFiltersOpen((v) => !v)}
+            style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}
+          >
+            <Text style={styles.filtersTitle}>Filters</Text>
+            <Text style={styles.smallMuted}>{filtersOpen ? "▾" : "▸"}</Text>
+          </Pressable>
+
+          {filtersOpen && (
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+              {filterChips.map((c, i) => (
+                <View key={i} style={styles.chip}>
+                  <Text style={styles.chipLabel}>{c.label}</Text>
+                  <Text style={styles.chipValue}> {c.value}</Text>
                 </View>
               ))}
-            </ScrollView>
-          </View>
-
-          {/* Badges */}
-          <View style={styles.badgesRow}>
-            <Badge text={`Accepted ${inviteStats.acceptedCount}`} tone="green" />
-            <Badge text={`Pending ${inviteStats.pendingCount}`} tone="amber" />
-            {!!inviteStats.declinedCount && <Badge text={`Declined ${inviteStats.declinedCount}`} tone="red" />}
-            <Badge text={`Pot ${pot} pts`} tone="indigo" />
-          </View>
-
-          {/* Lobby actions */}
-          {isLobby && (
-            <View style={styles.actionsRow}>
-              {inviteStats.myInviteStatus !== "accepted" ? (
-                <TouchableOpacity
-                  style={[styles.btn, styles.btnPrimary, (availableToday === 0 || busy === "accept") && styles.btnDisabled]}
-                  disabled={availableToday === 0 || busy === "accept"}
-                  onPress={acceptInvite}
-                >
-                  <Text style={styles.btnText}>{busy === "accept" ? "Accepting…" : "Accept Invite"}</Text>
-                </TouchableOpacity>
-              ) : (
-                <Badge text="You joined" tone="green" />
-              )}
-              {inviteStats.myInviteStatus !== "declined" && (
-                <TouchableOpacity
-                  style={[styles.btn, styles.btnGhost, busy === "decline" && styles.btnDisabled]}
-                  disabled={busy === "decline"}
-                  onPress={declineInvite}
-                >
-                  <Text style={styles.btnGhostText}>{busy === "decline" ? "Declining…" : "Decline"}</Text>
-                </TouchableOpacity>
-              )}
-              {tournament.join_deadline ? (
-                <View style={{ marginLeft: "auto" }}>
-                  <Text style={styles.deadlineText}>Join by {fmtDateTime(tournament.join_deadline)}</Text>
-                </View>
-              ) : null}
             </View>
           )}
         </View>
-      </View>
+      )}
+
+      {/* ----- SWIPEABLE ARENA: newest → older rounds ----- */}
+      {(isLive || isFinished) && (
+        <SwipeableArena
+          tournament={tournament}
+          roundsAsc={roundsAsc}
+          roundsDesc={roundsDesc}
+          participants={participants}
+          entriesByRound={entriesByRound}
+          usersById={usersById}
+          totalPointsByUserAll={totalPointsByUserAll}
+          pulse={pulse}
+          onPlay={() => {
+            const latest = roundsDesc[0];
+            if (latest) {
+              router.push({
+                pathname: "/live-game",
+                params: {
+                  payload: JSON.stringify({
+                    type: "elimination",
+                    tournamentId: tournament.id,
+                    roundId: latest.id,
+                  }),
+                },
+              });
+            }
+          }}
+        />
+      )}
+
+      {loading && (
+        <View style={styles.loadingOverlay}>
+          <ActivityIndicator />
+        </View>
+      )}
     </View>
   );
 }
 
-// Arena visualization (concentric rings)
-function ArenaCircle({ currentRound, totalRounds, survivorsCount }) {
-  const rings = Array.from({ length: Math.max(totalRounds || 1, 1) }, (_, i) => i + 1);
+// (Modal removed and replaced with inline anchored tooltip next to avatar)
+
+/* ------------------------- Swipeable rounds + arena ------------------------ */
+function SwipeableArena({
+  tournament,
+  roundsAsc,
+  roundsDesc,
+  participants,
+  entriesByRound,
+  usersById,
+  totalPointsByUserAll,
+  pulse,
+  onPlay,
+}) {
+  const screenW = Dimensions.get("window").width;
+
+  // quick access map: roundId -> roundNumber
+  const roundNumById = useMemo(() => {
+    const m = new Map();
+    for (const r of roundsAsc) m.set(r.id, r.round_number);
+    return m;
+  }, [roundsAsc]);
+
   return (
-    <View style={styles.arenaWrap}>
-      <View style={styles.arena}>
-        {rings.map((r) => {
-          const active = r <= (currentRound || 1);
+    <View style={{ marginTop: 6 }}>
+      <ScrollView
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        snapToInterval={screenW - 24 /* card horizontal padding area */}
+        decelerationRate="fast"
+        contentContainerStyle={{ paddingVertical: 4 }}
+      >
+        {roundsDesc.map((r, idx) => {
+          const entries = entriesByRound[r.id] || [];
+
+          // who started this round (explicit or points available)
+          const startedUserIds = new Set(
+            entries
+              .filter((e) => e.started === true || e.points_earned !== null)
+              .map((e) => e.user_id)
+          );
+
+          const startedCount = startedUserIds.size;
+
+          // survivors = not eliminated by/at this round
+          const eliminatedByRound = new Set(
+            participants
+              .filter(
+                (p) =>
+                  Number.isFinite(p.eliminated_at_round) &&
+                  p.eliminated_at_round <= r.round_number
+              )
+              .map((p) => p.id)
+          );
+          const survivorsCount = Math.max(
+            0,
+            participants.length ? participants.length - eliminatedByRound.size : startedCount
+          );
+
+          // dynamic arena height based on # who started
+          const baseH = 220;
+          const dynH = baseH + Math.min(160, startedCount * 8);
+
+          const isRoundLive = !r.closed_at;
+
+          // points in THIS round
+          const roundPts = new Map(entries.map((e) => [e.user_id, Number(e.points_earned) || 0]));
+          const playedThisRound = new Set(
+            entries.filter((e) => !!e.game_record_id).map((e) => e.user_id)
+          );
+
+          // cumulative points UP TO this round (use only rounds with round_number <= current)
+          const cumPointsAtRound = (() => {
+            const m = new Map();
+            for (const rr of roundsAsc) {
+              if ((rr.round_number || 0) > (r.round_number || 0)) break;
+              for (const e of entriesByRound[rr.id] || []) {
+                m.set(e.user_id, (m.get(e.user_id) || 0) + (Number(e.points_earned) || 0));
+              }
+            }
+            return m;
+          })();
+
+          // active (not yet eliminated by this round) candidates
+          const activeUserIds = participants
+            .filter((p) => !eliminatedByRound.has(p.id))
+            .map((p) => p.id);
+
+          // compute current "lowest cumulative" among ACTIVE users
+          let minCum = Infinity;
+          for (const uid of activeUserIds) {
+            const v = cumPointsAtRound.get(uid) || 0;
+            if (v < minCum) minCum = v;
+          }
+          const lowestCumUsers = new Set(
+            activeUserIds.filter((uid) => (cumPointsAtRound.get(uid) || 0) === minCum)
+          );
+
+          // Build avatar list strictly from users who STARTED this round
+          const avatars = Array.from(startedUserIds).map((uid) => {
+            return usersById[uid] || { id: uid, profile_photo_url: "", email: "User" };
+          });
+
+          // Generate deterministic jittered positions for avatars inside arena
+          const arenaPadding = 18;
+          const avatarSize = 32;
+          const pitchW = screenW - 24 - 4; // card width minus small padding
+          const pitchH = dynH;
+          const innerW = pitchW - arenaPadding * 2 - avatarSize;
+          const innerH = pitchH - arenaPadding * 2 - avatarSize;
+
+          const avatarPositions = avatars.map((u, i) => {
+            const seed = strHash(String(r.id) + ":" + String(u.id));
+            const rx = seededRand(seed + 11);
+            const ry = seededRand(seed + 23);
+            const x = arenaPadding + rx * innerW;
+            const y = arenaPadding + ry * innerH;
+            return { id: u.id, x, y };
+          });
+
           return (
             <View
-              key={r}
-              style={[
-                StyleSheet.absoluteFillObject,
-                styles.arenaRing,
-                { top: (r - 1) * 10, left: (r - 1) * 10, right: (r - 1) * 10, bottom: (r - 1) * 10 },
-                active ? styles.arenaRingActive : styles.arenaRingIdle,
-              ]}
-            />
+              key={r.id}
+              style={{ width: screenW - 24, paddingRight: idx === roundsDesc.length - 1 ? 0 : 8 }}
+            >
+              {/* Above the arena: round & survivors */}
+              <View style={{ alignItems: "center", marginBottom: 6 }}>
+                <Text style={{ fontWeight: "800", color: "#e2e8f0" }}>
+                  Round {r.round_number} • {survivorsCount} survivors
+                </Text>
+                <Text style={styles.smallMuted}>
+                  {r.closed_at
+                    ? `Closed ${fmtDateTime(r.closed_at)}`
+                    : r.ends_at
+                    ? `Ends ${fmtDateTime(r.ends_at)}`
+                    : r.started_at
+                    ? `Started ${fmtDateTime(r.started_at)}`
+                    : "—"}
+                </Text>
+              </View>
+
+              {/* Single arena with avatars */}
+              <ArenaPitch
+                heightOverride={dynH}
+                pulse={pulse}
+                pitchId={r.id}
+                avatars={avatars}
+                avatarPositions={avatarPositions}
+                roundPts={roundPts}
+                cumPointsAtRound={cumPointsAtRound}
+                lowestCumUsers={lowestCumUsers}
+                playedThisRound={playedThisRound}
+              />
+
+              {/* Under arena: finished => player info, live => Play button */}
+              <View style={{ marginTop: 8 }}>
+                {isRoundLive ? (
+                  <TouchableOpacity
+                    onPress={onPlay}
+                    style={[styles.primaryBtn, { alignSelf: "center" }]}
+                  >
+                    <Text style={styles.primaryBtnText}>Play to Survive</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            </View>
           );
         })}
-        <View style={styles.arenaCenter}>
-          <Text style={styles.arenaSurvivors}>{survivorsCount}</Text>
-          <Text style={styles.arenaSub}>survivors</Text>
-          <Text style={styles.arenaSubSmall}>Round {currentRound || 1} of {Math.max(totalRounds || 1, 1)}</Text>
-        </View>
-      </View>
+      </ScrollView>
     </View>
   );
 }
 
-function Badge({ text, tone = "gray" }) {
-  const color = {
-    gray: { bg: "#e5e7eb", fg: "#111827" },
-    green: { bg: "#dcfce7", fg: "#166534" },
-    amber: { bg: "#fef3c7", fg: "#92400e" },
-    red: { bg: "#fee2e2", fg: "#991b1b" },
-    indigo: { bg: "#e0e7ff", fg: "#3730a3" },
-  }[tone] || { bg: "#e5e7eb", fg: "#111827" };
+/* ---------------------------- Arena visualization ---------------------------- */
+/**
+ * Single centered “football pitch” with:
+ *  - jittered avatars (absolute-positioned)
+ *  - green border: not currently last in cumulative
+ *  - red border: currently last in cumulative (would be eliminated now)
+ *  - yellow ring overlay: this user played this round (has game_record_id)
+ *  - anchored tooltip at top-right of tapped avatar
+ */
+function ArenaPitch({
+  heightOverride,
+  pulse,
+  pitchId,
+  avatars,
+  avatarPositions,
+  roundPts,
+  cumPointsAtRound,
+  lowestCumUsers,
+  playedThisRound,
+}) {
+  const [tooltip, setTooltip] = useState(null); // { id, x, y }
+
+  const handleAvatarPress = (u, pos) => {
+    // toggle if same; else show
+    if (tooltip && tooltip.id === u.id) {
+      setTooltip(null);
+    } else {
+      // place tooltip slightly to the top-right of avatar
+      setTooltip({
+        id: u.id,
+        x: pos.x + 24,
+        y: Math.max(6, pos.y - 6),
+      });
+    }
+  };
+
   return (
-    <View style={[styles.badge, { backgroundColor: color.bg }]}>
-      <Text style={[styles.badgeText, { color: color.fg }]}>{text}</Text>
+    <View style={[styles.arenaContainer, heightOverride ? { paddingVertical: 6 } : null]}>
+      <Animated.View
+        style={[
+          styles.pitch,
+          heightOverride ? { height: heightOverride, borderRadius: 20 } : null,
+          {
+            shadowOpacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.08, 0.25] }),
+            shadowRadius: pulse.interpolate({ inputRange: [0, 1], outputRange: [4, 10] }),
+          },
+        ]}
+      >
+        {/* Football pitch lines (very light/faded) */}
+        <View style={styles.pitchBorderOuter} />
+        <View style={styles.pitchBorderInner} />
+        <View style={styles.pitchHalfLine} />
+        <View style={styles.pitchCenterCircle} />
+
+        {/* Avatars - absolute, jittered */}
+        {avatars.map((u) => {
+          const pos = avatarPositions.find((p) => p.id === u.id) || { x: 20, y: 20 };
+          const isLowest = lowestCumUsers.has(u.id);
+          const played = playedThisRound.has(u.id);
+          const baseColor = isLowest ? "#ef4444" : "#10b981"; // red vs green
+
+          return (
+            <TouchableOpacity
+              key={u.id}
+              onPress={() => handleAvatarPress(u, pos)}
+              activeOpacity={0.85}
+              style={[
+                styles.avatarAbsWrap,
+                {
+                  left: pos.x,
+                  top: pos.y,
+                  borderColor: baseColor,
+                },
+              ]}
+            >
+              <Image source={{ uri: u.profile_photo_url || "" }} style={styles.userAvatarArena} />
+              {played && <View pointerEvents="none" style={styles.avatarRingPlayed} />}
+            </TouchableOpacity>
+          );
+        })}
+
+        {/* Tooltip anchored to selected avatar, shows full username + accumulated + round pts */}
+        {tooltip && (() => {
+          const u = avatars.find((x) => x.id === tooltip.id);
+          if (!u) return null;
+          const fullName = u.full_name || u.email || "User";
+          const acc = cumPointsAtRound.get(u.id) || 0;
+          const rp = Number.isFinite(roundPts.get(u.id)) ? roundPts.get(u.id) : 0;
+          return (
+            <View
+              style={[
+                styles.tooltipCard,
+                {
+                  left: tooltip.x,
+                  top: tooltip.y,
+                },
+              ]}
+            >
+              <Text style={styles.tooltipTitle}>{fullName}</Text>
+              <Text style={styles.tooltipRow}>Accumulated: <Text style={styles.tooltipStrong}>{acc}</Text> pts</Text>
+              <Text style={styles.tooltipRow}>This round: <Text style={styles.tooltipStrong}>{rp}</Text> pts</Text>
+            </View>
+          );
+        })()}
+      </Animated.View>
     </View>
   );
 }
 
-// ---------- Styles ----------
+/* --------------------------------- Styles -------------------------------- */
 const styles = StyleSheet.create({
-  tabsHeader: {
+  card: {
+    backgroundColor: "#0b1310",
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#1f2937",
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+  },
+  battleHeader: {
+    backgroundColor: "#0d1713",
+    borderRadius: 12,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: "#163b2b",
+    marginBottom: 10,
+  },
+  cardHeader: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 8,
-    paddingVertical: 8,
-    gap: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: "#e5e7eb",
-    backgroundColor: "#fff",
+    gap: 12,
   },
-  tabBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    backgroundColor: "#f3f4f6",
-  },
-  tabBtnActive: {
-    backgroundColor: "#166534",
-  },
-  tabText: { fontWeight: "700", color: "#111827" },
-  tabTextActive: { color: "#fff" },
-  createBtn: {
-    marginLeft: "auto",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
+  winnerHeader: {
+    backgroundColor: "#3b2f0a",
     borderRadius: 12,
-    backgroundColor: "#166534",
+    padding: 10,
+    borderWidth: 1,
+    borderColor: "#b08900",
+    marginBottom: 10,
   },
-  createBtnText: { color: "#fff", fontWeight: "700" },
+  cardTitle: { fontSize: 16, fontWeight: "800", color: "#e2e8f0" },
+  cardSub: { fontSize: 12, color: "#93c5aa" },
 
-  page: {
-    flexGrow: 1,
-    padding: 14,
-    backgroundColor: "#fafafa",
+  arenaContainer: { paddingVertical: 6, paddingHorizontal: 2 },
+
+  // New single "pitch" arena
+  pitch: {
+    height: 240,
+    borderRadius: 20,
+    position: "relative",
+    backgroundColor: "#0f2f25",
+    borderWidth: 2,
+    borderColor: "rgba(16,185,129,0.25)",
+    shadowColor: "#10b981",
+    overflow: "hidden", // ensure fully seen and popups clipped inside arena
   },
 
-  loadingRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 8 },
-  loadingText: { color: "#374151" },
-  errorBox: { borderWidth: 1, borderColor: "#fecaca", backgroundColor: "#fee2e2", padding: 10, borderRadius: 10 },
-  errorTitle: { color: "#991b1b", fontWeight: "700", marginBottom: 2 },
-  errorText: { color: "#7f1d1d" },
-  emptyText: { color: "#6b7280", fontStyle: "italic" },
-
-  // BR card
-  brCard: {
-    borderWidth: 1, borderColor: "#111827", backgroundColor: "#0b0b0f",
-    borderRadius: 16, overflow: "hidden",
+  // Faded pitch lines
+  pitchBorderOuter: {
+    position: "absolute",
+    top: 8,
+    bottom: 8,
+    left: 8,
+    right: 8,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(16,185,129,0.18)",
   },
-  brHeader: {
-    flexDirection: "row", alignItems: "center", gap: 10,
-    paddingHorizontal: 12, paddingVertical: 12,
-    backgroundColor: "#111217", borderBottomWidth: 1, borderBottomColor: "#181a20",
+  pitchBorderInner: {
+    position: "absolute",
+    top: 20,
+    bottom: 20,
+    left: 20,
+    right: 20,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(16,185,129,0.12)",
   },
-  brTitle: { fontSize: 16, fontWeight: "800", color: "#e5e7eb" },
-  brMeta: { fontSize: 12, color: "#9ca3af" },
-  statusPill: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1 },
-  pillSuccess: { borderColor: "#34d39933", backgroundColor: "#10b98126" },
-  pillDanger: { borderColor: "#fda4af33", backgroundColor: "#ef444426" },
-  pillText: { fontSize: 12, fontWeight: "700" },
-  pillTextSuccess: { color: "#a7f3d0" },
-  pillTextDanger: { color: "#fecaca" },
+  pitchHalfLine: {
+    position: "absolute",
+    left: "50%",
+    top: 8,
+    bottom: 8,
+    width: 1,
+    marginLeft: -0.5,
+    backgroundColor: "rgba(16,185,129,0.15)",
+  },
+  pitchCenterCircle: {
+    position: "absolute",
+    width: 84,
+    height: 84,
+    borderRadius: 84 / 2,
+    left: "50%",
+    top: "50%",
+    marginLeft: -42,
+    marginTop: -42,
+    borderWidth: 1,
+    borderColor: "rgba(16,185,129,0.15)",
+  },
 
-  brBody: { flexDirection: "row", gap: 12, padding: 12 },
-  arenaWrap: { width: 220, alignItems: "center", justifyContent: "center" },
-  arena: { width: 220, height: 220, position: "relative" },
-  arenaRing: { borderRadius: 999, borderWidth: 1 },
-  arenaRingActive: { borderColor: "#34d39966", backgroundColor: "#10b98112" },
-  arenaRingIdle: { borderColor: "#3f3f46", backgroundColor: "#1f1f24" },
-  arenaCenter: { position: "absolute", inset: 0, alignItems: "center", justifyContent: "center" },
-  arenaSurvivors: { color: "#e5e7eb", fontSize: 32, fontWeight: "900" },
-  arenaSub: { color: "#9ca3af", fontSize: 12, marginTop: 2 },
-  arenaSubSmall: { color: "#6b7280", fontSize: 11, marginTop: 2 },
+  row: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginVertical: 8 },
+  chip: {
+    borderWidth: 1,
+    borderColor: "#334155",
+    backgroundColor: "#0a0f0b",
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+  },
+  chipLabel: { fontSize: 10, color: "#94a3b8" },
+  chipValue: { fontSize: 12, fontWeight: "800", color: "#e2e8f0" },
 
-  roundHistoryBox: { backgroundColor: "#0c0c12", borderWidth: 1, borderColor: "#1f2937", borderRadius: 12, padding: 10 },
-  rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  rhTitle: { color: "#d1d5db", fontWeight: "700" },
-  rhCountdown: { color: "#fca5a5", fontWeight: "700" },
-  rhChip: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1 },
-  rhChipOpen: { backgroundColor: "#065f4622", borderColor: "#10b98155" },
-  rhChipClosed: { backgroundColor: "#27272a", borderColor: "#3f3f46" },
-  rhChipText: { fontWeight: "700", fontSize: 12 },
-  rhChipTextOpen: { color: "#a7f3d0" },
-  rhChipTextClosed: { color: "#d4d4d8" },
+  filtersBox: {
+    borderWidth: 1,
+    borderColor: "#334155",
+    backgroundColor: "#0a0f0b",
+    borderRadius: 10,
+    padding: 8,
+    marginTop: 6,
+  },
+  filtersTitle: { fontWeight: "800", color: "#e2e8f0" },
 
-  badgesRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  badge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999 },
-  badgeText: { fontSize: 11, fontWeight: "600" },
+  primaryBtn: {
+    backgroundColor: "#10b981",
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+  },
+  primaryBtnText: { color: "#052e22", fontWeight: "800" },
 
-  actionsRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 },
-  btn: { borderRadius: 10, paddingVertical: 10, paddingHorizontal: 14 },
-  btnPrimary: { backgroundColor: "#166534" },
-  btnText: { color: "white", fontWeight: "700" },
-  btnGhost: { backgroundColor: "#f3f4f6", borderWidth: 1, borderColor: "#e5e7eb" },
-  btnGhostText: { color: "#111827", fontWeight: "700" },
-  btnDisabled: { opacity: 0.6 },
+  joinedChip: {
+    backgroundColor: "#064e3b",
+    borderWidth: 1,
+    borderColor: "#10b981",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  joinedChipText: { color: "#ecfeff", fontWeight: "800", fontSize: 12 },
 
-  deadlineText: { fontSize: 11, color: "#6b7280" },
+  elimChip: {
+    backgroundColor: "#3f1a1a",
+    borderWidth: 1,
+    borderColor: "#fecaca",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  elimChipText: { color: "#fecaca", fontWeight: "800", fontSize: 12 },
+
+  smallMuted: { fontSize: 12, color: "#94a3b8" },
+  bold: { fontWeight: "800" },
+
+  showMoreBtn: {
+    borderWidth: 1,
+    borderColor: "#334155",
+    backgroundColor: "#0a0f0b",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  showMoreText: { fontWeight: "800", color: "#e2e8f0" },
+
+  errorBox: {
+    borderWidth: 1,
+    borderColor: "#fecaca",
+    backgroundColor: "#3f1a1a",
+    padding: 10,
+    borderRadius: 10,
+  },
+  errorTitle: { fontWeight: "800", color: "#fecaca", marginBottom: 4 },
+  errorText: { color: "#fecaca" },
+
+  skeleton: {
+    height: 110,
+    borderRadius: 14,
+    backgroundColor: "#0a0f0b",
+    borderWidth: 1,
+    borderColor: "#1f2937",
+  },
+
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(5,10,8,0.35)",
+    justifyContent: "center",
+    alignItems: "center",
+    borderRadius: 14,
+  },
+
+  // Avatars (absolute jittered)
+  avatarAbsWrap: {
+    position: "absolute",
+    width: 32,
+    height: 32,
+    borderRadius: 999,
+    borderWidth: 2,
+    borderColor: "#334155",
+    overflow: "hidden",
+    backgroundColor: "#1f2937",
+  },
+  userAvatarArena: { width: "100%", height: "100%" },
+
+  // Yellow "played" ring
+  avatarRingPlayed: {
+    position: "absolute",
+    left: -3,
+    top: -3,
+    right: -3,
+    bottom: -3,
+    borderRadius: 999,
+    borderWidth: 2,
+    borderColor: "#facc15",
+  },
+
+  // Anchored tooltip next to avatar (top-right), compact
+  tooltipCard: {
+    position: "absolute",
+    minWidth: 160,
+    maxWidth: 220,
+    backgroundColor: "rgba(5,12,9,0.96)",
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: "rgba(148,163,184,0.35)",
+  },
+  tooltipTitle: { color: "#e2e8f0", fontWeight: "800", marginBottom: 2 },
+  tooltipRow: { color: "#94a3b8", fontSize: 12, marginTop: 2 },
+  tooltipStrong: { color: "#e2e8f0", fontWeight: "800" },
+
+  playerPhoto: { width: 44, height: 44, borderRadius: 8 },
 });
+
+/* ---------------------------- helpers components --------------------------- */
+function InfoChip({ label, value, tone }) {
+  const border =
+    tone === "danger" ? { borderColor: "#7f1d1d", backgroundColor: "#3f1a1a" } : undefined;
+  const valueColor = tone === "danger" ? { color: "#fecaca" } : undefined;
+  return (
+    <View style={[styles.chip, border]}>
+      <Text style={styles.chipLabel}>{label}</Text>
+      <Text style={[styles.chipValue, valueColor]}> {value}</Text>
+    </View>
+  );
+}

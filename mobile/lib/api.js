@@ -9,6 +9,24 @@ if (!fromExtra) {
 }
 export const API_BASE = String(fromExtra).replace(/\/+$/, "");
 
+// --- UTC Helpers ---
+export function utcNow() {
+  return new Date(Date.now()); // still UTC-based epoch
+}
+
+export function utcNowIso() {
+  return utcNow().toISOString(); // full UTC ISO string
+}
+
+export function utcTodayString() {
+  // "YYYY-MM-DD" based on UTC midnight
+  const d = utcNow();
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 // Auth-aware JSON fetch (mirrors web jfetch behavior)
 async function jfetch(path, opts = {}) {
   const url = `${API_BASE}${path}`;
@@ -17,7 +35,9 @@ async function jfetch(path, opts = {}) {
 
   // Forward Supabase session token (as on web)
   try {
-    const { data: { session } } = await supabase.auth.getSession();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
     if (session?.access_token) {
       headers.Authorization = `Bearer ${session.access_token}`;
     }
@@ -34,15 +54,17 @@ async function jfetch(path, opts = {}) {
   const res = await fetch(url, { method, headers, body, cache: "no-store" });
   if (!res.ok) {
     let msg = "";
-    try { msg = await res.text(); } catch {}
+    try {
+      msg = await res.text();
+    } catch {}
     throw new Error(msg || `${res.status} ${res.statusText}`);
   }
   return res.json();
 }
 
 /* === Filters (same endpoints as web) === */
-export const getCompetitions = () => jfetch("/filters/competitions");  // grouped by country + top-10
-export const getSeasons       = () => jfetch("/filters/seasons");       // distinct seasons (strings)
+export const getCompetitions = () => jfetch("/filters/competitions"); // grouped by country + top-10
+export const getSeasons = () => jfetch("/filters/seasons"); // distinct seasons (strings)
 
 /* === Pool counts (players_in_seasons) === */
 export const getCounts = (filters) =>
@@ -53,17 +75,16 @@ export const getCounts = (filters) =>
 
 /* === Random player from players_in_seasons === */
 export const getRandomPlayer = (filters, userId = null) => {
-  const payload = userId ? { ...filters, userId } : (filters || {});
+  const payload = userId ? { ...filters, userId } : filters || {};
   return jfetch("/random-player", {
     method: "POST",
     body: JSON.stringify(payload),
   });
 };
 
-/* === Limits — match web: /limits/:userId + cache buster === */
+/* === Limits — use UTC-based cache buster === */
 export const getLimits = async (userId) => {
-  const t = Date.now();
-  // Web does fetch(`${API_BASE}/limits/${userId}?t=${Date.now()}`, { cache: 'no-store' })
+  const t = utcNow().getTime(); // ms since epoch UTC
   return jfetch(`/limits/${encodeURIComponent(userId)}?t=${t}`);
 };
 
@@ -80,12 +101,20 @@ export const suggestNames = (query, limit = 50) =>
 /* === Transfers (used by live/postgame) === */
 export const fetchTransfers = (playerId) => {
   const id = Number(playerId);
-  if (!Number.isFinite(id) || id <= 0) throw new Error("fetchTransfers: valid numeric playerId is required");
+  if (!Number.isFinite(id) || id <= 0)
+    throw new Error("fetchTransfers: valid numeric playerId is required");
   return jfetch(`/players/${id}/transfers`);
 };
 
 /* === Persist a completed round (non-elimination path) === */
 export const saveGameCompleted = (payload) => {
-  if (!payload || typeof payload !== "object") throw new Error("saveGameCompleted: body payload is required");
-  return jfetch("/game-completed", { method: "POST", body: JSON.stringify(payload) });
+  if (!payload || typeof payload !== "object")
+    throw new Error("saveGameCompleted: body payload is required");
+
+  // Add UTC completedAt if not provided
+  const withUtc = { completedAt: utcNowIso(), ...payload };
+  return jfetch("/game-completed", {
+    method: "POST",
+    body: JSON.stringify(withUtc),
+  });
 };

@@ -117,7 +117,7 @@ export default function PostgameMobile() {
     return () => clearInterval(id);
   }, []);
 
-  // ---------- NEW: Games left today (UTC), excluding elimination and daily) ----------
+  // ---------- Games left today (UTC), excluding elimination & daily ----------
   const [gamesLeft, setGamesLeft] = useState(null);
   useEffect(() => {
     (async () => {
@@ -143,13 +143,12 @@ export default function PostgameMobile() {
         setGamesLeft(null);
       }
     })();
-  }, []); // only fetch for the label, logic unchanged
+  }, []);
 
   // ---------- Share (capture the card as image) ----------
   const shareText = useMemo(() => {
     const outcome = didWin ? 'succeeded phenomenally' : 'failed miserably';
     const name = player?.name ? ` — ${player.name}` : '';
-    // Add the invite link like on the web
     return `Look at the player I just ${outcome} to identify on FootyTrail${name}!\nCome join the fun at https://footy-trail.vercel.app`;
   }, [didWin, player?.name]);
 
@@ -160,7 +159,6 @@ export default function PostgameMobile() {
     if (shareBusy) return;
     setShareBusy(true);
     try {
-      // Capture the visible post-game card (WITHOUT the buttons row) as a PNG tmp file
       const uri = await cardShotRef.current?.capture?.({
         format: 'png',
         quality: 1,
@@ -168,15 +166,13 @@ export default function PostgameMobile() {
       });
 
       if (uri) {
-        // Prefer RN Share so we can include BOTH text and the image URL
         try {
           await RNShare.share({
             title: 'Share your FootyTrail game',
             message: shareText,
-            url: uri, // file:// path to the captured PNG
+            url: uri,
           });
         } catch (e) {
-          // Fallback to expo-sharing if RN Share fails unexpectedly
           const canNativeShare = await Sharing.isAvailableAsync();
           if (canNativeShare) {
             await Sharing.shareAsync(uri, {
@@ -185,19 +181,14 @@ export default function PostgameMobile() {
               UTI: 'public.png',
             });
           } else {
-            // Last resort: just share text
             await RNShare.share({ message: shareText });
           }
         }
-
-        // optional cleanup
         try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
       } else {
-        // If capture failed: just share text
         await RNShare.share({ message: shareText });
       }
     } catch {
-      // If anything goes wrong, share just the text
       try { await RNShare.share({ message: shareText }); } catch {}
     } finally {
       setShareBusy(false);
@@ -222,25 +213,30 @@ export default function PostgameMobile() {
 
   // ---------- Play Again (non-daily, non-elimination) ----------
   const [playAgainBusy, setPlayAgainBusy] = useState(false);
-  const canPlayAgain = !isDaily && !elimination && filters && Number.isFinite(prevPotentialPoints) && prevPotentialPoints > 5;
+
+  // ✅ FIX: disable the button when gamesLeft is 0
+  const canPlayAgain = useMemo(() => {
+    if (isDaily || elimination || !filters) return false;
+    if (!Number.isFinite(prevPotentialPoints) || prevPotentialPoints <= 5) return false;
+    // If we know the exact count and it's 0, block playing again.
+    if (gamesLeft !== null && gamesLeft <= 0) return false;
+    return true;
+  }, [isDaily, elimination, filters, prevPotentialPoints, gamesLeft]);
 
   const onPlayAgain = async () => {
-    if (!canPlayAgain || playAgainBusy) return;
+    // Hard guard in the handler as well to prevent any accidental starts.
+    if (playAgainBusy || !canPlayAgain || (gamesLeft !== null && gamesLeft <= 0)) return;
+
     setPlayAgainBusy(true);
     try {
       const { data: authData } = await supabase.auth.getUser();
       const userId = authData?.user?.id || null;
 
-      // ✅ Use the EXACT same filters object that was used originally
       const originalFilters = (filters && typeof filters === 'object') ? filters : {};
-
-      // Keep the same potential-points decrement behavior (if provided)
       const nextPotential = Number.isFinite(prevPotentialPoints) ? (prevPotentialPoints - 5) : undefined;
 
-      // Call getRandomPlayer with the original filters as-is
       const nextCard = await getRandomPlayer(originalFilters, userId);
 
-      // Navigate to live-game and pass the same filters forward
       router.replace({
         pathname: '/live-game',
         params: {
@@ -380,25 +376,27 @@ export default function PostgameMobile() {
               <Text style={styles.iconBtnTxt}>←</Text>
             </TouchableOpacity>
 
-            {/* NEW: Play Again with remaining games label */}
+            {/* Play Again with remaining games label; disabled at 0 left */}
             <TouchableOpacity
-              onPress={onPlayAgain}
-              activeOpacity={0.85}
-              disabled={!canPlayAgain || playAgainBusy}
-              style={[
-                styles.btn,
-                styles.btnPrimary,
-                (!canPlayAgain || playAgainBusy) && { opacity: 0.6 },
-              ]}
-            >
-              {playAgainBusy ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.btnTxt}>
-                  {`Play Again${gamesLeft !== null ? ` (${gamesLeft} left)` : ''}`}
-                </Text>
-              )}
-            </TouchableOpacity>
+  onPress={onPlayAgain}
+  activeOpacity={0.85}
+  disabled={!canPlayAgain || playAgainBusy}
+  style={[
+    styles.btn,
+    styles.btnPrimary,
+    (!canPlayAgain || playAgainBusy) && { opacity: 0.6 },
+  ]}
+>
+  {playAgainBusy ? (
+    <ActivityIndicator color="#fff" />
+  ) : (
+    <Text style={styles.btnTxt}>
+      {gamesLeft === 0
+        ? 'Finished for today'
+        : `Play Again${gamesLeft !== null ? ` (${gamesLeft} left)` : ''}`}
+    </Text>
+  )}
+</TouchableOpacity>
 
             <TouchableOpacity onPress={onShare} activeOpacity={0.85} style={styles.btnIconShare} disabled={shareBusy}>
               {shareBusy ? <ActivityIndicator color="#fff" /> : <MaterialCommunityIcons name="share-variant" size={22} color="#fff" />}
@@ -433,7 +431,7 @@ function msUntilNextUtcMidnight() {
   return next.getTime() - now.getTime();
 }
 
-/* NEW: UTC day range for games-left calc */
+/* UTC day range for games-left calc */
 function dayRangeUtc(dateLike) {
   const d = new Date(dateLike);
   const start = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0));
@@ -578,7 +576,7 @@ const styles = StyleSheet.create({
   btnTxt: { color: 'white', fontWeight: '700', fontSize: 16 },
   btnTxtDark: { color: '#111827' },
 
-  // NEW: compact icon-only Share button
+  // compact icon-only Share button
   btnIconShare: { width: 44, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#4f46e5' },
 
   dailyWrap: { alignItems: 'center', marginTop: 4 },

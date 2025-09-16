@@ -16,6 +16,7 @@ import {
   Vibration,
   Dimensions,
   Animated, // ← for shake & emoji rain
+  ActivityIndicator, // ← ADDED: spinner
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -875,7 +876,10 @@ export default function LiveGameMobile() {
             <View style={styles.card}>
               <Text style={styles.sectionTitle}>Transfer History</Text>
               {loadingTransfers ? (
-                <Text style={styles.loadingTxt}>Loading transfers…</Text>
+                <View style={styles.loadingRow}>
+                  <ActivityIndicator />
+                  <Text style={styles.loadingTxt}>Loading transfers…</Text>
+                </View>
               ) : (
                 <View style={{ gap: 12 }}>
                   {transferHistory?.length
@@ -1180,7 +1184,8 @@ const styles = StyleSheet.create({
   giveUpBtn: { backgroundColor: '#dc2626', paddingHorizontal: 14, borderRadius: 10, justifyContent: 'center' },
   giveUpText: { color: 'white', fontWeight: '700', fontFamily: 'Tektur_700Bold' },
 
-  loadingTxt: { marginTop: 8, color: '#6b7280', fontFamily: 'Tektur_400Regular' },
+  loadingTxt: { color: '#6b7280', fontFamily: 'Tektur_400Regular' },
+  loadingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 }, // ← ADDED
 
   sugList: { marginTop: 8, borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, maxHeight: 260, backgroundColor: 'white' },
   sugItem: { flexDirection: 'row', alignItems: 'center', padding: 10, gap: 10 },

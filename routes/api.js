@@ -21,23 +21,17 @@ if (!supabaseUrl || !serviceKey) {
 }
 const supabase = createClient(supabaseUrl, serviceKey);
 
-// ---------- UTC+2 helpers ----------
-const TZ_PLUS2_MIN = 120;
-const TZ_PLUS2_MS  = TZ_PLUS2_MIN * 60 * 1000;
-
-/** Returns YYYY-MM-DD string for "today" in UTC+2. */
-function dateStringUTCPlus2(d = new Date()) {
-  const plus2 = new Date(d.getTime() + TZ_PLUS2_MS);
-  return plus2.toISOString().slice(0, 10);
+// ---------- UTC helpers ----------
+/** Returns YYYY-MM-DD string for "today" in UTC. */
+function dateStringUTC(d = new Date()) {
+  return new Date(d).toISOString().slice(0, 10);
 }
 
-/** Returns a Date (UTC) representing the start of today in UTC+2. */
-function startOfTodayUTCForUTCPlus2(d = new Date()) {
-  const plus2 = new Date(d.getTime() + TZ_PLUS2_MS);
-  const startPlus2 = new Date(plus2);
-  startPlus2.setUTCHours(0, 0, 0, 0);
-  // Convert that UTC+2 midnight back to actual UTC time:
-  return new Date(startPlus2.getTime() - TZ_PLUS2_MS);
+/** Returns a Date representing the start of today (00:00:00.000) in UTC. */
+function startOfTodayUTC(d = new Date()) {
+  const dt = new Date(d);
+  dt.setUTCHours(0, 0, 0, 0);
+  return dt;
 }
 
 // ---------- Tables (new model) ----------
@@ -498,8 +492,8 @@ router.get('/transfers/:playerId', async (req, res) => {
 // ---------- Daily challenge ----------
 router.get('/daily', async (_req, res) => {
   try {
-    // Use UTC+2 date for "today"
-    const today = dateStringUTCPlus2();
+    // Use UTC date for "today"
+    const today = dateStringUTC();
     const { data, error } = await supabase
       .from('daily_challenges')
       .select('*')
@@ -519,8 +513,8 @@ router.get('/daily', async (_req, res) => {
 
 router.post('/generate-daily-challenge', async (req, res) => {
   try {
-    // Default to UTC+2 "today" if date not provided
-    const date = (req.body?.date || '').toString() || dateStringUTCPlus2();
+    // Default to UTC "today" if date not provided
+    const date = (req.body?.date || '').toString() || dateStringUTC();
 
     let filters = null;
     if (req.body?.filters) {
@@ -598,8 +592,8 @@ router.get('/limits/:userId', async (req, res) => {
     const { userId } = req.params;
     if (!userId) return res.status(400).json({ error: 'Missing userId' });
 
-    // Use start-of-today at UTC+2
-    const startOfTodayUtc2 = startOfTodayUTCForUTCPlus2();
+    // Use start-of-today at UTC
+    const startOfTodayUtc = startOfTodayUTC();
 
     const [{ data: todayGames, error: todayErr }, { data: allGames, error: allErr }] =
       await Promise.all([
@@ -607,7 +601,7 @@ router.get('/limits/:userId', async (req, res) => {
           .from('games_records')
           .select('points_earned, is_daily_challenge, won, player_id, created_at')
           .eq('user_id', userId)
-          .gte('created_at', startOfTodayUtc2.toISOString()),
+          .gte('created_at', startOfTodayUtc.toISOString()),
         supabase.from('games_records').select('points_earned').eq('user_id', userId),
       ]);
 

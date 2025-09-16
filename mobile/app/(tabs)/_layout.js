@@ -23,7 +23,7 @@ function Avatar({ uri }) {
   return <Image source={{ uri }} style={{ width: 32, height: 32, borderRadius: 16 }} />;
 }
 
-function TopNav({ title, avatarUrl, onAvatarPress, titleFontFamily }) {
+function TopNav({ title, subtitle, showSubtitle, avatarUrl, onAvatarPress, titleFontFamily }) {
   return (
     <SafeAreaView edges={['top']} style={{ backgroundColor: '#fff' }}>
       <View
@@ -42,25 +42,77 @@ function TopNav({ title, avatarUrl, onAvatarPress, titleFontFamily }) {
           source={require('../../assets/images/footytrail_logo.png')}
           style={{ width: 40, height: 40, resizeMode: 'contain' }}
         />
-        <Text
-          numberOfLines={1}
-          style={{
-            flex: 1,
-            textAlign: 'center',
-            fontSize: 18,
-            fontWeight: '700',
-            color: '#111827',
-            // Apply Tektur when loaded
-            fontFamily: titleFontFamily || undefined,
-          }}
-        >
-          {title || ''}
-        </Text>
+
+        {/* Center title + optional small subtitle */}
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <Text
+            numberOfLines={1}
+            style={{
+              fontSize: 18,
+              fontWeight: '700',
+              color: '#111827',
+              fontFamily: titleFontFamily || undefined,
+            }}
+          >
+            {title || ''}
+          </Text>
+          {showSubtitle && !!subtitle && (
+            <Text
+              numberOfLines={1}
+              style={{
+                fontSize: 12,
+                color: '#6b7280',
+                marginTop: 2,
+                // keep the same font if loaded for a coherent look
+                fontFamily: titleFontFamily || undefined,
+              }}
+            >
+              {subtitle}
+            </Text>
+          )}
+        </View>
+
         <Pressable onPress={onAvatarPress} hitSlop={8}>
           <Avatar uri={avatarUrl} />
         </Pressable>
       </View>
     </SafeAreaView>
+  );
+}
+
+/**
+ * Lightweight pop-animating button for tab-bar items (except the center floating tab).
+ * Wraps the default tab item and adds a quick scale-up + spring-back on press.
+ */
+function PopTabButton(props) {
+  const scale = useRef(new Animated.Value(1)).current;
+
+  const handlePress = () => {
+    // Start pop animation
+    Animated.sequence([
+      Animated.timing(scale, { toValue: 1.12, duration: 90, useNativeDriver: true }),
+      Animated.spring(scale, { toValue: 1, useNativeDriver: true, friction: 5, tension: 160 }),
+    ]).start();
+
+    // Trigger the original navigation behavior immediately
+    props.onPress?.();
+  };
+
+  return (
+    <Pressable
+      onPress={handlePress}
+      onLongPress={props.onLongPress}
+      style={props.style}
+      accessibilityRole={props.accessibilityRole}
+      accessibilityState={props.accessibilityState}
+      accessibilityLabel={props.accessibilityLabel}
+      testID={props.testID}
+      android_ripple={{ color: '#e5e7eb', borderless: true }}
+    >
+      <Animated.View style={{ transform: [{ scale }] }}>
+        {props.children}
+      </Animated.View>
+    </Pressable>
   );
 }
 
@@ -84,17 +136,34 @@ function FloatingCenterButton({ onNavigate, focused }) {
   const ringBorderColor = focused ? '#e5e7eb' : '#f3f4f6';
   const lift = focused ? -24 : -20;
 
+  const handlePress = () => {
+    // Add a quick pop on press while preserving existing behavior
+    Animated.sequence([
+      Animated.timing(scale, {
+        toValue: focused ? 1.12 : 1.08,
+        duration: 90,
+        useNativeDriver: true,
+      }),
+      Animated.spring(scale, {
+        toValue: focused ? 1.04 : 0.96,
+        useNativeDriver: true,
+        friction: 6,
+        tension: 120,
+      }),
+    ]).start();
+
+    if (focused) {
+      // Already on Game tab → ask it to scroll to top
+      DeviceEventEmitter.emit('FT_SCROLL_TO_TOP_GAME');
+    } else {
+      // Not focused → navigate like normal
+      onNavigate?.();
+    }
+  };
+
   return (
     <Pressable
-      onPress={() => {
-        if (focused) {
-          // Already on Game tab → ask it to scroll to top
-          DeviceEventEmitter.emit('FT_SCROLL_TO_TOP_GAME');
-        } else {
-          // Not focused → navigate like normal
-          onNavigate?.();
-        }
-      }}
+      onPress={handlePress}
       style={{ top: lift, justifyContent: 'center', alignItems: 'center' }}
       android_ripple={{ color: '#e5e7eb', borderless: true }}
     >
@@ -133,23 +202,32 @@ function FloatingCenterButton({ onNavigate, focused }) {
   );
 }
 
-// New: Header date formatter "Wkdy, DD Mon YYYY" (e.g., Fri, 12 Sep 2025)
-function formatHeaderDate(d) {
+// --------- UTC Formatters ---------
+function formatHeaderDateUTC(d) {
   try {
     return d.toLocaleDateString('en-GB', {
       weekday: 'short',
       day: '2-digit',
       month: 'short',
       year: 'numeric',
+      timeZone: 'UTC',
     });
   } catch {
-    // Fallback, just in case
-    const wk = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()];
-    const dd = String(d.getDate()).padStart(2, '0');
-    const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
-    const yyyy = d.getFullYear();
+    // Fallback using UTC getters
+    const wk = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getUTCDay()];
+    const dd = String(d.getUTCDate()).padStart(2, '0');
+    const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()];
+    const yyyy = d.getUTCFullYear();
     return `${wk}, ${dd} ${mon} ${yyyy}`;
   }
+}
+
+function formatHeaderTimeUTC(d) {
+  // hh:mm:ss, zero-padded, based on UTC
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  const ss = String(d.getUTCSeconds()).padStart(2, '0');
+  return `${hh}:${mm}:${ss} UTC`;
 }
 
 export default function TabsLayout() {
@@ -185,24 +263,34 @@ export default function TabsLayout() {
     return () => { mounted = false; };
   }, []);
 
-  const [today, setToday] = useState(() => new Date());
-  const timeoutRef = useRef(null);
-  const scheduleMidnightTick = React.useCallback(() => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    const now = new Date();
-    const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 100);
-    timeoutRef.current = setTimeout(() => {
-      setToday(new Date());
-      scheduleMidnightTick();
-    }, midnight.getTime() - now.getTime());
+  // === UTC clock: tick every second ===
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Compute UTC midnight tick (for safety if any logic relies on "day" changes)
+  const midnightTimeoutRef = useRef(null);
+  const scheduleUtcMidnightTick = React.useCallback(() => {
+    if (midnightTimeoutRef.current) clearTimeout(midnightTimeoutRef.current);
+    const n = new Date();
+    // Next UTC midnight
+    const nextUtcMidnight = Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate() + 1, 0, 0, 0, 100);
+    const msUntil = nextUtcMidnight - n.getTime();
+    midnightTimeoutRef.current = setTimeout(() => {
+      setNow(new Date());
+      scheduleUtcMidnightTick();
+    }, msUntil);
   }, []);
   useEffect(() => {
-    scheduleMidnightTick();
-    return () => timeoutRef.current && clearTimeout(timeoutRef.current);
-  }, [scheduleMidnightTick]);
+    scheduleUtcMidnightTick();
+    return () => midnightTimeoutRef.current && clearTimeout(midnightTimeoutRef.current);
+  }, [scheduleUtcMidnightTick]);
 
-  // Use new header date format
-  const dailyTitle = useMemo(() => formatHeaderDate(today), [today]);
+  // Use UTC header date + time
+  const utcHeaderDate = useMemo(() => formatHeaderDateUTC(now), [now]);
+  const utcHeaderTime = useMemo(() => formatHeaderTimeUTC(now), [now]);
 
   const last = segments[segments.length - 1];
   const isGameFocused = last === 'game';
@@ -214,6 +302,8 @@ export default function TabsLayout() {
           header: ({ options }) => (
             <TopNav
               title={options.title}
+              subtitle={isGameFocused ? utcHeaderTime : undefined}
+              showSubtitle={isGameFocused}
               avatarUrl={avatarUrl}
               onAvatarPress={() => setMenuOpen((v) => !v)}
               titleFontFamily={fontsLoaded ? 'Tektur_700Bold' : undefined}
@@ -247,6 +337,8 @@ export default function TabsLayout() {
             tabBarIcon: ({ color, size, focused }) => (
               <MaterialCommunityIcons name="trophy-outline" size={size} color={focused ? THEME_GREEN : color} />
             ),
+            // Add pop animation on press
+            tabBarButton: (props) => <PopTabButton {...props} />,
           }}
         />
         <Tabs.Screen
@@ -256,12 +348,15 @@ export default function TabsLayout() {
             tabBarIcon: ({ color, size, focused }) => (
               <MaterialCommunityIcons name="axe" size={size} color={focused ? THEME_GREEN : color} />
             ),
+            // Add pop animation on press
+            tabBarButton: (props) => <PopTabButton {...props} />,
           }}
         />
         <Tabs.Screen
           name="game"
           options={{
-            title: dailyTitle,
+            // Title now uses UTC date
+            title: utcHeaderDate,
             tabBarButton: (props) => (
               <FloatingCenterButton
                 focused={isGameFocused}
@@ -277,6 +372,8 @@ export default function TabsLayout() {
             tabBarIcon: ({ color, size, focused }) => (
               <MaterialCommunityIcons name="shield-crown-outline" size={size} color={focused ? THEME_GREEN : color} />
             ),
+            // Add pop animation on press
+            tabBarButton: (props) => <PopTabButton {...props} />,
           }}
         />
         <Tabs.Screen
@@ -290,6 +387,8 @@ export default function TabsLayout() {
                 color={focused ? THEME_GREEN : color}
               />
             ),
+            // Add pop animation on press
+            tabBarButton: (props) => <PopTabButton {...props} />,
           }}
         />
       </Tabs>

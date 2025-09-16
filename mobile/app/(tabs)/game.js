@@ -23,6 +23,8 @@ import {
   getRandomPlayer,
   getDailyChallenge,
   getLimits,
+  API_BASE,
+  utcNow,            // <-- NEW: import UTC helper
 } from "../../lib/api";
 
 // ✨ NEW: detect when this screen regains focus (so we refresh limits/daily)
@@ -34,8 +36,6 @@ import {
   Tektur_400Regular,
   Tektur_700Bold,
 } from "@expo-google-fonts/tektur";
-
-import { API_BASE } from "../../lib/api";
 
 /* ---------------- helpers ---------------- */
 
@@ -50,7 +50,7 @@ function compactMoney(n) {
 }
 
 function msUntilNextUtcMidnight() {
-  const now = new Date();
+  const now = utcNow(); // <-- use UTC helper
   const next = new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)
   );
@@ -141,10 +141,6 @@ function CompetitionRow({ comp, selected, onToggle }) {
 
 /* ===========================================================
  *  Mobile Game Screen — Daily enabled; defaults applied only once
- *  - Initial filters from user's defaults; user can change freely
- *  - Competitions/Seasons populated like default-filters screen
- *  - "Apply Default Filters" + "Save as My Defaults" chips
- *  - Daily Challenge sentence above button and correct label
  * =========================================================== */
 export default function GameScreen() {
   const router = useRouter();
@@ -528,100 +524,100 @@ export default function GameScreen() {
   /* -------- Start game actions -------- */
 
   const startRegular = async () => {
-  try {
-    setGameLoading(true);
+    try {
+      setGameLoading(true);
 
-    // 1) Build the exact same filters the server uses for the pool
-    const roundFilters = {
-      competitions: selectedCompetitionIds.map(String),
-      seasons: selectedSeasons.map(String),
-      minMarketValue: Number(minMarketValue) || 0,
-      minAppearances: Number(minAppearances) || 0,
-      userId: user?.id,
-    };
+      // 1) Build the exact same filters the server uses for the pool
+      const roundFilters = {
+        competitions: selectedCompetitionIds.map(String),
+        seasons: selectedSeasons.map(String),
+        minMarketValue: Number(minMarketValue) || 0,
+        minAppearances: Number(minAppearances) || 0,
+        userId: user?.id,
+      };
 
-    // 2) Get a player using those filters (this returns a complete player)
-    const player = await getRandomPlayer(roundFilters, user?.id);
-    if (!player) {
-      Alert.alert("No players found", "Try adjusting your filters.");
-      return;
+      // 2) Get a player using those filters (this returns a complete player)
+      const player = await getRandomPlayer(roundFilters, user?.id);
+      if (!player) {
+        Alert.alert("No players found", "Try adjusting your filters.");
+        return;
+      }
+
+      // 3) Potential points from the current pool size
+      const potentialPoints = Math.max(0, Number(poolCount) * 5);
+
+      // 4) Navigate with a full payload: full player + real filters
+      router.push({
+        pathname: "/live-game",
+        params: {
+          payload: JSON.stringify({
+            ...player,
+            isDaily: false,
+            potentialPoints,
+            filters: {
+              competitions: roundFilters.competitions,
+              seasons: roundFilters.seasons,
+              minMarketValue: roundFilters.minMarketValue,
+              minAppearances: roundFilters.minAppearances,
+            },
+          }),
+        },
+      });
+    } catch (e) {
+      Alert.alert("Failed to start game", String(e?.message || e));
+    } finally {
+      setGameLoading(false);
     }
+  };
 
-    // 3) Potential points from the current pool size
-    const potentialPoints = Math.max(0, Number(poolCount) * 5);
+  const startDaily = async () => {
+    try {
+      setDailyLoading(true);
 
-    // 4) Navigate with a full payload: full player + real filters
-    router.push({
-      pathname: "/live-game",
-      params: {
-        payload: JSON.stringify({
-          ...player,
-          isDaily: false,
-          potentialPoints,
-          filters: {
-            competitions: roundFilters.competitions,
-            seasons: roundFilters.seasons,
-            minMarketValue: roundFilters.minMarketValue,
-            minAppearances: roundFilters.minAppearances,
-          },
-        }),
-      },
-    });
-  } catch (e) {
-    Alert.alert("Failed to start game", String(e?.message || e));
-  } finally {
-    setGameLoading(false);
-  }
-};
+      const d = daily || (await getDailyChallenge());
+      if (!d?.player_id && !d?.id) {
+        Alert.alert("No daily challenge available");
+        return;
+      }
+      const playerId = String(d.player_id ?? d.id);
 
-const startDaily = async () => {
-  try {
-    setDailyLoading(true);
+      // 1) Fetch the full player record by id so the payload is complete
+      //    (same source live-game uses for transfers/facts)
+      const res = await fetch(`${API_BASE}/player/${encodeURIComponent(playerId)}`, {
+        headers: { Accept: "application/json" },
+      });
+      if (!res.ok) throw new Error("Failed to load daily player");
+      const full = await res.json();
 
-    const d = daily || (await getDailyChallenge());
-    if (!d?.player_id && !d?.id) {
-      Alert.alert("No daily challenge available");
-      return;
+      // 2) Build the player object from canonical fields
+      const player = {
+        id: playerId,
+        name: full.name ?? full.player_name ?? d.player_name ?? d.name,
+        age: full.age ?? full.player_age ?? null,
+        nationality: full.nationality ?? full.player_nationality ?? null,
+        position: full.position ?? full.player_position ?? null,
+        photo: full.photo || full.player_photo || full.player_photo_url || null,
+        funFact: full.funFact ?? null,
+      };
+
+      // 3) Daily has fixed potential; no pool filters (and Postgame won’t show “Play Again” for daily)
+      router.push({
+        pathname: "/live-game",
+        params: {
+          payload: JSON.stringify({
+            ...player,
+            isDaily: true,
+            potentialPoints: 10000,
+            filters: {}, // keep structure consistent, not used for Daily
+          }),
+        },
+      });
+    } catch (e) {
+      Alert.alert("Failed to start daily", String(e?.message || e));
+    } finally {
+      setDailyLoading(false);
     }
-    const playerId = String(d.player_id ?? d.id);
-
-    // 1) Fetch the full player record by id so the payload is complete
-    //    (same source live-game uses for transfers/facts)
-    const res = await fetch(`${API_BASE}/player/${encodeURIComponent(playerId)}`, {
-      headers: { Accept: "application/json" },
-    });
-    if (!res.ok) throw new Error("Failed to load daily player");
-    const full = await res.json();
-
-    // 2) Build the player object from canonical fields
-    const player = {
-      id: playerId,
-      name: full.name ?? full.player_name ?? d.player_name ?? d.name,
-      age: full.age ?? full.player_age ?? null,
-      nationality: full.nationality ?? full.player_nationality ?? null,
-      position: full.position ?? full.player_position ?? null,
-      photo: full.photo || full.player_photo || full.player_photo_url || null,
-      funFact: full.funFact ?? null,
-    };
-
-    // 3) Daily has fixed potential; no pool filters (and Postgame won’t show “Play Again” for daily)
-    router.push({
-      pathname: "/live-game",
-      params: {
-        payload: JSON.stringify({
-          ...player,
-          isDaily: true,
-          potentialPoints: 10000,
-          filters: {}, // keep structure consistent, not used for Daily
-        }),
-      },
-    });
-  } catch (e) {
-    Alert.alert("Failed to start daily", String(e?.message || e));
-  } finally {
-    setDailyLoading(false);
-  }
-};
+  };
 
   /* ---------- NON-elimination daily metrics (as on web) ---------- */
   const [nonElimTodayCount, setNonElimTodayCount] = useState(null);
@@ -641,21 +637,21 @@ const startDaily = async () => {
           return;
         }
         // UTC boundaries for "today"
-        const now = new Date();
+        const now = utcNow(); // <-- use UTC helper
         const startUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
         const endUtc   = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
 
         // Today (non-elimination)
         const { data: todayRows, error: e1 } = await supabase
           .from("games_records")
-          .select("points_earned, created_at")
+          .select("points_earned, created_at, is_daily_challenge")
           .eq("user_id", user.id)
           .eq("is_elimination_game", false)
           .gte("created_at", startUtc.toISOString())
           .lt("created_at", endUtc.toISOString());
         if (e1) throw e1;
 
-        const todayCount  = (todayRows || []).length;
+        const todayCount  = (todayRows || []).filter((r) => r?.is_daily_challenge !== true).length;
         const todayPoints = (todayRows || []).reduce((sum, r) => sum + Number(r?.points_earned || 0), 0);
 
         // Total (non-elimination)
@@ -723,7 +719,7 @@ const startDaily = async () => {
         competitions: selectedCompetitionIds,
         seasons: selectedSeasons,
         minMarketValue: Number(minMarketValue) || 0,
-        minAppearances: Number(minAppearances) || 0,
+        minAppearances: Number(minAppearences) || 0,
         userId: user.id,
       };
       const res = await getCounts(payload).catch((e) => {
@@ -925,7 +921,7 @@ const startDaily = async () => {
           <Ionicons
             name={filtersOpen ? "chevron-up" : "chevron-down"}
             size={18}
-            color="#111827"
+            color={"#111827"}
           />
         </Pressable>
 
@@ -973,7 +969,7 @@ const startDaily = async () => {
                 <Ionicons
                   name={compOpen ? "chevron-up" : "chevron-down"}
                   size={18}
-                  color="#111827"
+                  color={"#111827"}
                 />
               </Pressable>
 
@@ -1057,7 +1053,7 @@ const startDaily = async () => {
                 <Ionicons
                   name={seasonsOpen ? "chevron-up" : "chevron-down"}
                   size={18}
-                  color="#111827"
+                  color={"#111827"}
                 />
               </Pressable>
 
