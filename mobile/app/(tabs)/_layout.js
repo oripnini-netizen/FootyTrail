@@ -322,9 +322,6 @@ export default function TabsLayout() {
           },
         }}
       >
-        <Tabs.Screen name="index" options={{ href: null }} />
-        <Tabs.Screen name="explore" options={{ href: null }} />
-
         {/* Hidden pages to inherit nav bars */}
         <Tabs.Screen name="profile-info" options={{ href: null, title: 'Profile Info' }} />
         <Tabs.Screen name="default-filters" options={{ href: null, title: 'Default Filters' }} />

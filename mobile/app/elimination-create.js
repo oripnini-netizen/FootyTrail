@@ -1,3 +1,4 @@
+// elimination-create.js
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
@@ -42,20 +43,20 @@ export default function EliminationCreateScreen() {
   const [elimEvery, setElimEvery] = useState("1"); // rounds_to_elimination
   const [joinDeadlineMins, setJoinDeadlineMins] = useState("60"); // default: 60 minutes
 
-  // === NEW: Private invites state (autocomplete + chips) ===
+  // Private invites (autocomplete + chips)
   const [searchEmail, setSearchEmail] = useState("");
   const [emailResults, setEmailResults] = useState([]); // [{id, email, full_name, profile_photo_url}]
-  const [inviteIndex] = useState(-1); // kept for parity, but mobile uses taps instead of arrows
+  const [inviteIndex] = useState(-1);
   const [invites, setInvites] = useState([]); // chips: [{id?:string, email:string, full_name?:string}]
   const searchEmailRef = useRef(null);
   const inviteResultsRef = useRef(null);
   const emailDebounceRef = useRef(null);
   const [inviteError, setInviteError] = useState("");
 
-  // === NEW: Default filters toggle (ON by default) ===
+  // Default filters toggle (ON by default)
   const [useDefaultFilters, setUseDefaultFilters] = useState(true);
 
-  // === Advanced filters data & state (mirrors game.js) ===
+  // Advanced filters data & state (mirrors game.js)
   const [allCompetitions, setAllCompetitions] = useState([]);
   const [allSeasons, setAllSeasons] = useState([]);
 
@@ -117,7 +118,7 @@ export default function EliminationCreateScreen() {
         }
       }
 
-      // competitions/seasons (same approach as game.js)
+      // competitions/seasons
       let payload = await fetchFromWebAPI();
       if (!payload) payload = await fetchFromSupabaseFallback();
       setAllCompetitions(payload?.flatCompetitions || []);
@@ -191,21 +192,10 @@ export default function EliminationCreateScreen() {
     };
   }
 
-  // ---- Helpers copied from game.js behavior ----
-  function fmtNum(n) {
-    return new Intl.NumberFormat("en-US").format(Number(n || 0));
-  }
-  function compactMoney(n) {
-    const num = Number(n || 0);
-    if (num >= 1_000_000_000) return `${Math.round(num / 1_000_000_000)}B`;
-    if (num >= 1_000_000) return `${Math.round(num / 1_000_000)}M`;
-    if (num >= 1_000) return `${Math.round(num / 1_000)}K`;
-    return `${num}`;
-  }
+  // ---- Helpers ----
   const arraysEqualAsSets = (a, b) =>
     a.length === b.length && a.every((x) => b.includes(x));
 
-  // Competition dropdown lists
   const filteredCompetitions = useMemo(() => {
     const q = (compQuery || "").trim().toLowerCase();
     if (!q) return allCompetitions;
@@ -355,9 +345,8 @@ export default function EliminationCreateScreen() {
     );
   }
 
-  // === NEW: Invite helpers ===
-  const emailRegex =
-    /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
+  // Invite helpers
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 
   const addInvite = (u) => {
     const email = (u?.email || "").trim().toLowerCase();
@@ -386,7 +375,8 @@ export default function EliminationCreateScreen() {
     setInvites((prev) =>
       prev.filter(
         (x) =>
-          x.id !== idOrEmail && x.email.toLowerCase() !== String(idOrEmail).toLowerCase()
+          x.id !== idOrEmail &&
+          x.email.toLowerCase() !== String(idOrEmail).toLowerCase()
       )
     );
   };
@@ -419,7 +409,11 @@ export default function EliminationCreateScreen() {
         }
 
         const filtered = (data || []).filter(
-          (u) => u?.email && !invites.some((x) => x.email.toLowerCase() === u.email.toLowerCase())
+          (u) =>
+            u?.email &&
+            !invites.some(
+              (x) => x.email.toLowerCase() === u.email.toLowerCase()
+            )
         );
         setEmailResults(filtered);
       } catch {
@@ -458,14 +452,29 @@ export default function EliminationCreateScreen() {
       visibility: isPublic ? "public" : "private",
     };
 
-    // Private invites
+    // Private invites → must pass UUIDs to RPC. Resolve any missing IDs by email.
+    let invitedUserIds = [];
     if (!isPublic) {
-      const emails = invites.map((x) => (x.email || "").trim()).filter(Boolean);
-      if (emails.length === 0) {
-        setInviteError("Add at least one email, or set the challenge to Public.");
+      const withIds = invites.filter((x) => x.id);
+      invitedUserIds = withIds.map((x) => x.id);
+
+      const emailsNeedingLookup = invites
+        .filter((x) => !x.id && x.email)
+        .map((x) => x.email.toLowerCase());
+
+      if (emailsNeedingLookup.length) {
+        const { data: found } = await supabase
+          .from("users")
+          .select("id, email")
+          .in("email", emailsNeedingLookup);
+
+        (found || []).forEach((u) => invitedUserIds.push(u.id));
+      }
+
+      if (invitedUserIds.length === 0) {
+        setInviteError("Add at least one existing user (or set to Public).");
         return;
       }
-      filters.invited_emails = emails;
     }
 
     // Apply defaults or advanced selections
@@ -473,46 +482,42 @@ export default function EliminationCreateScreen() {
       const d = defaultRef.current;
       if (d.competitions.length) filters.competitions = d.competitions;
       if (d.seasons.length) filters.seasons = d.seasons;
-      if (Number(d.minAppearances) > 0) filters.minAppearances = Number(d.minAppearances);
-      if (Number(d.minMarketValue) > 0) filters.minMarketValue = Number(d.minMarketValue);
+      if (Number(d.minAppearances) > 0)
+        filters.minAppearances = Number(d.minAppearances);
+      if (Number(d.minMarketValue) > 0)
+        filters.minMarketValue = Number(d.minMarketValue);
     } else {
-      if (selectedCompetitionIds.length) filters.competitions = selectedCompetitionIds.map(String);
-      if (selectedSeasons.length) filters.seasons = selectedSeasons.map(String);
-      if (Number(minAppearances) > 0) filters.minAppearances = Number(minAppearances);
-      if (Number(minMarketValue) > 0) filters.minMarketValue = Number(minMarketValue);
+      if (selectedCompetitionIds.length)
+        filters.competitions = selectedCompetitionIds.map(String);
+      if (selectedSeasons.length)
+        filters.seasons = selectedSeasons.map(String);
+      if (Number(minAppearances) > 0)
+        filters.minAppearances = Number(minAppearances);
+      if (Number(minMarketValue) > 0)
+        filters.minMarketValue = Number(minMarketValue);
     }
 
-    // Join deadline (minutes from now; default 60)
-    let join_deadline = null;
-    try {
-      const minsRaw = joinDeadlineMins?.trim();
-      const mins = minsRaw === "" ? 60 : Math.max(0, Number(minsRaw) || 60);
-      if (mins > 0) {
-        join_deadline = new Date(Date.now() + mins * 60000).toISOString();
-      }
-    } catch {
-      // ignore
-    }
+    // Join deadline input is minutes from now (RPC arg name: p_join_window_minutes)
+    const minsRaw = (joinDeadlineMins || "").trim();
+    const p_join_window_minutes =
+      minsRaw === "" ? 60 : Math.max(0, Number(minsRaw) || 60);
 
     setSubmitting(true);
     try {
-      const { data, error } = await supabase
-        .from("elimination_tournaments")
-        .insert([
-          {
-            name: name.trim(),
-            status: "lobby",
-            owner_id: userId,
-            stake_points,
-            min_participants,
-            round_time_limit_seconds,
-            rounds_to_elimination,
-            join_deadline,
-            filters,
-          },
-        ])
-        .select("id")
-        .maybeSingle();
+      // ✅ Call SECURITY DEFINER RPC with EXACT param names:
+      const { data, error } = await supabase.rpc(
+        "create_elimination_tournament_with_stakes",
+        {
+          p_filters: filters,
+          p_invited_user_ids: invitedUserIds.length ? invitedUserIds : null,
+          p_name: name.trim(),
+          p_round_time_limit_seconds: round_time_limit_seconds,
+          p_rounds_to_elimination: rounds_to_elimination,
+          p_stake_points: stake_points,
+          p_join_window_minutes,
+          p_min_participants: min_participants,
+        }
+      );
 
       if (error) throw error;
 
@@ -536,7 +541,10 @@ export default function EliminationCreateScreen() {
         <View
           style={[
             styles.topBar,
-            { paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) : 0 },
+            {
+              paddingTop:
+                Platform.OS === "android" ? StatusBar.currentHeight || 0 : 0,
+            },
           ]}
         >
           <Image
@@ -557,7 +565,10 @@ export default function EliminationCreateScreen() {
         </View>
       </SafeAreaView>
 
-      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={styles.container}
+        keyboardShouldPersistTaps="handled"
+      >
         {/* Name */}
         <View style={styles.field}>
           <Text style={styles.label}>Name</Text>
@@ -571,15 +582,17 @@ export default function EliminationCreateScreen() {
         </View>
 
         {/* Public / Private */}
-        <View style={styles.row}>
+        <View className="row" style={styles.row}>
           <Text style={styles.label}>Public</Text>
           <Switch value={isPublic} onValueChange={setIsPublic} />
         </View>
 
-        {/* === NEW: Invite emails (private only) with autocomplete + chips === */}
+        {/* Invite emails (private only) */}
         {!isPublic && (
           <View style={styles.invitesCard}>
-            <Text style={[styles.label, { marginBottom: 6 }]}>Invite users (by email)</Text>
+            <Text style={[styles.label, { marginBottom: 6 }]}>
+              Invite users (by email)
+            </Text>
 
             {/* Search input + Add button */}
             <View style={styles.inviteSearchRow}>
@@ -597,12 +610,8 @@ export default function EliminationCreateScreen() {
                 keyboardType="email-address"
                 returnKeyType="search"
                 onSubmitEditing={() => {
-                  // If we have search results, add the first; otherwise try typed email
-                  if (emailResults.length > 0) {
-                    addInvite(emailResults[0]);
-                  } else {
-                    addTypedEmailIfValid();
-                  }
+                  if (emailResults.length) addInvite(emailResults[0]);
+                  else addTypedEmailIfValid();
                 }}
               />
               <TouchableOpacity style={styles.addBtn} onPress={addTypedEmailIfValid}>
@@ -610,108 +619,54 @@ export default function EliminationCreateScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* Results list (tap to add) */}
+            {!!inviteError && (
+              <Text style={{ color: "#b91c1c", marginTop: 6 }}>{inviteError}</Text>
+            )}
+
+            {/* Results list */}
             {emailResults.length > 0 && (
-              <View ref={inviteResultsRef} style={styles.resultsList}>
+              <View
+                ref={inviteResultsRef}
+                style={{ marginTop: 8, borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 10 }}
+              >
                 {emailResults.map((u) => (
-                  <TouchableOpacity
-                    key={u.id}
-                    onPress={() => addInvite(u)}
-                    style={styles.resultRow}
-                    activeOpacity={0.7}
-                  >
-                    <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
-                      {u.profile_photo_url ? (
-                        <Image source={{ uri: u.profile_photo_url }} style={styles.resultAvatar} />
-                      ) : (
-                        <View style={[styles.resultAvatar, { backgroundColor: "#e5e7eb" }]} />
-                      )}
-                      <View style={{ marginLeft: 8, flex: 1 }}>
-                        <Text style={styles.resultName} numberOfLines={1}>
-                          {u.full_name ? `${u.full_name}` : u.email}
-                        </Text>
-                        {u.full_name ? (
-                          <Text style={styles.resultEmail} numberOfLines={1}>
-                            {u.email}
-                          </Text>
-                        ) : null}
-                      </View>
+                  <Pressable key={u.id} onPress={() => addInvite(u)} style={styles.resultRow}>
+                    <Image
+                      source={{ uri: u.profile_photo_url || "" }}
+                      style={styles.resultAvatar}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontWeight: "700" }}>{u.full_name || u.email}</Text>
+                      <Text style={{ color: "#6b7280" }}>{u.email}</Text>
                     </View>
-                    <Text style={styles.resultAdd}>Add</Text>
-                  </TouchableOpacity>
+                    <Ionicons name="add-circle-outline" size={22} color="#14532d" />
+                  </Pressable>
                 ))}
               </View>
             )}
 
             {/* Chips */}
             {invites.length > 0 && (
-              <View style={{ marginTop: 10 }}>
-                <Text style={styles.invitedLabel}>Invited</Text>
-                <View style={styles.chipsWrap}>
+              <View style={[styles.subCard, { marginTop: 10 }]}>
+                <Text style={[styles.label, { marginBottom: 6 }]}>Invited</Text>
+                <View style={styles.rowWrap}>
                   {invites.map((u) => (
-                    <View key={u.id || u.email} style={styles.inviteChip}>
-                      <Text style={styles.inviteChipText}>
-                        {u.full_name || u.email}
-                      </Text>
-                      <TouchableOpacity
-                        onPress={() => removeInvite(u.id || u.email)}
-                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                      >
-                        <Text style={styles.inviteChipX}>×</Text>
-                      </TouchableOpacity>
-                    </View>
+                    <Chip
+                      key={u.id || u.email}
+                      onPress={() => removeInvite(u.id || u.email)}
+                      selected
+                    >
+                      {u.full_name ? `${u.full_name} (${u.email})` : u.email}
+                    </Chip>
                   ))}
                 </View>
               </View>
             )}
-
-            {!!inviteError && <Text style={styles.errorText}>{inviteError}</Text>}
           </View>
         )}
 
-        {/* Stake, min participants, round time, elimination every */}
-        <View style={styles.row}>
-          <Text style={styles.label}>Stake (points)</Text>
-          <TextInput
-            style={styles.inputSmall}
-            keyboardType="numeric"
-            value={stake}
-            onChangeText={setStake}
-          />
-        </View>
-
-        <View style={styles.row}>
-          <Text style={styles.label}>Min participants</Text>
-          <TextInput
-            style={styles.inputSmall}
-            keyboardType="numeric"
-            value={minPlayers}
-            onChangeText={setMinPlayers}
-          />
-        </View>
-
-        <View style={styles.row}>
-          <Text style={styles.label}>Round time (minutes)</Text>
-          <TextInput
-            style={styles.inputSmall}
-            keyboardType="numeric"
-            value={roundLimitMin}
-            onChangeText={setRoundLimitMin}
-          />
-        </View>
-
-        <View style={styles.row}>
-          <Text style={styles.label}>Elimination every (rounds)</Text>
-          <TextInput
-            style={styles.inputSmall}
-            keyboardType="numeric"
-            value={elimEvery}
-            onChangeText={setElimEvery}
-          />
-        </View>
-
         {/* Join deadline */}
-        <View style={styles.row}>
+        <View style={[styles.row, { marginTop: 8 }]}>
           <Text style={styles.label}>Join deadline (minutes)</Text>
           <TextInput
             style={styles.inputSmall}
@@ -721,163 +676,108 @@ export default function EliminationCreateScreen() {
           />
         </View>
 
-        {/* === "Apply My Default Filters" toggle OUTSIDE the advanced box === */}
-        <View style={[styles.row, { marginTop: 6 }]}>
-          <Text style={styles.label}>Apply My Default Filters</Text>
-          <Switch
-            value={useDefaultFilters}
-            onValueChange={setUseDefaultFilters}
-          />
+        {/* Apply defaults toggle */}
+        <View style={[styles.row, { marginTop: 8 }]}>
+          <Text style={styles.label}>Apply my default filters</Text>
+          <Switch value={useDefaultFilters} onValueChange={setUseDefaultFilters} />
         </View>
 
-        {/* === Advanced Filters (visible only if toggle OFF) === */}
+        {/* Advanced filters (shown only when defaults OFF) */}
         {!useDefaultFilters && (
           <View style={styles.advancedBox}>
-            <Text style={[styles.label, { marginBottom: 8 }]}>Advanced Filters</Text>
+            <Text style={styles.sectionTitle}>Filters</Text>
 
-            {/* COMPETITIONS */}
+            {/* Competitions */}
             <View style={styles.subCard}>
-              <Text style={styles.sectionTitle}>Competitions</Text>
-
+              <Text style={styles.subTitle}>Competitions</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Search competitions…"
+                value={compQuery}
+                onChangeText={setCompQuery}
+              />
               <View style={styles.rowWrap}>
-                <Chip onPress={selectTop10} selected={isTop10Selected}>
-                  Top 10
+                <Chip onPress={selectTop10} selected={selectedCompetitionIds.length && arraysEqualAsSets(selectedCompetitionIds, top10Ids)}>
+                  Top 10 by value
                 </Chip>
-                <Chip onPress={selectAllComps} selected={isAllCompsSelected}>
-                  Select All
+                <Chip onPress={selectAllComps} selected={allCompetitions.length && selectedCompetitionIds.length === allCompetitions.length}>
+                  Select all
                 </Chip>
-                <Chip onPress={clearComps} variant="outline" selected={isClearComps}>
-                  Clear All
+                <Chip onPress={clearComps} selected={selectedCompetitionIds.length === 0}>
+                  Clear
                 </Chip>
               </View>
-
-              <Pressable onPress={() => setCompOpen((v) => !v)} style={styles.selectHeader}>
-                <Ionicons name="flag-outline" size={18} color="#0b3d24" />
-                <Text style={styles.selectHeaderText}>
-                  {selectedCompetitionIds.length
-                    ? `${selectedCompetitionIds.length} selected`
-                    : "Choose competitions"}
-                </Text>
-                <Ionicons
-                  name={compOpen ? "chevron-up" : "chevron-down"}
-                  size={18}
-                  color="#0b3d24"
-                />
-              </Pressable>
-
-              {compOpen && (
-                <>
-                  <TextInput
-                    style={styles.searchInput}
-                    placeholder="Search competitions…"
-                    value={compQuery}
-                    onChangeText={setCompQuery}
-                  />
-
-                  <View style={styles.listBox}>
-                    {compsOrderedForDropdown.map((c) => {
-                      const isSel = selectedCompetitionIds.includes(
-                        String(c.competition_id)
-                      );
-                      return (
-                        <CompetitionRow
-                          key={c.competition_id}
-                          comp={c}
-                          selected={isSel}
-                          onToggle={toggleCompetition}
-                        />
-                      );
-                    })}
-                  </View>
-                </>
-              )}
+              <View style={{ marginTop: 8 }}>
+                {compsOrderedForDropdown.slice(0, 16).map((c) => {
+                  const selected = selectedCompetitionIds.includes(
+                    String(c.competition_id)
+                  );
+                  return (
+                    <CompetitionRow
+                      key={c.competition_id}
+                      comp={c}
+                      selected={selected}
+                      onToggle={toggleCompetition}
+                    />
+                  );
+                })}
+              </View>
             </View>
 
-            {/* SEASONS */}
+            {/* Seasons */}
             <View style={styles.subCard}>
-              <Text style={styles.sectionTitle}>Seasons</Text>
-
+              <Text style={styles.subTitle}>Seasons</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Filter seasons…"
+                value={seasonQuery}
+                onChangeText={setSeasonQuery}
+              />
               <View style={styles.rowWrap}>
-                <Chip onPress={selectLast3} selected={isLast3Seasons}>
+                <Chip onPress={() => setSelectedSeasons(allSeasons.slice(0, 3))} selected={allSeasons.length >= 3 && selectedSeasons.length === 3 && arraysEqualAsSets(selectedSeasons, allSeasons.slice(0,3))}>
                   Last 3
                 </Chip>
-                <Chip onPress={selectLast5} selected={isLast5Seasons}>
+                <Chip onPress={() => setSelectedSeasons(allSeasons.slice(0, 5))} selected={allSeasons.length >= 5 && selectedSeasons.length === 5 && arraysEqualAsSets(selectedSeasons, allSeasons.slice(0,5))}>
                   Last 5
                 </Chip>
-                <Chip onPress={selectAllSeasons} selected={isAllSeasons}>
-                  Select All
+                <Chip onPress={() => setSelectedSeasons(allSeasons)} selected={allSeasons.length > 0 && selectedSeasons.length === allSeasons.length}>
+                  Select all
                 </Chip>
-                <Chip onPress={clearSeasons} variant="outline" selected={isClearSeasons}>
-                  Clear All
+                <Chip onPress={() => setSelectedSeasons([])} selected={selectedSeasons.length === 0}>
+                  Clear
                 </Chip>
               </View>
 
-              <Pressable onPress={() => setSeasonsOpen((v) => !v)} style={styles.selectHeader}>
-                <Ionicons name="calendar-outline" size={18} color="#0b3d24" />
-                <Text style={styles.selectHeaderText}>
-                  {selectedSeasons.length
-                    ? `${selectedSeasons.length} selected`
-                    : "Choose seasons"}
-                </Text>
-                <Ionicons
-                  name={seasonsOpen ? "chevron-up" : "chevron-down"}
-                  size={18}
-                  color="#0b3d24"
-                />
-              </Pressable>
-
-              {seasonsOpen && (
-                <>
-                  <TextInput
-                    style={styles.searchInput}
-                    placeholder="Filter seasons…"
-                    value={seasonQuery}
-                    onChangeText={setSeasonQuery}
-                  />
-
-                  <View style={styles.listBox}>
-                    {seasonsOrderedForDropdown.map((s) => {
-                      const isSel = selectedSeasons.includes(s);
-                      return (
-                        <Pressable
-                          key={s}
-                          onPress={() => toggleSeason(s)}
-                          style={styles.compRow}
-                        >
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.compName}>{s}</Text>
-                          </View>
-                          <Ionicons
-                            name={isSel ? "checkbox" : "square-outline"}
-                            size={20}
-                            color={isSel ? "#14532d" : "#9ca3af"}
-                          />
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-                </>
-              )}
+              <View style={{ marginTop: 8, flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                {seasonsOrderedForDropdown.slice(0, 24).map((s) => {
+                  const selected = selectedSeasons.includes(s);
+                  return (
+                    <Chip key={s} selected={selected} onPress={() => toggleSeason(s)}>
+                      {s}
+                    </Chip>
+                  );
+                })}
+              </View>
             </View>
 
-            {/* MINIMUMS */}
+            {/* Numeric limits */}
             <View style={styles.subCard}>
-              <Text style={styles.sectionTitle}>Minimums</Text>
-              <View style={styles.row}>
-                <Text style={styles.label}>Min value (€)</Text>
+              <Text style={styles.subTitle}>Minimums</Text>
+              <View style={[styles.row, { justifyContent: "flex-start" }]}>
+                <Text style={[styles.label, { width: 140 }]}>Market value (€)</Text>
                 <TextInput
                   style={styles.inputSmall}
                   keyboardType="numeric"
-                  value={String(minMarketValue ?? 0)}
+                  value={String(minMarketValue || 0)}
                   onChangeText={(t) => setMinMarketValue(Number(t) || 0)}
                 />
               </View>
-              <View style={styles.row}>
-                <Text style={styles.label}>Min appearances</Text>
+              <View style={[styles.row, { justifyContent: "flex-start" }]}>
+                <Text style={[styles.label, { width: 140 }]}>Appearances</Text>
                 <TextInput
                   style={styles.inputSmall}
                   keyboardType="numeric"
-                  value={String(minAppearances ?? 0)}
+                  value={String(minAppearances || 0)}
                   onChangeText={(t) => setMinAppearances(Number(t) || 0)}
                 />
               </View>
@@ -885,14 +785,66 @@ export default function EliminationCreateScreen() {
           </View>
         )}
 
-        {/* Create button */}
-        <TouchableOpacity
-          onPress={onCreate}
-          disabled={submitting}
-          style={[styles.createBtn, submitting && { opacity: 0.7 }]}
-        >
-          <Text style={styles.createBtnText}>{submitting ? "Creating…" : "Create Challenge"}</Text>
-        </TouchableOpacity>
+        {/* Stake / Min participants / Round time / Elimination cadence */}
+        <View style={[styles.subCard, { marginTop: 8 }]}>
+          <Text style={styles.sectionTitle}>Match rules</Text>
+          <View style={[styles.row, { justifyContent: "flex-start" }]}>
+            <Text style={[styles.label, { width: 160 }]}>Stake (points)</Text>
+            <TextInput
+              style={styles.inputSmall}
+              keyboardType="numeric"
+              value={String(stake)}
+              onChangeText={setStake}
+            />
+          </View>
+          <View style={[styles.row, { justifyContent: "flex-start" }]}>
+            <Text style={[styles.label, { width: 160 }]}>Min participants</Text>
+            <TextInput
+              style={styles.inputSmall}
+              keyboardType="numeric"
+              value={String(minPlayers)}
+              onChangeText={setMinPlayers}
+            />
+          </View>
+          <View style={[styles.row, { justifyContent: "flex-start" }]}>
+            <Text style={[styles.label, { width: 160 }]}>Round time (minutes)</Text>
+            <TextInput
+              style={styles.inputSmall}
+              keyboardType="numeric"
+              value={String(roundLimitMin)}
+              onChangeText={setRoundLimitMin}
+            />
+          </View>
+          <View style={[styles.row, { justifyContent: "flex-start" }]}>
+            <Text style={[styles.label, { width: 160 }]}>Eliminate every (rounds)</Text>
+            <TextInput
+              style={styles.inputSmall}
+              keyboardType="numeric"
+              value={String(elimEvery)}
+              onChangeText={setElimEvery}
+            />
+          </View>
+        </View>
+
+        {/* Create + Cancel buttons */}
+        <View style={styles.actionRow}>
+          <TouchableOpacity
+            onPress={onCreate}
+            disabled={submitting}
+            style={[styles.createBtn, submitting && { opacity: 0.7 }]}
+          >
+            <Text style={styles.createBtnText}>
+              {submitting ? "Creating…" : "Create Challenge"}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={() => router.push("/elimination")}
+            style={styles.cancelBtn}
+          >
+            <Text style={styles.cancelBtnText}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </View>
   );
@@ -979,128 +931,35 @@ const styles = StyleSheet.create({
     padding: 10,
     backgroundColor: "#fff",
   },
-  sectionTitle: { fontSize: 14, fontWeight: "700", color: "#0b3d24" },
-  chip: {
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-  },
-  selectHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    padding: 10,
-    borderWidth: 1,
-    borderColor: "#d1d5db",
-    borderRadius: 10,
-    marginTop: 10,
-    backgroundColor: "#f8fafc",
-  },
-  selectHeaderText: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#0b3d24",
-  },
-  searchInput: {
-    marginTop: 8,
-    borderWidth: 1,
-    borderColor: "#d1d5db",
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    fontSize: 14,
-    backgroundColor: "#fff",
-  },
-  listBox: {
-    marginTop: 8,
-    borderWidth: 1,
-    borderColor: "#e5e7eb",
-    borderRadius: 10,
-    overflow: "hidden",
-    backgroundColor: "#fff",
-  },
+  sectionTitle: { fontSize: 14, fontWeight: "700", color: "#111827", marginBottom: 6 },
+  subTitle: { fontSize: 13, fontWeight: "700", color: "#1f2937", marginBottom: 6 },
+
   compRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
     paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#f1f5f9",
+    gap: 10,
   },
-  flag: { width: 18, height: 12, borderRadius: 2, marginRight: 4 },
-  logo: { width: 22, height: 22, borderRadius: 4, marginRight: 4 },
-  compName: { fontSize: 14, fontWeight: "600", color: "#111827" },
-  compSub: { fontSize: 12, color: "#6b7280" },
+  flag: { width: 22, height: 16, borderRadius: 2, backgroundColor: "#eee" },
+  logo: { width: 20, height: 20, borderRadius: 4, backgroundColor: "#eee" },
+  compName: { fontWeight: "700", color: "#111827" },
+  compSub: { color: "#6b7280" },
 
-  // Create button
-  createBtn: {
-    marginTop: 10,
-    backgroundColor: "#14532d",
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: "center",
-  },
-  createBtnText: { color: "#fff", fontWeight: "700" },
-
-  // Invites block
-  invitesCard: {
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: "#e5e7eb",
-    borderRadius: 12,
-    padding: 12,
-    backgroundColor: "#ffffff",
-  },
-  inviteSearchRow: {
-    flexDirection: "row",
-    gap: 8,
-    alignItems: "center",
-  },
-  addBtn: {
-    backgroundColor: "#14532d",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  addBtnText: { color: "#fff", fontWeight: "700", fontSize: 13 },
-  resultsList: {
-    marginTop: 8,
-    borderWidth: 1,
-    borderColor: "#e5e7eb",
-    borderRadius: 10,
-    maxHeight: 240,
-    overflow: "hidden",
-    backgroundColor: "#fff",
-  },
-  resultRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#f1f5f9",
-  },
-  resultAvatar: { width: 28, height: 28, borderRadius: 14 },
-  resultName: { fontSize: 14, fontWeight: "600", color: "#111827" },
-  resultEmail: { fontSize: 12, color: "#6b7280" },
-  resultAdd: { fontSize: 12, color: "#374151" },
-
-  invitedLabel: { fontSize: 12, color: "#6b7280", marginBottom: 4 },
-  chipsWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  inviteChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: "#f3f4f6",
-    borderRadius: 999,
+  chip: {
     paddingHorizontal: 10,
     paddingVertical: 6,
+    borderWidth: 1,
+    borderRadius: 999,
   },
-  inviteChipText: { fontSize: 12, fontWeight: "600", color: "#111827" },
-  inviteChipX: { fontSize: 14, color: "#6b7280" },
 
-  errorText: { marginTop: 8, fontSize: 12, color: "#dc2626" },
+  invitesCard: { marginTop: 8, padding: 12, borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 12, backgroundColor: "#fff" },
+  inviteSearchRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  resultRow: { flexDirection: "row", alignItems: "center", gap: 10, padding: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: "#e5e7eb" },
+  resultAvatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#e5e7eb" },
+
+  actionRow: { flexDirection: "row", gap: 10, marginTop: 16 },
+  createBtn: { flex: 1, backgroundColor: "#14532d", paddingVertical: 12, borderRadius: 10, alignItems: "center" },
+  createBtnText: { color: "#fff", fontWeight: "800" },
+  cancelBtn: { paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10, backgroundColor: "#e5e7eb" },
+  cancelBtnText: { color: "#111827", fontWeight: "700" },
 });
