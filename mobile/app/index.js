@@ -2,20 +2,19 @@
 import { useEffect, useState } from "react";
 import { View, ActivityIndicator } from "react-native";
 import { useRouter } from "expo-router";
-import { supabase } from "../lib/supabase"; // ← correct path (up one level)
+import * as Notifications from "expo-notifications";
+import { supabase } from "../lib/supabase";
 
 /**
- * NOTE on push registration:
- * We lazy-import the helper so expo-notifications isn't loaded at module time.
- * This avoids "Cannot find native module 'ExpoPushTokenManager'" crashes
- * when running without Expo Go / dev build. Any failure is caught & logged.
+ * We lazy-import the registration helper so the app doesn't crash
+ * if expo-notifications native bits aren't present.
  */
 
 export default function Index() {
   const router = useRouter();
   const [checking, setChecking] = useState(true);
 
-  // Lazy import + run push registration (safe, won't crash app if not available)
+  // Register for push (lazy import; safe on devices without the native module)
   useEffect(() => {
     (async () => {
       try {
@@ -29,13 +28,28 @@ export default function Index() {
     })();
   }, []);
 
+  // Navigate on notification tap
+  useEffect(() => {
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      try {
+        const data = response?.notification?.request?.content?.data || {};
+        const tid = data.tournamentId || data.tournament_id || data.id;
+        if (tid) {
+          // push to your elimination page with the id as a param
+          router.push({ pathname: "/elimination", params: { id: String(tid) } });
+        }
+      } catch (e) {
+        console.log("notif tap handler error:", String(e?.message || e));
+      }
+    });
+    return () => sub?.remove();
+  }, [router]);
+
   // Gate: route user based on auth + onboarding
   useEffect(() => {
     let mounted = true;
     (async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      const { data: { session } } = await supabase.auth.getSession();
 
       if (!mounted) return;
 
@@ -62,12 +76,9 @@ export default function Index() {
       setChecking(false);
     })();
 
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [router]);
 
-  // Simple loading screen while we decide where to go
   return (
     <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
       <ActivityIndicator />

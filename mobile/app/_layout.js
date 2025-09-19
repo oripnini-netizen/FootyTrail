@@ -1,8 +1,17 @@
 // mobile/app/_layout.js
-import React from "react";
-import { Stack } from "expo-router";
+import React, { useEffect } from "react";
+import { Stack, useRouter } from "expo-router";
+import { setupNotificationNavigation } from "../lib/notifications";
 
 export default function RootLayout() {
+  const router = useRouter();
+
+  // 🔗 Handle notification taps (warm + cold starts)
+  useEffect(() => {
+    const cleanup = setupNotificationNavigation(router);
+    return cleanup;
+  }, [router]);
+
   return (
     <Stack screenOptions={{ headerShown: false }}>
       {/* Gate that decides login/tutorial/tabs */}

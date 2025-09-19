@@ -1,17 +1,193 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+// mobile/app/leagues.js
+import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import {
   View,
   Text,
   TouchableOpacity,
   TextInput,
-  FlatList,
   Image,
   ActivityIndicator,
   Alert,
-  Platform,
+  ScrollView,
+  Modal,
+  Pressable,
+  Dimensions,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
 } from "react-native";
 import { supabase } from "../../lib/supabase";
 
+/* =========================
+   Shared time/date helpers
+   ======================= */
+function toUtcMidnight(dateLike) {
+  const d =
+    typeof dateLike === "string"
+      ? new Date(`${dateLike}T00:00:00.000Z`)
+      : new Date(dateLike);
+  return new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+  );
+}
+function todayUtcMidnight() {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
+function dayRangeUtc(dateStr) {
+  const start = toUtcMidnight(dateStr);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+const fmtShort = (d) =>
+  new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
+/* =========================
+   Names & standings helpers
+   ======================= */
+const displayName = (p) =>
+  p.is_bot ? p.display_name : p.user?.full_name || "Unknown";
+const byDateAsc = (a, b) => new Date(a.match_date) - new Date(b.match_date);
+const keyDP = (m, p) => `${m.league_id}|${m.match_date}|${p.id}`;
+
+function computeStandings(participants, matches, dayPointsMap) {
+  const stats = new Map();
+  const ensure = (pid, name, isBot) => {
+    if (!stats.has(pid))
+      stats.set(pid, {
+        pid,
+        name,
+        isBot,
+        P: 0,
+        W: 0,
+        D: 0,
+        L: 0,
+        PTS: 0,
+        PF: 0,
+        PA: 0,
+      });
+    return stats.get(pid);
+  };
+
+  const today0 = todayUtcMidnight();
+
+  matches
+    .filter((m) => new Date(m.match_date) <= today0) // include today (live)
+    .forEach((m) => {
+      const home = participants.find((p) => p.id === m.home_participant_id);
+      const away = participants.find((p) => p.id === m.away_participant_id);
+      if (!home || !away) return;
+
+      const homePts = dayPointsMap.get(keyDP(m, home)) ?? 0;
+      const awayPts = dayPointsMap.get(keyDP(m, away)) ?? 0;
+
+      const A = ensure(home.id, displayName(home), home.is_bot);
+      const B = ensure(away.id, displayName(away), away.is_bot);
+
+      A.P += 1;
+      B.P += 1;
+
+      // points for/against (for GD)
+      A.PF += homePts;
+      A.PA += awayPts;
+      B.PF += awayPts;
+      B.PA += homePts;
+
+      if (homePts > awayPts) {
+        A.W += 1;
+        A.PTS += 3;
+        B.L += 1;
+      } else if (homePts < awayPts) {
+        B.W += 1;
+        B.PTS += 3;
+        A.L += 1;
+      } else {
+        A.D += 1;
+        B.D += 1;
+        A.PTS += 1;
+        B.PTS += 1;
+      }
+    });
+
+  // ensure everyone shows in table
+  participants.forEach((p) => ensure(p.id, displayName(p), p.is_bot));
+
+  const list = Array.from(stats.values()).map((s) => ({
+    ...s,
+    GD: (s.PF || 0) - (s.PA || 0),
+  }));
+  return list.sort(
+    (a, b) => b.PTS - a.PTS || b.GD - a.GD || b.W - a.W || a.name.localeCompare(b.name)
+  );
+}
+
+/* =========================
+   Double round-robin pairing
+   ======================= */
+function generateDoubleRoundRobin(participantIds) {
+  const n = participantIds.length;
+  if (n < 2) return [];
+  const arr = [...participantIds];
+  if (n % 2 !== 0) arr.push(null);
+  const m = arr.length;
+  const rounds = [];
+  for (let r = 0; r < m - 1; r++) {
+    const pairs = [];
+    for (let i = 0; i < m / 2; i++) {
+      const a = arr[i];
+      const b = arr[m - 1 - i];
+      if (a != null && b != null) {
+        pairs.push(r % 2 === 0 ? { home: a, away: b } : { home: b, away: a });
+      }
+    }
+    rounds.push({ match_day: r + 1, pairs });
+    const fixed = arr[0];
+    const rest = arr.slice(1);
+    rest.unshift(rest.pop());
+    arr.splice(0, arr.length, fixed, ...rest);
+  }
+  const secondLeg = rounds.map((r, idx) => ({
+    match_day: rounds.length + idx + 1,
+    pairs: r.pairs.map((p) => ({ home: p.away, away: p.home })),
+  }));
+  return [...rounds, ...secondLeg];
+}
+
+/* =========================
+   Fun bot names (like web)
+   ======================= */
+const BOT_PREFIX = [
+  "Robo",
+  "Auto",
+  "Mecha",
+  "Cyber",
+  "Quantum",
+  "Galacto",
+  "Vector",
+  "Atlas",
+  "Proto",
+  "Machine",
+];
+const BOT_SUFFIX = [
+  "United",
+  "FC",
+  "Athletic",
+  "Calcio",
+  "City",
+  "Town",
+  "Dynamos",
+  "Wanderers",
+  "Botos",
+  "Botlandia",
+  "Robotics",
+];
+const randomBotName = () =>
+  `${BOT_PREFIX[Math.floor(Math.random() * BOT_PREFIX.length)]} ${
+    BOT_SUFFIX[Math.floor(Math.random() * BOT_SUFFIX.length)]
+  }`;
+
+/* =========================
+   Tiny UI atoms
+   ======================= */
 function Section({ title, right, children, style }) {
   return (
     <View
@@ -43,206 +219,447 @@ function Section({ title, right, children, style }) {
   );
 }
 
+function StatusPill({ status }) {
+  const base = {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: "700",
+  };
+  if (status === "Live")
+    return (
+      <Text style={[base, { backgroundColor: "#fee2e2", color: "#b91c1c" }]}>
+        Live
+      </Text>
+    );
+  if (status === "Scheduled")
+    return (
+      <Text style={[base, { backgroundColor: "#fef3c7", color: "#92400e" }]}>
+        Scheduled
+      </Text>
+    );
+  return (
+    <Text style={[base, { backgroundColor: "#e5e7eb", color: "#374151" }]}>
+      Ended
+    </Text>
+  );
+}
+
+/* =========================================================
+   Avatar — initials fallback so they aren’t all the same
+   ======================================================= */
+function Avatar({ participant, size = 28, onPress }) {
+  const { is_bot, user } = participant || {};
+  const uri = user?.profile_photo_url;
+
+  const initialsUrl = `https://api.dicebear.com/7.x/initials/png?seed=${encodeURIComponent(
+    user?.full_name || user?.email || "User"
+  )}&radius=50&backgroundType=gradientLinear`;
+
+  const content = is_bot ? (
+    <View
+      style={{
+        height: size,
+        width: size,
+        borderRadius: size / 2,
+        borderWidth: 1,
+        borderColor: "#e5e7eb",
+        backgroundColor: "#f3f4f6",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <Text style={{ fontSize: Math.max(10, size * 0.32), color: "#111827" }}>
+        BOT
+      </Text>
+    </View>
+  ) : (
+    <Image
+      source={{
+        uri: uri || initialsUrl,
+      }}
+      style={{
+        height: size,
+        width: size,
+        borderRadius: size / 2,
+        borderWidth: 1,
+        borderColor: "#e5e7eb",
+        backgroundColor: "#f3f4f6",
+      }}
+    />
+  );
+
+  if (!onPress || is_bot) return content;
+  return (
+    <Pressable onPress={onPress} hitSlop={8}>
+      {content}
+    </Pressable>
+  );
+}
+
+/* =========================================================
+   User Recent Games Modal — fixed size card w/ scrolling
+   ======================================================= */
+function UserRecentGamesModal({ visible, onClose, userRow }) {
+  const screen = Dimensions.get("window");
+  const cardMaxWidth = Math.min(screen.width - 32, 420);
+  const cardMaxHeight = Math.min(screen.height - 80, 640);
+
+  const userId =
+    userRow?.user?.id ||
+    userRow?.user_id ||
+    userRow?.id ||
+    userRow?.userId ||
+    null;
+  const display =
+    userRow?.user?.full_name ||
+    userRow?.name ||
+    userRow?.user?.email ||
+    userRow?.display_name ||
+    "User";
+  const avatarUrl =
+    userRow?.profilePhoto ||
+    userRow?.user?.profile_photo_url ||
+    `https://api.dicebear.com/7.x/initials/png?seed=${encodeURIComponent(
+      display
+    )}&radius=50&backgroundType=gradientLinear`;
+
+  const [loading, setLoading] = useState(true);
+  const [games, setGames] = useState([]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!visible || !userId) return;
+      setLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from("games_records")
+          .select(
+            "id, player_name, won, points_earned, time_taken_seconds, guesses_attempted, hints_used, created_at, is_daily_challenge, is_elimination_game"
+          )
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+          .limit(30);
+        if (error) throw error;
+        if (alive) setGames(Array.isArray(data) ? data : []);
+      } catch {
+        if (alive) setGames([]);
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [visible, userId]);
+
+  const formatUtc = (iso) => {
+    try {
+      const d = new Date(iso);
+      const y = d.getUTCFullYear();
+      const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+      const dd = String(d.getUTCDate()).padStart(2, "0");
+      const hh = String(d.getUTCHours()).padStart(2, "0");
+      const mm = String(d.getUTCMinutes()).padStart(2, "0");
+      return `${y}-${m}-${dd} ${hh}:${mm} UTC`;
+    } catch {
+      return "—";
+    }
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: "rgba(0,0,0,0.45)",
+          padding: 20,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <View
+          style={{
+            backgroundColor: "#fff",
+            borderRadius: 12,
+            overflow: "hidden",
+            width: cardMaxWidth,
+            maxHeight: cardMaxHeight,
+          }}
+        >
+          {/* Header (fixed) */}
+          <View
+            style={{
+              padding: 14,
+              borderBottomWidth: 1,
+              borderBottomColor: "#e5e7eb",
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+              <Image
+                source={{ uri: avatarUrl }}
+                style={{
+                  height: 36,
+                  width: 36,
+                  borderRadius: 18,
+                  borderWidth: 1,
+                  borderColor: "#e5e7eb",
+                }}
+              />
+              <Text style={{ fontWeight: "800", fontSize: 16 }}>{display}</Text>
+            </View>
+            <TouchableOpacity onPress={onClose} hitSlop={12}>
+              <Text style={{ fontWeight: "800", fontSize: 18 }}>✕</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Body (scrollable) */}
+          <ScrollView style={{ padding: 14 }}>
+            <Text style={{ fontWeight: "700", marginBottom: 8 }}>Recent games</Text>
+            {loading ? (
+              <View style={{ paddingVertical: 20, alignItems: "center" }}>
+                <ActivityIndicator />
+              </View>
+            ) : games.length === 0 ? (
+              <Text style={{ color: "#6b7280" }}>No games yet.</Text>
+            ) : (
+              <View style={{ gap: 10 }}>
+                {games.map((g) => (
+                  <View
+                    key={g.id}
+                    style={{
+                      borderWidth: 1,
+                      borderColor: "#e5e7eb",
+                      borderRadius: 10,
+                      padding: 10,
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <View style={{ maxWidth: "70%" }}>
+                      <Text style={{ fontWeight: "700" }} numberOfLines={1}>
+                        {g.player_name || "—"}
+                      </Text>
+                      <Text style={{ color: "#6b7280", fontSize: 12 }}>
+                        {formatUtc(g.created_at)}
+                      </Text>
+                      <Text style={{ color: "#6b7280", fontSize: 12 }}>
+                        {g.guesses_attempted}{" "}
+                        {g.guesses_attempted === 1 ? "guess" : "guesses"}
+                        {g.is_daily_challenge ? " • Daily" : ""}
+                        {g.is_elimination_game ? " • Elimination" : ""}
+                      </Text>
+                    </View>
+                    <Text
+                      style={{
+                        fontWeight: "900",
+                        color: g.won ? "#16a34a" : "#dc2626",
+                      }}
+                    >
+                      {g.won ? `+${g.points_earned}` : "0"} pts
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            )}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+/* =========================
+   Create League MODAL (replaces inline panel)
+   ======================= */
+function CreateLeagueModal({
+  visible,
+  onClose,
+  canCreateDeps,
+  ui,
+  setters,
+  search,
+  actions,
+}) {
+  const screen = Dimensions.get("window");
+  const cardMaxWidth = Math.min(screen.width - 32, 520);
+  const cardMaxHeight = Math.min(screen.height - 80, 680);
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: "rgba(0,0,0,0.45)",
+          padding: 20,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <View
+          style={{
+            backgroundColor: "#fff",
+            borderRadius: 12,
+            overflow: "hidden",
+            width: cardMaxWidth,
+            maxHeight: cardMaxHeight,
+          }}
+        >
+          {/* Header with close */}
+          <View
+            style={{
+              padding: 14,
+              borderBottomWidth: 1,
+              borderBottomColor: "#e5e7eb",
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <Text style={{ fontWeight: "800", fontSize: 16 }}>Create a League</Text>
+            <TouchableOpacity onPress={onClose} hitSlop={12}>
+              <Text style={{ fontWeight: "800", fontSize: 18 }}>✕</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Body (scrollable) */}
+          <ScrollView style={{ paddingHorizontal: 12, paddingVertical: 10 }}>
+            <CreateLeaguePanel
+              canCreateDeps={canCreateDeps}
+              ui={ui}
+              setters={setters}
+              search={search}
+              actions={actions}
+            />
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+/* =========================
+   MAIN SCREEN
+   ======================= */
 export default function LeaguesScreen() {
   const [me, setMe] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Create league form
+  // Create league UI
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  // Default start date to today (YYYY-MM-DD)
-  const todayIso = useMemo(() => {
-    const d = new Date();
-    const yyyy = d.getUTCFullYear();
-    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-    const dd = String(d.getUTCDate()).padStart(2, "0");
-    return `${yyyy}-${mm}-${dd}`;
+  const [desc, setDesc] = useState("");
+  const [startDate, setStartDate] = useState(() => {
+    const t = todayUtcMidnight();
+    const plus1 = new Date(t.getTime() + 24 * 60 * 60 * 1000);
+    return plus1.toISOString().slice(0, 10);
+  });
+
+  // invites
+  const [searchEmail, setSearchEmail] = useState("");
+  const [emailResults, setEmailResults] = useState([]);
+  const [invites, setInvites] = useState([]); // {id,email,full_name}
+
+  // Data buckets (like web)
+  const [leagues, setLeagues] = useState([]); // [{ league, creatorUser, participants, matches }]
+  const [tab, setTab] = useState("Active"); // Active | Scheduled | Ended
+
+  // Collapsible cards state (default: Active + Scheduled + newest Ended open)
+  const [expandedIds, setExpandedIds] = useState(() => new Set());
+  const [didInitExpanded, setDidInitExpanded] = useState(false);
+
+  // live refresh for standings coloring
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 20000);
+    return () => clearInterval(id);
   }, []);
-  const [startDate, setStartDate] = useState(todayIso);
 
-  // Data
-  const [myLeagues, setMyLeagues] = useState([]); // [{ id, name, description, creator_id, start_date, created_at }]
-  const [membersByLeague, setMembersByLeague] = useState({}); // { leagueId: [{ id, name, avatar, is_bot, display_name }] }
-  const [nextMatchByLeague, setNextMatchByLeague] = useState({}); // { leagueId: { match_day, match_date, home_name, away_name } | null }
+  // Load me
+  useEffect(() => {
+    (async () => {
+      const { data, error } = await supabase.auth.getUser();
+      if (!error) setMe(data?.user || null);
+    })();
+  }, []);
 
+  // Load leagues where I participate (mirror web page shape)
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      // Current user
       const {
         data: { user },
-        error: userErr,
       } = await supabase.auth.getUser();
-      if (userErr) throw userErr;
-      setMe(user);
-
       if (!user) {
-        setMyLeagues([]);
-        setMembersByLeague({});
-        setNextMatchByLeague({});
+        setLeagues([]);
         return;
       }
 
-      // 1) Leagues I created
-      const { data: createdLeagues, error: createdErr } = await supabase
-        .from("leagues")
-        .select("id, name, description, creator_id, start_date, created_at")
-        .eq("creator_id", user.id);
-      if (createdErr) throw createdErr;
-
-      // 2) Leagues I participate in (via league_participants)
-      //    We join to leagues to flatten shape in one call.
-      const { data: participantRows, error: partErr } = await supabase
+      const { data: myParts, error: e1 } = await supabase
         .from("league_participants")
-        .select("league_id, leagues:league_id(id, name, description, creator_id, start_date, created_at)")
+        .select("league_id")
         .eq("user_id", user.id);
-      if (partErr) throw partErr;
+      if (e1) throw e1;
 
-      const participatedLeagues =
-        (participantRows || [])
-          .map((r) => r.leagues)
-          .filter(Boolean) || [];
-
-      // Merge + de-duplicate by league id
-      const leagueMap = new Map();
-      [...(createdLeagues || []), ...participatedLeagues].forEach((lg) => {
-        leagueMap.set(lg.id, lg);
-      });
-      const allMyLeagues = Array.from(leagueMap.values());
-
-      // Sort by name (case-insensitive)
-      allMyLeagues.sort((a, b) =>
-        (a?.name || "").localeCompare(b?.name || "", undefined, { sensitivity: "base" })
-      );
-
-      setMyLeagues(allMyLeagues);
-
-      // 3) Members for these leagues
-      if (allMyLeagues.length > 0) {
-        const ids = allMyLeagues.map((l) => l.id);
-        const { data: members, error: membersErr } = await supabase
-          .from("league_participants")
-          .select(
-            `
-            id,
-            league_id,
-            user_id,
-            is_bot,
-            display_name,
-            users:user_id (
-              id,
-              full_name,
-              profile_photo_url
-            )
-          `
-          )
-          .in("league_id", ids);
-        if (membersErr) throw membersErr;
-
-        const grouped = {};
-        (members || []).forEach((row) => {
-          if (!grouped[row.league_id]) grouped[row.league_id] = [];
-          const isBot = !!row.is_bot;
-          const userName = row?.users?.full_name || null; // <- adjust if your "users" table uses another field
-          const avatar = row?.users?.profile_photo_url || null; // <- adjust if different
-          grouped[row.league_id].push({
-            id: row.id,
-            is_bot: isBot,
-            display_name: row.display_name,
-            name: isBot ? row.display_name || "Bot" : userName || "Unknown",
-            avatar: isBot
-              ? null
-              : avatar ||
-                `https://api.dicebear.com/7.x/thumbs/png?seed=${encodeURIComponent(
-                  userName || "user"
-                )}`,
-          });
-        });
-        setMembersByLeague(grouped);
-      } else {
-        setMembersByLeague({});
+      const leagueIds = [...new Set((myParts || []).map((p) => p.league_id))];
+      if (!leagueIds.length) {
+        setLeagues([]);
+        return;
       }
 
-      // 4) Next match for each league (nearest match_date >= today)
-      if (allMyLeagues.length > 0) {
-        const ids = allMyLeagues.map((l) => l.id);
-        // Fetch all upcoming matches in one go; we'll resolve home/away names with participants mapping below
-        const { data: upcoming, error: upErr } = await supabase
-          .from("league_matches")
-          .select(
-            `
-            id,
-            league_id,
-            match_day,
-            match_date,
-            home_participant_id,
-            away_participant_id,
-            home:home_participant_id(
-              id,
-              is_bot,
-              display_name,
-              user_id,
-              users:user_id(id, full_name)
-            ),
-            away:away_participant_id(
-              id,
-              is_bot,
-              display_name,
-              user_id,
-              users:user_id(id, full_name)
-            )
-          `
-          )
-          .in("league_id", ids);
-        if (upErr) throw upErr;
+      const { data: leaguesData, error: e2 } = await supabase
+        .from("leagues")
+        .select("*")
+        .in("id", leagueIds);
+      if (e2) throw e2;
 
-        const today = new Date();
-        const todayYMD = new Date(
-          Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
-        );
+      const { data: parts, error: e3 } = await supabase
+        .from("league_participants")
+        .select("id, league_id, user_id, is_bot, display_name")
+        .in("league_id", leagueIds);
+      if (e3) throw e3;
 
-        const nextByLeague = {};
-        (upcoming || [])
-          .filter((m) => {
-            // Keep matches with match_date >= today (dates are stored as date; interpret as UTC midnight)
-            const [yyyy, mm, dd] = String(m.match_date).split("-");
-            const d = new Date(Date.UTC(+yyyy, +mm - 1, +dd));
-            return d >= todayYMD;
-          })
-          .sort((a, b) => {
-            // Sort all upcoming by (league_id, match_date asc, match_day asc)
-            const aKey = `${a.league_id}`;
-            const bKey = `${b.league_id}`;
-            if (aKey !== bKey) return aKey.localeCompare(bKey);
-            if (a.match_date !== b.match_date)
-              return String(a.match_date).localeCompare(String(b.match_date));
-            return (a.match_day || 0) - (b.match_day || 0);
-          })
-          .forEach((m) => {
-            if (!nextByLeague[m.league_id]) {
-              const homeName = m?.home?.is_bot
-                ? m?.home?.display_name || "Bot"
-                : m?.home?.users?.full_name || "Unknown";
-              const awayName = m?.away?.is_bot
-                ? m?.away?.display_name || "Bot"
-                : m?.away?.users?.full_name || "Unknown";
-              nextByLeague[m.league_id] = {
-                match_day: m.match_day,
-                match_date: m.match_date, // YYYY-MM-DD
-                home_name: homeName,
-                away_name: awayName,
-              }
-            }
-          });
+      // fetch all relevant users (participants + creators)
+      let userIds = parts?.filter((p) => p.user_id).map((p) => p.user_id) || [];
+      const creatorIds = leaguesData.map((l) => l.creator_id).filter(Boolean);
+      userIds = [...new Set([...userIds, ...creatorIds])];
 
-        setNextMatchByLeague(nextByLeague);
-      } else {
-        setNextMatchByLeague({});
+      const userMap = new Map();
+      if (userIds.length) {
+        const { data: usersRows } = await supabase
+          .from("users")
+          .select("id, full_name, profile_photo_url, email, created_at")
+          .in("id", userIds);
+        (usersRows || []).forEach((u) => userMap.set(u.id, u));
       }
-    } catch (e) {
-      console.error(e);
+
+      const participantsHydrated =
+        parts?.map((p) => ({ ...p, user: p.user_id ? userMap.get(p.user_id) : null })) || [];
+
+      const { data: matches, error: e4 } = await supabase
+        .from("league_matches")
+        .select("*")
+        .in("league_id", leagueIds);
+      if (e4) throw e4;
+
+      const grouped = leagueIds.map((id) => ({
+        league: leaguesData.find((l) => l.id === id),
+        creatorUser: userMap.get(leaguesData.find((l) => l.id === id)?.creator_id),
+        participants: participantsHydrated.filter((p) => p.league_id === id),
+        matches: (matches || []).filter((m) => m.league_id === id).sort(byDateAsc),
+      }));
+
+      setLeagues(grouped);
+    } catch (err) {
+      console.error("Leagues load error:", err);
+      setLeagues([]);
       Alert.alert("Error", "Could not load leagues.");
     } finally {
       setLoading(false);
@@ -253,304 +670,1266 @@ export default function LeaguesScreen() {
     load();
   }, [load]);
 
-  const onCreate = useCallback(async () => {
-    if (!name.trim()) {
-      Alert.alert("Missing name", "Please enter a league name.");
-      return;
+  // Email search (exclude me)
+  useEffect(() => {
+    let active = true;
+    const t = setTimeout(async () => {
+      const q = (searchEmail || "").trim();
+      if (!q || q.length < 2) {
+        if (active) setEmailResults([]);
+        return;
+      }
+      const { data } = await supabase
+        .from("users")
+        .select("id, email, full_name")
+        .ilike("email", `%${q}%`)
+        .limit(10);
+      const filtered = (data || []).filter((u) => u.id !== me?.id);
+      if (active) setEmailResults(filtered);
+    }, 250);
+    return () => {
+      active = false;
+      clearTimeout(t);
+    };
+  }, [searchEmail, me?.id]);
+
+  // Tab buckets (UTC like web)
+  const classified = useMemo(() => {
+    const out = { Scheduled: [], Active: [], Ended: [] };
+    const today0 = todayUtcMidnight();
+
+    for (const L of leagues) {
+      const start = toUtcMidnight(L.league.start_date);
+      const last = L.matches.length
+        ? toUtcMidnight(L.matches[L.matches.length - 1].match_date)
+        : start;
+      const key = start > today0 ? "Scheduled" : last < today0 ? "Ended" : "Active";
+      out[key].push(L);
     }
-    // Simple YYYY-MM-DD validation
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
-      Alert.alert("Invalid date", "Start date must be YYYY-MM-DD.");
-      return;
-    }
+    return out;
+  }, [leagues]);
 
-    try {
-      setCreating(true);
-
-      // 1) Create the league
-      const { data: created, error: createErr } = await supabase
-        .from("leagues")
-        .insert([
-          {
-            name: name.trim(),
-            description: description?.trim() || null,
-            creator_id: me?.id,
-            start_date: startDate,
-          },
-        ])
-        .select("id")
-        .single();
-      if (createErr) throw createErr;
-
-      // 2) Add the creator as a participant (non-bot)
-      const { error: partErr } = await supabase.from("league_participants").insert([
-        {
-          league_id: created.id,
-          user_id: me?.id,
-          is_bot: false,
-          display_name: null,
-        },
-      ]);
-      if (partErr) throw partErr;
-
-      // Reset form + close
-      setName("");
-      setDescription("");
-      setStartDate(todayIso);
-      setCreateOpen(false);
-
-      // Reload
-      await load();
-    } catch (e) {
-      console.error(e);
-      Alert.alert("Error", "Could not create the league.");
-    } finally {
-      setCreating(false);
-    }
-  }, [name, description, startDate, me?.id, todayIso, load]);
-
-  const sortedLeagues = useMemo(() => {
-    return [...myLeagues];
-  }, [myLeagues]);
-
-  const LeagueItem = ({ item }) => {
-    const members = membersByLeague[item.id] || [];
-    const next = nextMatchByLeague[item.id] || null;
-
-    return (
-      <View
-        style={{
-          borderWidth: 1,
-          borderColor: "#e5e7eb",
-          borderRadius: 12,
-          padding: 12,
-          marginBottom: 12,
-          backgroundColor: "#fff",
-        }}
-      >
-        {/* Header */}
-        <View
-          style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}
-        >
-          <View style={{ flex: 1, paddingRight: 8 }}>
-            <Text style={{ fontWeight: "700", fontSize: 16 }} numberOfLines={1}>
-              {item.name}
-            </Text>
-            {!!item.description && (
-              <Text style={{ color: "#6b7280", fontSize: 12 }} numberOfLines={2}>
-                {item.description}
-              </Text>
-            )}
-            <Text style={{ color: "#6b7280", fontSize: 12, marginTop: 2 }}>
-              Starts {item.start_date} • {members.length} participants
-            </Text>
-          </View>
-
-          {/* Member avatars */}
-          <View style={{ flexDirection: "row" }}>
-            {members.slice(0, 5).map((m) =>
-              m.is_bot ? (
-                <View
-                  key={m.id}
-                  style={{
-                    height: 32,
-                    width: 32,
-                    borderRadius: 16,
-                    borderWidth: 1,
-                    borderColor: "#e5e7eb",
-                    marginLeft: -6,
-                    backgroundColor: "#f3f4f6",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <Text style={{ fontSize: 10, color: "#111827" }}>BOT</Text>
-                </View>
-              ) : (
-                <Image
-                  key={m.id}
-                  source={{ uri: m.avatar }}
-                  style={{
-                    height: 32,
-                    width: 32,
-                    borderRadius: 16,
-                    borderWidth: 1,
-                    borderColor: "#e5e7eb",
-                    marginLeft: -6,
-                    backgroundColor: "#f3f4f6",
-                  }}
-                />
-              )
-            )}
-            {members.length > 5 && (
-              <View
-                style={{
-                  height: 32,
-                  width: 32,
-                  borderRadius: 16,
-                  borderWidth: 1,
-                  borderColor: "#e5e7eb",
-                  marginLeft: -6,
-                  backgroundColor: "#f3f4f6",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <Text style={{ fontSize: 12 }}>+{members.length - 5}</Text>
-              </View>
-            )}
-          </View>
-        </View>
-
-        {/* Next match */}
-        <View style={{ marginTop: 10 }}>
-          <Text style={{ fontWeight: "600", marginBottom: 4 }}>Next match</Text>
-          {next ? (
-            <Text style={{ color: "#374151" }}>
-              Day {next.match_day} • {next.match_date}: {next.home_name} vs {next.away_name}
-            </Text>
-          ) : (
-            <Text style={{ color: "#6b7280" }}>No upcoming matches scheduled.</Text>
-          )}
-        </View>
-      </View>
-    );
+  // counts for main tabs
+  const tabCounts = {
+    Active: classified.Active.length,
+    Scheduled: classified.Scheduled.length,
+    Ended: classified.Ended.length,
   };
 
+  // Initialize expanded defaults once
+  useEffect(() => {
+    if (didInitExpanded || !leagues.length) return;
+    const defaults = new Set();
+    classified.Active.forEach((L) => defaults.add(L.league.id));
+    classified.Scheduled.forEach((L) => defaults.add(L.league.id));
+    const newestEnded = classified.Ended.sort(
+      (a, b) =>
+        new Date(b.league?.created_at || b.league?.start_date || 0) -
+        new Date(a.league?.created_at || a.league?.start_date || 0)
+    )[0]?.league?.id;
+    if (newestEnded) defaults.add(newestEnded);
+    setExpandedIds(defaults);
+    setDidInitExpanded(true);
+  }, [didInitExpanded, leagues.length, classified]);
+
+  const toggleCard = useCallback((id) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  // Live day totals map (exclude elimination games from league totals)
+  const [dayPoints, setDayPoints] = useState(new Map());
+  useEffect(() => {
+    let cancelled = false;
+    async function compute() {
+      const map = new Map();
+      for (const L of leagues) {
+        const { league, participants, matches } = L;
+        const dates = [...new Set(matches.map((m) => m.match_date))];
+        for (const d of dates) {
+          const { start, end } = dayRangeUtc(d);
+          const humans = participants.filter((p) => !p.is_bot);
+          const humanIds = humans.map((h) => h.user_id).filter(Boolean);
+
+          let byUser = new Map();
+          if (humanIds.length) {
+            const { data: records } = await supabase
+              .from("games_records")
+              .select("user_id, points_earned")
+              .in("user_id", humanIds)
+              .gte("created_at", start)
+              .lt("created_at", end)
+              .eq("is_elimination_game", false);
+            byUser = new Map();
+            (records || []).forEach((r) => {
+              byUser.set(
+                r.user_id,
+                (byUser.get(r.user_id) || 0) + (r.points_earned || 0)
+              );
+            });
+          }
+
+          const sumHumans = humans.reduce(
+            (s, h) => s + (byUser.get(h.user_id) || 0),
+            0
+          );
+          const avgHuman = humans.length ? Math.round(sumHumans / humans.length) : 0;
+
+          participants.forEach((p) => {
+            const total = p.is_bot ? avgHuman : byUser.get(p.user_id) || 0;
+            map.set(keyDP({ league_id: league.id, match_date: d }, p), total);
+          });
+        }
+      }
+      if (!cancelled) setDayPoints(map);
+    }
+    if (leagues.length) compute();
+    return () => {
+      cancelled = true;
+    };
+  }, [leagues, tick]);
+
+  // Current list by tab, newest first
+  const currentListUnsorted =
+    tab === "Active"
+      ? classified.Active
+      : tab === "Scheduled"
+      ? classified.Scheduled
+      : classified.Ended;
+
+  const currentList = useMemo(() => {
+    const arr = [...currentListUnsorted];
+    arr.sort(
+      (a, b) =>
+        new Date(b.league?.created_at || b.league?.start_date || 0) -
+        new Date(a.league?.created_at || a.league?.start_date || 0)
+    );
+    return arr;
+  }, [currentListUnsorted]);
+
+  // User recent-games modal state
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalUserRow, setModalUserRow] = useState(null);
+  const openUserModal = useCallback((participantRow) => {
+    if (!participantRow?.is_bot) {
+      setModalUserRow(participantRow);
+      setModalOpen(true);
+    }
+  }, []);
+  const closeUserModal = useCallback(() => {
+    setModalOpen(false);
+    setModalUserRow(null);
+  }, []);
+
+  // build tabs with counts in the label
+  const MAIN_TABS = [
+    { key: "Active", label: `Active (${tabCounts.Active})` },
+    { key: "Scheduled", label: `Scheduled (${tabCounts.Scheduled})` },
+    { key: "Ended", label: `Ended (${tabCounts.Ended})` },
+  ];
+
   return (
-    <View style={{ flex: 1, padding: 16, backgroundColor: "#f9fafb" }}>
-      {/* Header */}
+    <View style={{ flex: 1, backgroundColor: "#f5f7f5" }}>
+      {/* Header row: tabs with counts */}
       <View
         style={{
           flexDirection: "row",
           alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: 12,
-          paddingTop: Platform.OS === "ios" ? 6 : 0,
+          justifyContent: "center",
+          gap: 10,
+          paddingTop: 12,
         }}
       >
-        <Text style={{ fontSize: 20, fontWeight: "800" }}>Leagues</Text>
+        {MAIN_TABS.map((t) => (
+          <Pressable
+            key={t.key}
+            onPress={() => setTab(t.key)}
+            style={{
+              paddingHorizontal: 12,
+              paddingVertical: 6,
+              borderRadius: 999,
+              backgroundColor: tab === t.key ? "#065f46" : "#ffffff",
+              borderWidth: tab === t.key ? 0 : 1,
+              borderColor: "#e5e7eb",
+            }}
+          >
+            <Text
+              style={{
+                color: tab === t.key ? "#ffffff" : "#374151",
+                fontWeight: "700",
+              }}
+            >
+              {t.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+
+      {/* Centered "+ Create New League" button */}
+      <View style={{ alignItems: "center", marginTop: 10, marginBottom: 6 }}>
         <TouchableOpacity
-          onPress={() => setCreateOpen((s) => !s)}
+          onPress={() => setCreateOpen(true)}
           style={{
-            backgroundColor: "#059669",
-            paddingHorizontal: 12,
-            paddingVertical: 8,
+            paddingHorizontal: 14,
+            paddingVertical: 10,
             borderRadius: 10,
+            backgroundColor: "#065f46",
           }}
+          activeOpacity={0.85}
         >
-          <Text style={{ color: "#fff", fontWeight: "600" }}>
-            {createOpen ? "Close" : "Create"}
+          <Text style={{ color: "white", fontWeight: "800" }}>
+            + Create New League
           </Text>
         </TouchableOpacity>
       </View>
 
-      {/* Create League Panel */}
-      {createOpen && (
-        <Section title="Create League">
-          <View style={{ gap: 8 }}>
-            <TextInput
-              placeholder="League name"
-              value={name}
-              onChangeText={setName}
+      {/* MAIN LIST */}
+      <ScrollView contentContainerStyle={{ padding: 12, paddingBottom: 28 }}>
+        {loading ? (
+          <View style={{ paddingTop: 48, alignItems: "center" }}>
+            <ActivityIndicator size="large" color="#065f46" />
+          </View>
+        ) : currentList.length === 0 ? (
+          <View style={{ marginTop: 32, alignItems: "center" }}>
+            <View
               style={{
-                borderWidth: 1,
-                borderColor: "#e5e7eb",
-                borderRadius: 10,
-                paddingHorizontal: 12,
-                paddingVertical: 10,
-                backgroundColor: "#fff",
+                height: 64,
+                width: 64,
+                borderRadius: 32,
+                backgroundColor: "#dcfce7",
+                alignItems: "center",
+                justifyContent: "center",
               }}
-            />
-            <TextInput
-              placeholder="Description (optional)"
-              value={description}
-              onChangeText={setDescription}
-              multiline
+            >
+              <Text style={{ fontSize: 20 }}>📅</Text>
+            </View>
+            <Text
               style={{
-                borderWidth: 1,
-                borderColor: "#e5e7eb",
-                borderRadius: 10,
-                paddingHorizontal: 12,
-                paddingVertical: 10,
-                backgroundColor: "#fff",
-                minHeight: 70,
-                textAlignVertical: "top",
+                marginTop: 10,
+                fontSize: 16,
+                fontWeight: "700",
+                color: "#065f46",
               }}
-            />
-            <TextInput
-              placeholder="Start date (YYYY-MM-DD)"
-              value={startDate}
-              onChangeText={setStartDate}
-              autoCapitalize="none"
-              autoCorrect={false}
-              style={{
-                borderWidth: 1,
-                borderColor: "#e5e7eb",
-                borderRadius: 10,
-                paddingHorizontal: 12,
-                paddingVertical: 10,
-                backgroundColor: "#fff",
-              }}
-            />
-            <View style={{ flexDirection: "row" }}>
-              <TouchableOpacity
-                onPress={onCreate}
-                disabled={creating || !name.trim()}
+            >
+              No leagues found
+            </Text>
+            <Text style={{ color: "#6b7280" }}>
+              Create your first league or wait to be invited!
+            </Text>
+          </View>
+        ) : (
+          <View style={{ gap: 12 }}>
+            {currentList.map((L) => (
+              <LeagueCard
+                key={L.league.id}
+                L={L}
+                dayPoints={dayPoints}
+                expanded={expandedIds.has(L.league.id)}
+                onToggle={() => toggleCard(L.league.id)}
+                onAvatarPress={openUserModal}
+              />
+            ))}
+          </View>
+        )}
+      </ScrollView>
+
+      {/* Create League MODAL */}
+      <CreateLeagueModal
+        visible={createOpen}
+        onClose={() => setCreateOpen(false)}
+        canCreateDeps={{ me, name, desc, startDate, invites }}
+        ui={{ creating }}
+        setters={{
+          setCreating,
+          setCreateOpen,
+          setName,
+          setDesc,
+          setStartDate,
+          setInvites,
+          setSearchEmail,
+          setEmailResults,
+        }}
+        search={{ searchEmail, emailResults }}
+        actions={{ load }}
+      />
+
+      {/* User modal (fixed-size card) */}
+      <UserRecentGamesModal
+        visible={modalOpen}
+        onClose={closeUserModal}
+        userRow={modalUserRow}
+      />
+    </View>
+  );
+}
+
+/* =========================
+   Create League Panel (inner content; used inside modal)
+   ======================= */
+function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
+  const { me, name, desc, startDate, invites } = canCreateDeps;
+  const { creating } = ui;
+  const {
+    setCreating,
+    setCreateOpen,
+    setName,
+    setDesc,
+    setStartDate,
+    setInvites,
+    setSearchEmail,
+    setEmailResults,
+  } = setters;
+  const { searchEmail, emailResults } = search;
+  const { load } = actions;
+
+  const addInvite = (u) => {
+    if (!u || u.id === me?.id) return;
+    if (invites.find((x) => x.id === u.id)) return;
+    setInvites((prev) => [...prev, u]);
+    setSearchEmail("");
+    setEmailResults([]);
+  };
+  const removeInvite = (id) =>
+    setInvites((prev) => prev.filter((x) => x.id !== id));
+
+  const totalChosen = 1 + invites.length;
+  const totalIfOdd = totalChosen % 2 === 1 ? totalChosen + 1 : totalChosen;
+  const withinLimits = totalIfOdd >= 2 && totalIfOdd <= 20;
+  const canCreate = name.trim() && startDate && withinLimits;
+
+  const onCreateLeague = useCallback(async () => {
+    if (!me?.id || !canCreate) return;
+
+    try {
+      setCreating(true);
+
+      let people = [
+        {
+          id: me.id,
+          email: me.email,
+          full_name:
+            me.user_metadata?.full_name || me.full_name || "You",
+        },
+        ...invites,
+      ];
+      if (people.length % 2 === 1) {
+        people.push({
+          id: null,
+          email: null,
+          full_name: randomBotName(),
+          is_bot: true,
+        });
+      }
+
+      // 1) Create league
+      const { data: leagueRow, error: e1 } = await supabase
+        .from("leagues")
+        .insert([
+          {
+            name: name.trim(),
+            description: desc || null,
+            creator_id: me.id,
+            start_date: startDate,
+          },
+        ])
+        .select()
+        .single();
+      if (e1) throw e1;
+
+      // 2) Insert participants
+      const partsPayload = people.map((p) => ({
+        league_id: leagueRow.id,
+        user_id: p.is_bot ? null : p.id,
+        is_bot: !!p.is_bot,
+        display_name: p.is_bot ? p.full_name : null,
+      }));
+      const { data: parts, error: e2 } = await supabase
+        .from("league_participants")
+        .insert(partsPayload)
+        .select();
+      if (e2) throw e2;
+
+      // 3) Fixtures: double round-robin
+      const partIds = parts.map((p) => p.id);
+      const rounds = generateDoubleRoundRobin(partIds);
+      const start = toUtcMidnight(startDate);
+      const matchesPayload = [];
+      rounds.forEach((round, idx) => {
+        const date = new Date(start.getTime() + idx * 24 * 60 * 60 * 1000);
+        round.pairs.forEach((pair) => {
+          matchesPayload.push({
+            league_id: leagueRow.id,
+            match_day: round.match_day,
+            match_date: date.toISOString().slice(0, 10),
+            home_participant_id: pair.home,
+            away_participant_id: pair.away,
+          });
+        });
+      });
+      const { error: e3 } = await supabase
+        .from("league_matches")
+        .insert(matchesPayload);
+      if (e3) throw e3;
+
+      // 4) Clear & close form, reload page data
+      setName("");
+      setDesc("");
+      setInvites([]);
+      setStartDate(() => {
+        const t = todayUtcMidnight();
+        const plus1 = new Date(t.getTime() + 24 * 60 * 60 * 1000);
+        return plus1.toISOString().slice(0, 10);
+      });
+      setCreateOpen(false);
+
+      await load();
+    } catch (err) {
+      console.error("Create league failed:", err);
+      Alert.alert("Error", "Could not create league.");
+    } finally {
+      setCreating(false);
+    }
+  }, [
+    me?.id,
+    name,
+    desc,
+    startDate,
+    invites,
+    canCreate,
+    setCreating,
+    setName,
+    setDesc,
+    setInvites,
+    setStartDate,
+    setCreateOpen,
+    load,
+  ]);
+
+  return (
+    <Section
+      title="Create a League"
+      right={
+        <Pressable onPress={() => setCreateOpen(false)} hitSlop={8}>
+          <Text style={{ fontWeight: "800" }}>✕</Text>
+        </Pressable>
+      }
+    >
+      {/* Name */}
+      <View style={{ marginBottom: 8 }}>
+        <Text style={{ fontWeight: "600", marginBottom: 4 }}>League Name</Text>
+        <TextInput
+          value={name}
+          onChangeText={setName}
+          placeholder="e.g., Weekend Legends"
+          style={{
+            borderWidth: 1,
+            borderColor: "#e5e7eb",
+            borderRadius: 8,
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+          }}
+        />
+      </View>
+
+      {/* Description */}
+      <View style={{ marginBottom: 8 }}>
+        <Text style={{ fontWeight: "600", marginBottom: 4 }}>
+          Description (optional)
+        </Text>
+        <TextInput
+          value={desc}
+          onChangeText={setDesc}
+          placeholder="Short description"
+          style={{
+            borderWidth: 1,
+            borderColor: "#e5e7eb",
+            borderRadius: 8,
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+          }}
+        />
+      </View>
+
+      {/* Start date */}
+      <View style={{ marginBottom: 8 }}>
+        <Text style={{ fontWeight: "600", marginBottom: 4 }}>Start Date</Text>
+        <TextInput
+          value={startDate}
+          onChangeText={setStartDate}
+          placeholder="YYYY-MM-DD"
+          autoCapitalize="none"
+          style={{
+            borderWidth: 1,
+            borderColor: "#e5e7eb",
+            borderRadius: 8,
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+          }}
+        />
+        <Text style={{ color: "#6b7280", fontSize: 12, marginTop: 4 }}>
+          Tip: UTC dates; fixtures are one match day per calendar day.
+        </Text>
+      </View>
+
+      {/* Invite by email */}
+      <View style={{ marginBottom: 8 }}>
+        <Text style={{ fontWeight: "600", marginBottom: 4 }}>
+          Invite Players (search email)
+        </Text>
+        <TextInput
+          value={searchEmail}
+          onChangeText={setSearchEmail}
+          placeholder="Type at least 2 characters"
+          autoCapitalize="none"
+          style={{
+            borderWidth: 1,
+            borderColor: "#e5e7eb",
+            borderRadius: 8,
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+          }}
+        />
+        {!!emailResults.length && (
+          <View
+            style={{
+              marginTop: 6,
+              borderWidth: 1,
+              borderColor: "#e5e7eb",
+              borderRadius: 8,
+              overflow: "hidden",
+            }}
+          >
+            {emailResults.map((u) => (
+              <Pressable
+                key={u.id}
+                onPress={() => addInvite(u)}
                 style={{
-                  backgroundColor: creating || !name.trim() ? "#a7f3d0" : "#059669",
-                  paddingHorizontal: 12,
-                  paddingVertical: 10,
-                  borderRadius: 10,
-                  marginRight: 8,
+                  paddingHorizontal: 10,
+                  paddingVertical: 8,
+                  backgroundColor: "white",
                 }}
               >
-                <Text style={{ color: "#fff", fontWeight: "700" }}>
-                  {creating ? "Creating…" : "Create"}
+                <Text>{u.full_name || u.email}</Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
+        {!!invites.length && (
+          <View
+            style={{
+              marginTop: 8,
+              flexDirection: "row",
+              flexWrap: "wrap",
+              gap: 6,
+            }}
+          >
+            {invites.map((u) => (
+              <View
+                key={u.id}
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 6,
+                  paddingHorizontal: 10,
+                  paddingVertical: 6,
+                  borderWidth: 1,
+                  borderColor: "#e5e7eb",
+                  borderRadius: 999,
+                  backgroundColor: "#f9fafb",
+                }}
+              >
+                <Text>{u.full_name || u.email}</Text>
+                <Pressable onPress={() => removeInvite(u.id)}>
+                  <Text style={{ fontWeight: "900" }}>×</Text>
+                </Pressable>
+              </View>
+            ))}
+          </View>
+        )}
+      </View>
+
+      {/* Create */}
+      <View
+        style={{
+          flexDirection: "row",
+          justifyContent: "flex-end",
+          alignItems: "center",
+          gap: 10,
+        }}
+      >
+        <Pressable
+          onPress={onCreateLeague}
+          disabled={!canCreate || creating}
+          style={{
+            opacity: !canCreate || creating ? 0.6 : 1,
+            backgroundColor: "#065f46",
+            paddingHorizontal: 14,
+            paddingVertical: 10,
+            borderRadius: 10,
+          }}
+        >
+          <Text style={{ color: "white", fontWeight: "800" }}>
+            {creating ? "Creating..." : "Create League"}
+          </Text>
+        </Pressable>
+      </View>
+    </Section>
+  );
+}
+
+/* =========================
+   League Card
+   ======================= */
+function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
+  const { league, participants, matches } = L;
+
+  const participantsById = useMemo(() => {
+    const map = new Map();
+    participants.forEach((p) => map.set(p.id, p));
+    return map;
+  }, [participants]);
+
+  const nextInfo = useMemo(() => {
+    const today0 = todayUtcMidnight();
+    const future = matches.filter((m) => toUtcMidnight(m.match_date) > today0);
+    if (!future.length) return null;
+    const m = future[0];
+    return {
+      match_day: m.match_day,
+      match_date: m.match_date,
+      home: participantsById.get(m.home_participant_id),
+      away: participantsById.get(m.away_participant_id),
+    };
+  }, [matches, participantsById]);
+
+  const standings = useMemo(
+    () => computeStandings(participants, matches, dayPoints),
+    [participants, matches, dayPoints]
+  );
+
+  const status =
+    toUtcMidnight(league.start_date) > todayUtcMidnight()
+      ? "Scheduled"
+      : matches[matches.length - 1] &&
+        toUtcMidnight(matches[matches.length - 1].match_date) <
+          todayUtcMidnight()
+      ? "Ended"
+      : "Live";
+
+  function scoreColor(isHome, H, A) {
+    if (H === A) return "#6b7280"; // draw gray
+    const win = isHome ? H > A : A > H;
+    return win ? "#047857" : "#b91c1c"; // green for higher, red for lower
+  }
+
+  // --- Swipe tabs (Table | Fixtures) ---
+  const [subTab, setSubTab] = useState(0); // 0=Table, 1=Fixtures
+  const scroller = useRef(null);
+  const [cardWidth, setCardWidth] = useState(0);
+  const screenPad = 24; // page width ~= screen - page padding
+  const pageWidth =
+    cardWidth > 0 ? cardWidth : Dimensions.get("window").width - screenPad;
+
+  const onScroll = (e) => {
+    const x = e.nativeEvent.contentOffset.x;
+    const idx = Math.round(x / pageWidth);
+    if (idx !== subTab) setSubTab(idx);
+  };
+
+  // Group matches by match day
+  const matchesByDay = useMemo(() => {
+    const map = new Map();
+    for (const m of matches) {
+      if (!map.has(m.match_day)) map.set(m.match_day, []);
+      map.get(m.match_day).push(m);
+    }
+    // keep deterministic order by match_day
+    return Array.from(map.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([md, arr]) => ({
+        match_day: md,
+        date: arr[0]?.match_date,
+        items: arr,
+      }));
+  }, [matches]);
+
+  // ===== Auto-fit column widths for POS, P, GD, PTS =====
+  const [colW, setColW] = useState({ pos: 0, p: 0, gd: 0, pts: 0 });
+  const updateCol = (key, w) =>
+    setColW((prev) => (w > (prev[key] || 0) ? { ...prev, [key]: w } : prev));
+  const padW = 20; // padding added around measured text
+  // Replaced avatar-only column with a fixed player column for avatar+name
+  const PLAYER_COL_W = 100;
+
+  return (
+    <View
+      style={{
+        borderWidth: 1,
+        borderColor: "#e5e7eb",
+        borderRadius: 14,
+        backgroundColor: "#fff",
+        overflow: "hidden",
+      }}
+      onLayout={(e) => setCardWidth(e.nativeEvent.layout.width)}
+    >
+      {/* header band */}
+      <TouchableOpacity
+        onPress={onToggle}
+        activeOpacity={0.8}
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+          paddingHorizontal: 12,
+          paddingVertical: 10,
+          backgroundColor: "#dcfce7",
+          borderBottomWidth: 1,
+          borderBottomColor: "#e5e7eb",
+        }}
+      >
+        <View style={{ flex: 1, paddingRight: 8, gap: 2 }}>
+          <Text
+            style={{ fontWeight: "900", fontSize: 16, color: "#065f46" }}
+            numberOfLines={1}
+          >
+            {league.name}
+          </Text>
+          {!!league.description && (
+            <Text style={{ color: "#065f46", opacity: 0.8 }} numberOfLines={1}>
+              {league.description}
+            </Text>
+          )}
+          <Text style={{ color: "#065f46", opacity: 0.8, fontSize: 12 }}>
+            Starts {league.start_date} • {participants.length} participants
+          </Text>
+        </View>
+        <View style={{ alignItems: "flex-end" }}>
+          <StatusPill status={status} />
+          {(() => {
+            const today0 = todayUtcMidnight();
+            const future = matches.filter((m) => toUtcMidnight(m.match_date) > today0);
+            const nextInfo =
+              future.length > 0
+                ? {
+                    match_day: future[0].match_day,
+                    match_date: future[0].match_date,
+                    home: participantsById.get(future[0].home_participant_id),
+                    away: participantsById.get(future[0].away_participant_id),
+                  }
+                : null;
+            return nextInfo ? (
+              <View style={{ marginTop: 6, alignItems: "flex-end", gap: 6 }}>
+                <Text style={{ color: "#065f46", fontSize: 12 }}>
+                  Next: Day {nextInfo.match_day} • {fmtShort(nextInfo.match_date)}
                 </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => {
-                  setCreateOpen(false);
-                  setName("");
-                  setDescription("");
-                  setStartDate(todayIso);
-                }}
-                style={{
-                  backgroundColor: "#e5e7eb",
-                  paddingHorizontal: 12,
-                  paddingVertical: 10,
-                  borderRadius: 10,
-                }}
-              >
-                <Text style={{ color: "#111827", fontWeight: "700" }}>Cancel</Text>
-              </TouchableOpacity>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <Avatar
+                    participant={nextInfo.home}
+                    size={20}
+                    onPress={() => onAvatarPress(nextInfo.home)}
+                  />
+                  <Text style={{ color: "#065f46", opacity: 0.65, fontSize: 12 }}>
+                    vs
+                  </Text>
+                  <Avatar
+                    participant={nextInfo.away}
+                    size={20}
+                    onPress={() => onAvatarPress(nextInfo.away)}
+                  />
+                </View>
+              </View>
+            ) : null;
+          })()}
+          <Text style={{ marginTop: 6, color: "#065f46", opacity: 0.8, fontSize: 11 }}>
+            {expanded ? "Tap to collapse" : "Tap to expand"}
+          </Text>
+        </View>
+      </TouchableOpacity>
+
+      {!expanded ? null : (
+        <>
+          {/* Subtabs header */}
+          <View style={{ paddingHorizontal: 12, paddingTop: 10 }}>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <View style={{ flexDirection: "row", gap: 6 }}>
+                {["Table", "Fixtures & Results"].map((label, idx) => (
+                  <Pressable
+                    key={label}
+                    onPress={() => {
+                      setSubTab(idx);
+                      scroller.current?.scrollTo({ x: idx * pageWidth, animated: true });
+                    }}
+                    style={{
+                      paddingHorizontal: 10,
+                      paddingVertical: 6,
+                      borderRadius: 999,
+                      backgroundColor: subTab === idx ? "#065f46" : "#f3f4f6",
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: subTab === idx ? "#fff" : "#111827",
+                        fontWeight: "700",
+                        fontSize: 12,
+                      }}
+                    >
+                      {label}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              <Text style={{ color: "#6b7280", fontSize: 12 }}>Swipe ↔</Text>
             </View>
           </View>
-        </Section>
-      )}
 
-      {/* My Leagues */}
-      <Section
-        title="My Leagues"
-        right={<Text style={{ color: "#6b7280" }}>{sortedLeagues.length}</Text>}
-        style={{ flex: 1, minHeight: 120 }}
+          {/* Pager */}
+          <ScrollView
+            ref={scroller}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            onScroll={onScroll}
+            scrollEventThrottle={16}
+            style={{ marginTop: 8 }}
+          >
+            {/* PAGE 1: TABLE */}
+            <View style={{ width: pageWidth, paddingHorizontal: 12, paddingBottom: 12 }}>
+              {/* removed the duplicate "Table" title per request */}
+
+              <View
+                style={{
+                  borderWidth: 1,
+                  borderColor: "#e5e7eb",
+                  borderRadius: 10,
+                  overflow: "hidden",
+                }}
+              >
+                {/* header row (auto-fit) */}
+                <View
+                  style={{
+                    flexDirection: "row",
+                    backgroundColor: "#f9fafb",
+                    paddingVertical: 6,
+                    alignItems: "center",
+                  }}
+                >
+                  {/* POS */}
+                  <View
+                    style={{
+                      width: Math.max(colW.pos + padW, 40),
+                      alignItems: "center",
+                      paddingHorizontal: 6,
+                    }}
+                  >
+                    <Text
+                      onLayout={(e) => updateCol("pos", e.nativeEvent.layout.width)}
+                      style={{ fontWeight: "700", color: "#6b7280" }}
+                    >
+                      POS
+                    </Text>
+                  </View>
+
+                  {/* PLAYER (avatar + name, truncated) */}
+                  <View
+                    style={{
+                      width: PLAYER_COL_W,
+                      paddingHorizontal: 4,
+                      alignItems: "flex-start",
+                    }}
+                  >
+                    <Text style={{ fontWeight: "700", color: "#6b7280" }}>PLAYER</Text>
+                  </View>
+
+                  {/* P */}
+                  <View
+                    style={{
+                      width: Math.max(colW.p + padW, 36),
+                      alignItems: "center",
+                      paddingHorizontal: 6,
+                    }}
+                  >
+                    <Text
+                      onLayout={(e) => updateCol("p", e.nativeEvent.layout.width)}
+                      style={{ fontWeight: "700", color: "#6b7280" }}
+                    >
+                      P
+                    </Text>
+                  </View>
+
+                  {/* GD */}
+                  <View
+                    style={{
+                      width: Math.max(colW.gd + padW, 60),
+                      alignItems: "center",
+                      paddingHorizontal: 6,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Text
+                      onLayout={(e) => updateCol("gd", e.nativeEvent.layout.width)}
+                      style={{ fontWeight: "700", color: "#6b7280" }}
+                    >
+                      GD
+                    </Text>
+                  </View>
+
+                  {/* PTS */}
+                  <View
+                    style={{
+                      width: Math.max(colW.pts + padW, 50),
+                      alignItems: "center",
+                      paddingHorizontal: 8,
+                    }}
+                  >
+                    <Text
+                      onLayout={(e) => updateCol("pts", e.nativeEvent.layout.width)}
+                      style={{ fontWeight: "700", color: "#6b7280" }}
+                    >
+                      PTS
+                    </Text>
+                  </View>
+                </View>
+
+                {standings.map((s, i) => (
+                  <View
+                    key={s.pid}
+                    style={{
+                      flexDirection: "row",
+                      paddingVertical: 8,
+                      borderTopWidth: 1,
+                      borderTopColor: "#f3f4f6",
+                      alignItems: "center",
+                    }}
+                  >
+                    {/* POS */}
+                    <View
+                      style={{
+                        width: Math.max(colW.pos + padW, 40),
+                        alignItems: "center",
+                        paddingHorizontal: 6,
+                      }}
+                    >
+                      <Text
+                        onLayout={(e) =>
+                          updateCol("pos", e.nativeEvent.layout.width)
+                        }
+                      >
+                        {i + 1}
+                      </Text>
+                    </View>
+
+                    {/* PLAYER avatar + truncated name */}
+                    <View
+                      style={{
+                        width: PLAYER_COL_W,
+                        paddingHorizontal: 4,
+                      }}
+                    >
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        <Avatar
+                          participant={participantsById.get(s.pid)}
+                          size={26}
+                          onPress={() => onAvatarPress(participantsById.get(s.pid))}
+                        />
+                        <Text
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
+                          style={{ flexShrink: 1, maxWidth: PLAYER_COL_W - 36 /* avatar+gap */ }}
+                        >
+                          {participantsById.get(s.pid)?.user?.full_name ||
+                            participantsById.get(s.pid)?.display_name ||
+                            "—"}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* P */}
+                    <View
+                      style={{
+                        width: Math.max(colW.p + padW, 36),
+                        alignItems: "center",
+                        paddingHorizontal: 6,
+                      }}
+                    >
+                      <Text
+                        onLayout={(e) => updateCol("p", e.nativeEvent.layout.width)}
+                        style={{ fontVariant: ["tabular-nums"] }}
+                      >
+                        {s.P}
+                      </Text>
+                    </View>
+
+                    {/* GD */}
+                    <View
+                      style={{
+                        width: Math.max(colW.gd + padW, 60),
+                        alignItems: "center",
+                        paddingHorizontal: 6,
+                      }}
+                    >
+                      <Text
+                        onLayout={(e) => updateCol("gd", e.nativeEvent.layout.width)}
+                        style={{ fontVariant: ["tabular-nums"] }}
+                        numberOfLines={1}
+                      >
+                        {s.GD.toLocaleString()}
+                      </Text>
+                    </View>
+
+                    {/* PTS */}
+                    <View
+                      style={{
+                        width: Math.max(colW.pts + padW, 50),
+                        alignItems: "center",
+                        paddingHorizontal: 8,
+                      }}
+                    >
+                      <Text
+                        onLayout={(e) => updateCol("pts", e.nativeEvent.layout.width)}
+                        style={{ fontWeight: "800", fontVariant: ["tabular-nums"] }}
+                      >
+                        {s.PTS}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            </View>
+
+            {/* PAGE 2: FIXTURES & RESULTS (grouped by Match Day) */}
+            <View style={{ width: pageWidth, paddingHorizontal: 12, paddingBottom: 12 }}>
+              {/* removed the duplicate "Fixtures & Results" title per request */}
+
+              {matchesByDay.map((group) => (
+                <View
+                  key={`md-${group.match_day}`}
+                  style={{
+                    borderWidth: 1,
+                    borderColor: "#e5e7eb",
+                    borderRadius: 10,
+                    overflow: "hidden",
+                    marginBottom: 10,
+                  }}
+                >
+                  <View
+                    style={{
+                      backgroundColor: "#f9fafb",
+                      paddingHorizontal: 10,
+                      paddingVertical: 8,
+                      borderBottomWidth: 1,
+                      borderBottomColor: "#e5e7eb",
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <Text style={{ fontWeight: "800" }}>
+                      Match Day {group.match_day}
+                    </Text>
+                    <Text style={{ color: "#6b7280", fontSize: 12 }}>
+                      {fmtShort(group.date)}
+                    </Text>
+                  </View>
+
+                  {group.items.map((m, idx) => (
+                    <ResultRow
+                      key={`${m.id || `${group.match_day}-${idx}`}`}
+                      match={m}
+                      participantsById={participantsById}
+                      dayPoints={dayPoints}
+                      onAvatarPress={onAvatarPress}
+                      scoreColor={scoreColor}
+                    />
+                  ))}
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        </>
+      )}
+    </View>
+  );
+}
+
+/* =========================
+   Result row (collapsible with players breakdown)
+   ======================= */
+function ResultRow({
+  match,
+  participantsById,
+  dayPoints,
+  onAvatarPress,
+  scoreColor,
+}) {
+  const [open, setOpen] = useState(false);
+  const home =
+    participantsById[match.home_participant_id] ||
+    participantsById.get(match.home_participant_id);
+  const away =
+    participantsById[match.away_participant_id] ||
+    participantsById.get(match.away_participant_id);
+
+  const d = toUtcMidnight(match.match_date);
+  const isFuture = d > todayUtcMidnight();
+  const H = dayPoints.get(keyDP(match, home)) ?? 0;
+  const A = dayPoints.get(keyDP(match, away)) ?? 0;
+
+  return (
+    <View style={{ borderTopWidth: 1, borderTopColor: "#f3f4f6" }}>
+      {/* Row: avatars + centered score (tap to expand) */}
+      <Pressable
+        onPress={() => !isFuture && setOpen((o) => !o)}
+        disabled={isFuture}
+        style={{
+          paddingHorizontal: 10,
+          paddingVertical: 10,
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+          opacity: isFuture ? 0.7 : 1,
+        }}
       >
+        {/* left: avatars vs */}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
+          <Avatar participant={home} size={24} onPress={() => onAvatarPress(home)} />
+          <Text style={{ color: "#9ca3af" }}>vs</Text>
+          <Avatar participant={away} size={24} onPress={() => onAvatarPress(away)} />
+        </View>
+
+        {/* right: score + subline */}
+        {/* right: score (without day/date subline) */}
+<View style={{ minWidth: 110, alignItems: "flex-end" }}>
+  {isFuture ? (
+    <Text style={{ color: "#6b7280", fontWeight: "600" }}>Scheduled</Text>
+  ) : (
+    <Text style={{ fontWeight: "900" }}>
+      <Text style={{ color: scoreColor(true, H, A) }}>{H}</Text>
+      <Text style={{ color: "#9ca3af" }}> — </Text>
+      <Text style={{ color: scoreColor(false, H, A) }}>{A}</Text>
+    </Text>
+  )}
+</View>
+
+      </Pressable>
+
+      {/* Collapsible breakdown (players & earned points per side) */}
+      {open && !isFuture && (
+        <View style={{ paddingHorizontal: 10, paddingBottom: 10, gap: 8 }}>
+          {!home.is_bot && (
+            <PlayersBreakdownRN
+              label={(home.user?.full_name || home.display_name || "Home").trim()}
+              participant={home}
+              date={match.match_date}
+            />
+          )}
+          {!away.is_bot && (
+            <PlayersBreakdownRN
+              label={(away.user?.full_name || away.display_name || "Away").trim()}
+              participant={away}
+              date={match.match_date}
+            />
+          )}
+        </View>
+      )}
+    </View>
+  );
+}
+
+/* =========================
+   Players breakdown (RN version of web’s PlayersBreakdown)
+   ======================= */
+function PlayersBreakdownRN({ label, participant, date }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const { start, end } = dayRangeUtc(date);
+        const { data } = await supabase
+          .from("games_records")
+          .select("player_name, points_earned")
+          .eq("user_id", participant.user_id)
+          .gte("created_at", start)
+          .lt("created_at", end)
+          .order("points_earned", { ascending: false })
+          .limit(10);
+        if (!cancelled) setRows(data || []);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    if (!participant.is_bot) load();
+    return () => {
+      cancelled = true;
+    };
+  }, [participant.id, participant.is_bot, participant.user_id, date]);
+
+  return (
+    <View
+      style={{
+        borderWidth: 1,
+        borderColor: "#e5e7eb",
+        borderRadius: 10,
+        backgroundColor: "#f9fafb",
+        overflow: "hidden",
+      }}
+    >
+      <View
+        style={{
+          paddingHorizontal: 10,
+          paddingVertical: 8,
+          backgroundColor: "#fff",
+          borderBottomWidth: 1,
+          borderBottomColor: "#e5e7eb",
+        }}
+      >
+        <Text style={{ fontWeight: "700" }}>{label}</Text>
+      </View>
+      <View style={{ paddingHorizontal: 10, paddingVertical: 8 }}>
         {loading ? (
-          <ActivityIndicator />
-        ) : sortedLeagues.length === 0 ? (
-          <Text style={{ color: "#6b7280" }}>
-            You don’t belong to any league yet. Create one above or ask an admin to add you.
-          </Text>
+          <Text style={{ color: "#6b7280" }}>Loading…</Text>
+        ) : rows.length === 0 ? (
+          <Text style={{ color: "#6b7280" }}>No players recorded for this day.</Text>
         ) : (
-          <FlatList
-            data={sortedLeagues}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item }) => <LeagueItem item={item} />}
-            contentContainerStyle={{ paddingBottom: 12 }}
-          />
+          rows.map((r, idx) => (
+            <View
+              key={`${r.player_name || idx}-${idx}`}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                paddingVertical: 4,
+              }}
+            >
+              <Text numberOfLines={1} style={{ flex: 1, paddingRight: 10 }}>
+                {r.player_name || "—"}
+              </Text>
+              <Text style={{ fontWeight: "800" }}>
+                {(r.points_earned ?? 0).toLocaleString()} pts
+              </Text>
+            </View>
+          ))
         )}
-      </Section>
+      </View>
     </View>
   );
 }

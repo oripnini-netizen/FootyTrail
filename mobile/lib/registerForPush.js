@@ -8,7 +8,7 @@ import { supabase } from "./supabase";
 // Show alerts in foreground (optional)
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
+    shouldShowBanner: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
   }),
