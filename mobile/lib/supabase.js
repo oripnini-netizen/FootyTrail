@@ -2,6 +2,7 @@
 import "react-native-url-polyfill/auto";
 import "react-native-get-random-values"; // ensures crypto.getRandomValues exists in RN
 import * as SecureStore from "expo-secure-store";
+import * as FileSystem from "expo-file-system";
 import { AppState } from "react-native";
 import { createClient } from "@supabase/supabase-js";
 
@@ -120,31 +121,79 @@ const getExt = (input) => {
   }
 };
 
+/** Base64 -> Uint8Array with safe fallbacks in RN */
+function base64ToUint8Array(b64) {
+  try {
+    // Most Expo RN builds have atob polyfilled
+    const binary = global.atob ? global.atob(b64) : Buffer.from(b64, "base64").toString("binary");
+    const len = binary.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  } catch (e) {
+    // Last-resort fallback (very unlikely to hit):
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const lookup = new Uint8Array(256);
+    for (let i = 0; i < chars.length; i++) lookup[chars.charCodeAt(i)] = i;
+    let bufferLength = (b64.length * 0.75) | 0;
+    if (b64[b64.length - 1] === "=") bufferLength--;
+    if (b64[b64.length - 2] === "=") bufferLength--;
+    const bytes = new Uint8Array(bufferLength);
+    let p = 0;
+    for (let i = 0; i < b64.length; i += 4) {
+      const encoded1 = lookup[b64.charCodeAt(i)];
+      const encoded2 = lookup[b64.charCodeAt(i + 1)];
+      const encoded3 = lookup[b64.charCodeAt(i + 2)];
+      const encoded4 = lookup[b64.charCodeAt(i + 3)];
+      bytes[p++] = (encoded1 << 2) | (encoded2 >> 4);
+      if (encoded3 !== undefined) bytes[p++] = ((encoded2 & 15) << 4) | (encoded3 >> 2);
+      if (encoded4 !== undefined) bytes[p++] = ((encoded3 & 3) << 6) | encoded4;
+    }
+    return bytes;
+  }
+}
+
 /**
  * Upload an image picked with expo-image-picker to the "avatars" bucket
  * and return a public URL.
  *
- * @param {{ uri: string, fileName?: string }} asset
+ * Accepts the RN asset and optional explicit userId.
+ * Reads via FileSystem (base64) to avoid 0-byte uploads on RN.
+ *
+ * @param {{ uri: string, fileName?: string, mimeType?: string }} asset
+ * @param {string=} explicitUserId
  * @returns {Promise<string>} public URL
  */
-export async function uploadAvatar(asset) {
+export async function uploadAvatar(asset, explicitUserId) {
   if (!asset?.uri) throw new Error("No file selected");
 
-  const { data: auth } = await supabase.auth.getUser();
-  const userId = auth?.user?.id || "anon";
+  // Determine user id
+  let userId = explicitUserId;
+  if (!userId) {
+    const { data: auth } = await supabase.auth.getUser();
+    userId = auth?.user?.id || "anon";
+  }
 
-  const ext = getExt(asset.fileName || asset.uri);
+  // Read the file as base64 then convert to bytes (RN-safe)
+  const base64 = await FileSystem.readAsStringAsync(asset.uri, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
+  const bytes = base64ToUint8Array(base64);
+
+  // Derive content type + extension
+  const mime =
+    asset.mimeType ||
+    (asset.uri.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg");
+  const ext = getExt(asset.fileName || asset.uri) || (mime.split("/")[1] || "jpg");
+
   const key = `${userId}/${uuidv4()}.${ext}`;
-
-  const res = await fetch(asset.uri);
-  const blob = await res.blob();
 
   const { error } = await supabase.storage
     .from(AVATARS_BUCKET) // ensure a bucket named "avatars" exists
-    .upload(key, blob, {
+    .upload(key, bytes, {
       cacheControl: "3600",
       upsert: true,
-      contentType: blob.type || "image/jpeg",
+      contentType: mime,
     });
 
   if (error) throw new Error(error.message || "Avatar upload failed");

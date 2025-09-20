@@ -131,12 +131,17 @@ function useRealtimeTournament({ tournamentId, roundIds, onChange }) {
     channel.subscribe();
 
     return () => {
-      if (debouncedRefetchTimer.current) {
-        clearTimeout(debouncedRefetchTimer.current);
-        debouncedRefetchTimer.current = null;
-      }
-      supabase.removeChannel(channel);
-    };
+  if (debouncedRefetchTimer.current) {
+    clearTimeout(debouncedRefetchTimer.current);
+    debouncedRefetchTimer.current = null;
+  }
+  try {
+    channel.unsubscribe();
+  } catch {
+    supabase.removeChannel(channel);
+  }
+};
+
   }, [tournamentId, roundIdSet, refetchSoon]);
 }
 
@@ -154,22 +159,27 @@ export default function EliminationScreen() {
   const [live, setLive] = useState([]);
   const [finished, setFinished] = useState([]);
 
+  // Loading + error per section
   const [loading, setLoading] = useState({ upcoming: true, live: true, finished: true });
   const [error, setError] = useState({ upcoming: "", live: "", finished: "" });
+
+  // Pull-to-refresh
   const [refreshing, setRefreshing] = useState(false);
 
+  // For child cards to force reloads
   const [refreshToken, setRefreshToken] = useState(0);
   const [hardRefreshToken, setHardRefreshToken] = useState(0);
-  const autoStartTriedRef = useRef(new Set());
 
-  // NEW: track which cards are expanded
+  // Expanded cards (default: live + upcoming + newest finished)
   const [expandedIds, setExpandedIds] = useState(() => new Set());
-  const didInitExpandedRef = useRef(false);
+const didInitExpandedRef = useRef(false);
 
-  // NEW: remember when the FIRST successful load finishes to avoid showing content skeletons at boot
-  const [hasBootstrapped, setHasBootstrapped] = useState(false);
+// Fade-in animation for the list container
+const fadeAnim = useRef(new Animated.Value(0)).current; // 0 → 1
+const slideAnim = useRef(new Animated.Value(8)).current; // 8px down → 0
 
-  // get user id
+
+  // --- Get current user id once ---
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -177,11 +187,10 @@ export default function EliminationScreen() {
       if (!alive) return;
       setUserId(error ? null : data?.user?.id ?? null);
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
 
+  // --- Loader: fetch three lists (lobby/live/finished) ---
   const reloadLists = useCallback(async () => {
     if (!userId) {
       setUpcoming([]);
@@ -192,9 +201,9 @@ export default function EliminationScreen() {
       return;
     }
 
-    // ----------------------------- Upcoming -----------------------------
-    setLoading((s) => ({ ...s, upcoming: true }));
-    setError((e) => ({ ...e, upcoming: "" }));
+    // UPCOMING (lobby)
+    setLoading(s => ({ ...s, upcoming: true }));
+    setError(e => ({ ...e, upcoming: "" }));
     try {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
@@ -206,48 +215,46 @@ export default function EliminationScreen() {
       if (err) throw err;
 
       const all = Array.isArray(data) ? data : [];
-      const pub = all.filter((t) => ((t?.filters || {}).visibility || "private") === "public");
-      const priv = all.filter((t) => ((t?.filters || {}).visibility || "private") !== "public");
+      const pub = all.filter(t => ((t?.filters || {}).visibility || "private") === "public");
+      const priv = all.filter(t => ((t?.filters || {}).visibility || "private") !== "public");
 
       let canSeePriv = [];
       if (priv.length) {
-        const ids = priv.map((t) => t.id);
+        const ids = priv.map(t => t.id);
         const { data: mine } = await supabase
           .from("elimination_participants")
           .select("tournament_id, invite_status")
           .eq("user_id", userId)
           .in("tournament_id", ids);
-        const allowedIds = new Set((mine || []).map((r) => r.tournament_id));
-        canSeePriv = priv.filter((t) => t.owner_id === userId || allowedIds.has(t.id));
+        const allowedIds = new Set((mine || []).map(r => r.tournament_id));
+        canSeePriv = priv.filter(t => t.owner_id === userId || allowedIds.has(t.id));
       }
+
       const list = [...pub, ...canSeePriv].sort(
         (a, b) => new Date(b.created_at) - new Date(a.created_at)
       );
       setUpcoming(list);
 
-      // auto-start
-      const due = list.filter((t) => {
+      // Best-effort auto-start for due lobbies
+      const due = list.filter(t => {
         const dl = t?.join_deadline ? new Date(t.join_deadline) : null;
-        const isDue = !!dl && dl <= new Date();
-        const notTried = !autoStartTriedRef.current.has(t.id);
-        return isDue && notTried;
+        return dl && dl <= new Date();
       });
       if (due.length) {
-        due.forEach((t) => autoStartTriedRef.current.add(t.id));
         await Promise.allSettled(
-          due.map((t) => supabase.rpc("start_elimination_tournament", { p_tournament_id: t.id }))
+          due.map(t => supabase.rpc("start_elimination_tournament", { p_tournament_id: t.id }))
         );
       }
     } catch (e) {
-      setError((s) => ({ ...s, upcoming: e?.message || "Failed to load." }));
+      setError(s => ({ ...s, upcoming: e?.message || "Failed to load." }));
       setUpcoming([]);
     } finally {
-      setLoading((s) => ({ ...s, upcoming: false }));
+      setLoading(s => ({ ...s, upcoming: false }));
     }
 
-    // --------------------------------- Live ---------------------------------
-    setLoading((s) => ({ ...s, live: true }));
-    setError((e) => ({ ...e, live: "" }));
+    // LIVE
+    setLoading(s => ({ ...s, live: true }));
+    setError(e => ({ ...e, live: "" }));
     try {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
@@ -259,28 +266,27 @@ export default function EliminationScreen() {
       if (err) throw err;
 
       const all = Array.isArray(data) ? data : [];
-      const ids = all.map((t) => t.id);
+      const ids = all.map(t => t.id);
       const { data: myRows } = await supabase
         .from("elimination_participants")
         .select("tournament_id, invite_status")
         .eq("user_id", userId)
         .in("tournament_id", ids);
       const accepted = new Set(
-        (myRows || [])
-          .filter((r) => (r.invite_status || "").toLowerCase() === "accepted")
-          .map((r) => r.tournament_id)
+        (myRows || []).filter(r => (r.invite_status || "").toLowerCase() === "accepted")
+                    .map(r => r.tournament_id)
       );
-      setLive(all.filter((t) => accepted.has(t.id)));
+      setLive(all.filter(t => accepted.has(t.id)));
     } catch (e) {
-      setError((s) => ({ ...s, live: e?.message || "Failed to load." }));
+      setError(s => ({ ...s, live: e?.message || "Failed to load." }));
       setLive([]);
     } finally {
-      setLoading((s) => ({ ...s, live: false }));
+      setLoading(s => ({ ...s, live: false }));
     }
 
-    // ------------------------------- Finished -------------------------------
-    setLoading((s) => ({ ...s, finished: true }));
-    setError((e) => ({ ...e, finished: "" }));
+    // FINISHED
+    setLoading(s => ({ ...s, finished: true }));
+    setError(e => ({ ...e, finished: "" }));
     try {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
@@ -292,165 +298,163 @@ export default function EliminationScreen() {
       if (err) throw err;
       setFinished(Array.isArray(data) ? data : []);
     } catch (e) {
-      setError((s) => ({ ...s, finished: e?.message || "Failed to load." }));
+      setError(s => ({ ...s, finished: e?.message || "Failed to load." }));
       setFinished([]);
     } finally {
-      setLoading((s) => ({ ...s, finished: false }));
-      setRefreshToken((t) => t + 1);
+      setLoading(s => ({ ...s, finished: false }));
+      setRefreshToken(t => t + 1);
     }
   }, [userId]);
 
-  // Refetch whenever this screen regains focus
+  // Refetch on focus
   useFocusEffect(
     useCB(() => {
       reloadLists();
+      return () => {};
     }, [reloadLists])
   );
 
-  // initial + on user change
+  // Initial + on user change
   useEffect(() => {
     if (!userId) return;
     reloadLists();
   }, [userId, reloadLists]);
 
-  // ------------------------- Realtime (no polling) -------------------------
+  // Realtime: keep slim, just trigger reloads
   useEffect(() => {
     const ch = supabase
       .channel("elim-mobile-realtime")
-      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_tournaments" }, () =>
-        reloadLists()
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_tournaments" }, reloadLists)
       .on("postgres_changes", { event: "*", schema: "public", table: "elimination_rounds" }, () => {
-        setHardRefreshToken((t) => t + 1);
+        setHardRefreshToken(t => t + 1);
         reloadLists();
       })
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "elimination_round_entries" },
-        () => reloadLists()
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "elimination_participants" },
-        () => {
-          setHardRefreshToken((t) => t + 1);
-          reloadLists();
-        }
-      )
-      .on("postgres_changes", { event: "*", schema: "public", table: "point_transactions" }, () =>
-        reloadLists()
-      )
-      .subscribe();
+      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_round_entries" }, reloadLists)
+      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_participants" }, () => {
+        setHardRefreshToken(t => t + 1);
+        reloadLists();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "point_transactions" }, reloadLists);
 
+    ch.subscribe();
     return () => {
-      supabase.removeChannel(ch);
+      try { ch.unsubscribe(); } catch { supabase.removeChannel(ch); }
     };
   }, [reloadLists]);
 
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      await reloadLists();
-    } finally {
-      setRefreshing(false);
-    }
-  }, [reloadLists]);
+  // ---------- Unified list (Live → Upcoming → Finished) ----------
+  const combinedList = useMemo(() => [...live, ...upcoming, ...finished], [live, upcoming, finished]);
 
-  // ---------- Unified list (color-coded headers instead of separate sections)
-  const combinedList = useMemo(() => {
-    // keep order: Live → Upcoming → Finished
-    return [...live, ...upcoming, ...finished];
-  }, [live, upcoming, finished]);
-
-  const isAnyLoading = loading.live || loading.upcoming || loading.finished;
-  const anyError = error.live || error.upcoming || error.finished;
-
-  // Initialize default expanded states ONCE:
+  // Initialize default expanded states ONCE after first load
   useEffect(() => {
     if (didInitExpandedRef.current) return;
+    const isAnyLoading = loading.live || loading.upcoming || loading.finished;
     if (isAnyLoading) return;
-    const liveIds = live.map((t) => t.id);
-    const upcomingIds = upcoming.map((t) => t.id);
-    const newestFinishedId = finished[0]?.id;
-    const defaults = new Set([...liveIds, ...upcomingIds]);
-    if (newestFinishedId) defaults.add(newestFinishedId);
+    const defaults = new Set([
+      ...live.map(t => t.id),
+      ...upcoming.map(t => t.id),
+    ]);
+    if (finished[0]?.id) defaults.add(finished[0].id);
     setExpandedIds(defaults);
     didInitExpandedRef.current = true;
-  }, [isAnyLoading, live, upcoming, finished]);
+  }, [loading.live, loading.upcoming, loading.finished, live, upcoming, finished]);
 
   const toggleCard = useCallback((id) => {
-    setExpandedIds((prev) => {
+    setExpandedIds(prev => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
   }, []);
 
-  // NEW: compute "boot loading" => no UI except background + big spinner
-  const isBootLoading = (userId === null) || isAnyLoading;
-  useEffect(() => {
-    if (!hasBootstrapped && userId !== null && !isAnyLoading) {
-      setHasBootstrapped(true);
-    }
-  }, [hasBootstrapped, userId, isAnyLoading]);
+  // Pull-to-refresh handler
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try { await reloadLists(); } finally { setRefreshing(false); }
+  }, [reloadLists]);
 
-  if (!hasBootstrapped && isBootLoading) {
-    // Full-screen background with big centered loader
-    return (
-      <View style={{ flex: 1, backgroundColor: "#F0FDF4", alignItems: "center", justifyContent: "center" }}>
-        <ActivityIndicator size="large" />
-      </View>
-    );
-  }
+// ----- HARD GATE (leaderboard style): wait only for userId + list loads -----
+const isAnyLoading = loading.live || loading.upcoming || loading.finished;
 
+// Trigger a quick fade/slide reveal whenever a fresh set of lists is ready
+useEffect(() => {
+  if (userId === null) return;
+  if (isAnyLoading) return; // wait until the three lists finished loading
+
+  // reset & play
+  fadeAnim.setValue(0);
+  slideAnim.setValue(8);
+  Animated.parallel([
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 220,
+      useNativeDriver: true,
+    }),
+    Animated.timing(slideAnim, {
+      toValue: 0,
+      duration: 220,
+      useNativeDriver: true,
+    }),
+  ]).start();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [userId, isAnyLoading, refreshToken, hardRefreshToken]);
+
+if (userId === null || isAnyLoading) {
   return (
-    // page bg (not pure black)
-    <View style={{ flex: 1, backgroundColor: "#F0FDF4", justifyContent: "center" }}>
-      <ScrollView
-        contentContainerStyle={{ padding: 12, paddingBottom: 32 }}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-      >
-        {/* --------- Top CTA: Create Challenge --------- */}
-        <View style={{ marginBottom: 12, justifyContent: "center" }}>
-          <TouchableOpacity
-            style={[styles.primaryBtn, { alignSelf: "center", paddingHorizontal: 14 }]}
-            onPress={() => useRouter().push("/elimination-create")}
-          >
-            <Text style={styles.primaryBtnText}>+ Create New Challenge</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* After boot: keep your usual states (no early flashes anymore) */}
-        {isAnyLoading ? (
-          // you can keep Skeleton here for post-boot reloads, or replace with a thin loader if you prefer
-          <Skeleton />
-        ) : anyError ? (
-          <ErrorBox message={anyError} />
-        ) : combinedList.length === 0 ? (
-          <EmptyText text="No challenges yet." />
-        ) : (
-          <View style={{ gap: 12 }}>
-            {combinedList.map((t) => (
-              <TournamentCardMobileBR
-                key={t.id}
-                tournament={t}
-                userId={userId}
-                refreshToken={refreshToken}
-                hardRefreshToken={hardRefreshToken}
-                onChanged={reloadLists}
-                isExpanded={expandedIds.has(t.id)}
-                onToggle={() => toggleCard(t.id)}
-              />
-            ))}
-          </View>
-        )}
-
-        <View style={{ height: 24 }} />
-      </ScrollView>
+    <View style={{ flex: 1, backgroundColor: "#F0FDF4", justifyContent: "center", alignItems: "center" }}>
+      <ActivityIndicator size="large" />
     </View>
   );
 }
+
+
+  // ---------- Normal render ----------
+const anyError = error.live || error.upcoming || error.finished;
+
+  return (
+  <View style={{ flex: 1, backgroundColor: "#F0FDF4", justifyContent: "center" }}>
+    <Animated.ScrollView
+      contentContainerStyle={{ padding: 12, paddingBottom: 32 }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      // Fade + slight up-slide to avoid any flash on mount/reloads
+      style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}
+    >
+      {/* Top CTA */}
+      <View style={{ marginBottom: 12, justifyContent: "center" }}>
+        <TouchableOpacity
+          style={[styles.primaryBtn, { alignSelf: "center", paddingHorizontal: 14 }]}
+          onPress={() => router.push("/elimination-create")}
+        >
+          <Text style={styles.primaryBtnText}>+ Create New Challenge</Text>
+        </TouchableOpacity>
+      </View>
+
+      {anyError ? (
+        <ErrorBox message={anyError} />
+      ) : combinedList.length === 0 ? (
+        <EmptyText text="No challenges yet." />
+      ) : (
+        <View style={{ gap: 12 }}>
+          {combinedList.map((t) => (
+            <TournamentCardMobileBR
+              key={t.id}
+              tournament={t}
+              userId={userId}
+              refreshToken={refreshToken}
+              hardRefreshToken={hardRefreshToken}
+              onChanged={reloadLists}
+              isExpanded={expandedIds.has(t.id)}
+              onToggle={() => toggleCard(t.id)}
+            />
+          ))}
+        </View>
+      )}
+      <View style={{ height: 24 }} />
+    </Animated.ScrollView>
+  </View>
+);
+}
+
 
 /* --------------------------- Small UI atoms --------------------------- */
 function EmptyText({ text }) {
@@ -483,6 +487,7 @@ function TournamentCardMobileBR({
   onChanged,
   isExpanded,          // NEW
   onToggle,            // NEW
+  onFirstDataLoaded,          // NEW
 }) {
   const router = useRouter();
   const isUpcoming = tournament.status === "lobby";
@@ -725,6 +730,17 @@ function getTodayUtcRange() {
       cancelled = true;
     };
   }, [tournament.id, refreshToken, hardRefreshToken, userId, rtTick]); // ← include rtTick so realtime nudges refetch
+
+
+// NEW: Let the parent know this card finished its FIRST internal fetch
+const hasSignaledReadyRef = useRef(false);
+useEffect(() => {
+  if (!loading && !hasSignaledReadyRef.current) {
+    hasSignaledReadyRef.current = true;
+    onFirstDataLoaded && onFirstDataLoaded(tournament.id);
+  }
+}, [loading, onFirstDataLoaded, tournament.id]);
+
 
   // Hook up realtime for ONLY this tournament card
   useRealtimeTournament({
@@ -1371,7 +1387,7 @@ function SwipeableArena({
                       lineHeight: 20,
                     }}
                   >
-                    {stake > 0 ? `${name} takes the crown. Pot: ${pot} pts.` : `${name} takes the crown.`}
+                    {stake > 0 ? `${name} takes the crown!` : `${name} takes the crown!`}
                   </Text>
                 </View>
               </View>
@@ -2203,6 +2219,15 @@ secondaryBtnText: { color: "#111827", fontWeight: "800" },
     alignItems: "center",
     borderRadius: 14,
   },
+
+  bootOverlay: {
+  position: "absolute",
+  top: 0, right: 0, bottom: 0, left: 0,
+  alignItems: "center",
+  justifyContent: "center",
+  backgroundColor: "#F0FDF4",
+  zIndex: 999,
+},
 
   // Avatars (absolute jittered)
   avatarAbsWrap: {

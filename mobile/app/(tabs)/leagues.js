@@ -299,13 +299,14 @@ function Avatar({ participant, size = 28, onPress }) {
 }
 
 /* =========================================================
-   User Recent Games Modal — fixed size card w/ scrolling
+   User Recent Games Modal — match Leaderboard modal behavior
    ======================================================= */
 function UserRecentGamesModal({ visible, onClose, userRow }) {
   const screen = Dimensions.get("window");
   const cardMaxWidth = Math.min(screen.width - 32, 420);
   const cardMaxHeight = Math.min(screen.height - 80, 640);
 
+  // Resolve basic user props
   const userId =
     userRow?.user?.id ||
     userRow?.user_id ||
@@ -325,9 +326,47 @@ function UserRecentGamesModal({ visible, onClose, userRow }) {
       display
     )}&radius=50&backgroundType=gradientLinear`;
 
+  // Local helpers (clone behavior from leaderboard)
+  const isTodayUtc = (isoOrDate) => {
+    try {
+      const d = new Date(isoOrDate);
+      const now = new Date();
+      return (
+        d.getUTCFullYear() === now.getUTCFullYear() &&
+        d.getUTCMonth() === now.getUTCMonth() &&
+        d.getUTCDate() === now.getUTCDate()
+      );
+    } catch {
+      return false;
+    }
+  };
+  const formatUtcDateTime = (iso) => {
+    try {
+      const d = new Date(iso);
+      if (isNaN(d)) return "—";
+      const yyyy = d.getUTCFullYear();
+      const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+      const dd = String(d.getUTCDate()).padStart(2, "0");
+      const hh = String(d.getUTCHours()).padStart(2, "0");
+      const min = String(d.getUTCMinutes()).padStart(2, "0");
+      return `${yyyy}-${mm}-${dd} ${hh}:${min} UTC`;
+    } catch {
+      return "—";
+    }
+  };
+
+  // Data state
   const [loading, setLoading] = useState(true);
   const [games, setGames] = useState([]);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [userStats, setUserStats] = useState({
+    totalPoints: 0,
+    games: 0,
+    avgTime: 0,
+    successRate: 0,
+  });
 
+  // Load recent games (like leaderboard)
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -341,7 +380,7 @@ function UserRecentGamesModal({ visible, onClose, userRow }) {
           )
           .eq("user_id", userId)
           .order("created_at", { ascending: false })
-          .limit(30);
+          .limit(20);
         if (error) throw error;
         if (alive) setGames(Array.isArray(data) ? data : []);
       } catch {
@@ -355,19 +394,67 @@ function UserRecentGamesModal({ visible, onClose, userRow }) {
     };
   }, [visible, userId]);
 
-  const formatUtc = (iso) => {
-    try {
-      const d = new Date(iso);
-      const y = d.getUTCFullYear();
-      const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-      const dd = String(d.getUTCDate()).padStart(2, "0");
-      const hh = String(d.getUTCHours()).padStart(2, "0");
-      const mm = String(d.getUTCMinutes()).padStart(2, "0");
-      return `${y}-${m}-${dd} ${hh}:${mm} UTC`;
-    } catch {
-      return "—";
-    }
-  };
+  // Load lifetime stats (mirror leaderboard’s aggregation)
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!visible || !userId) return;
+      setStatsLoading(true);
+      try {
+        // Base (non-elimination) games only
+        const { data: allGames, error: allErr } = await supabase
+          .from("games_records")
+          .select("won, points_earned, time_taken_seconds")
+          .eq("user_id", userId)
+          .or("is_elimination_game.is.null,is_elimination_game.eq.false");
+        if (allErr) throw allErr;
+
+        const total = allGames?.length || 0;
+        const basePts = (allGames || []).reduce(
+          (s, g) => s + (g.points_earned || 0),
+          0
+        );
+        const wins = (allGames || []).filter((g) => g.won).length;
+        const time = (allGames || []).reduce(
+          (s, g) => s + (g.time_taken_seconds || 0),
+          0
+        );
+
+        const { data: txs, error: txErr } = await supabase
+          .from("point_transactions")
+          .select("amount")
+          .eq("user_id", userId);
+        if (txErr) throw txErr;
+        const txPts = (txs || []).reduce(
+          (s, t) => s + Number(t.amount || 0),
+          0
+        );
+
+        if (alive) {
+          setUserStats({
+            totalPoints: basePts + txPts,
+            games: total,
+            avgTime: total ? Math.round(time / total) : 0,
+            successRate: total ? Math.round((wins / total) * 100) : 0,
+          });
+        }
+      } catch (e) {
+        if (alive) {
+          setUserStats({
+            totalPoints: 0,
+            games: 0,
+            avgTime: 0,
+            successRate: 0,
+          });
+        }
+      } finally {
+        if (alive) setStatsLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [visible, userId]);
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -389,7 +476,7 @@ function UserRecentGamesModal({ visible, onClose, userRow }) {
             maxHeight: cardMaxHeight,
           }}
         >
-          {/* Header (fixed) */}
+          {/* Header */}
           <View
             style={{
               padding: 14,
@@ -418,9 +505,42 @@ function UserRecentGamesModal({ visible, onClose, userRow }) {
             </TouchableOpacity>
           </View>
 
-          {/* Body (scrollable) */}
-          <ScrollView style={{ padding: 14 }}>
-            <Text style={{ fontWeight: "700", marginBottom: 8 }}>Recent games</Text>
+          {/* Stats grid (like leaderboard) */}
+          <View
+            style={{
+              paddingHorizontal: 12,
+              paddingTop: 10,
+              paddingBottom: 6,
+              flexDirection: "row",
+              flexWrap: "wrap",
+              gap: 8,
+            }}
+          >
+            {[
+              { label: "Total Points", value: userStats.totalPoints?.toLocaleString?.() || 0 },
+              { label: "Games", value: userStats.games || 0 },
+              { label: "Avg Time", value: `${userStats.avgTime || 0}s` },
+              { label: "Success", value: `${userStats.successRate || 0}%` },
+            ].map((s) => (
+              <View
+                key={s.label}
+                style={{
+                  flexBasis: "48%",
+                  borderWidth: 1,
+                  borderColor: "#e5e7eb",
+                  borderRadius: 10,
+                  paddingVertical: 8,
+                  paddingHorizontal: 10,
+                }}
+              >
+                <Text style={{ fontSize: 12, color: "#6b7280", textAlign: "center" }}>{s.label}</Text>
+                <Text style={{ fontSize: 18, fontWeight: "800" , color: "#065f46" , textAlign: "center"}}>{s.value}</Text>
+              </View>
+            ))}
+          </View>
+
+          {/* Recent games list */}
+          <ScrollView style={{ paddingHorizontal: 12, paddingBottom: 12 }}>
             {loading ? (
               <View style={{ paddingVertical: 20, alignItems: "center" }}>
                 <ActivityIndicator />
@@ -428,8 +548,22 @@ function UserRecentGamesModal({ visible, onClose, userRow }) {
             ) : games.length === 0 ? (
               <Text style={{ color: "#6b7280" }}>No games yet.</Text>
             ) : (
-              <View style={{ gap: 10 }}>
-                {games.map((g) => (
+              games.map((g) => {
+                const maskedName =
+                  g.is_daily_challenge && isTodayUtc(g.created_at)
+                    ? "Daily Challenge Player"
+                    : g.player_name || "Unknown Player";
+
+                const titleStyle = [
+                  { fontWeight: "700" },
+                  g.is_daily_challenge
+                    ? { color: "#a16207" } // gold
+                    : g.is_elimination_game
+                    ? { color: "#7c3aed" } // purple
+                    : null,
+                ];
+
+                return (
                   <View
                     key={g.id}
                     style={{
@@ -437,36 +571,46 @@ function UserRecentGamesModal({ visible, onClose, userRow }) {
                       borderColor: "#e5e7eb",
                       borderRadius: 10,
                       padding: 10,
+                      marginBottom: 10,
                       flexDirection: "row",
                       alignItems: "center",
                       justifyContent: "space-between",
                     }}
                   >
-                    <View style={{ maxWidth: "70%" }}>
-                      <Text style={{ fontWeight: "700" }} numberOfLines={1}>
-                        {g.player_name || "—"}
+                    <View style={{ flex: 1, minWidth: 0, paddingRight: 10 }}>
+                      <Text style={titleStyle} numberOfLines={1} ellipsizeMode="tail">
+                        {maskedName}
                       </Text>
                       <Text style={{ color: "#6b7280", fontSize: 12 }}>
-                        {formatUtc(g.created_at)}
-                      </Text>
-                      <Text style={{ color: "#6b7280", fontSize: 12 }}>
-                        {g.guesses_attempted}{" "}
-                        {g.guesses_attempted === 1 ? "guess" : "guesses"}
-                        {g.is_daily_challenge ? " • Daily" : ""}
-                        {g.is_elimination_game ? " • Elimination" : ""}
+                        {formatUtcDateTime(g.created_at)}
                       </Text>
                     </View>
-                    <Text
-                      style={{
-                        fontWeight: "900",
-                        color: g.won ? "#16a34a" : "#dc2626",
-                      }}
-                    >
-                      {g.won ? `+${g.points_earned}` : "0"} pts
-                    </Text>
+
+                    <View style={{ alignItems: "flex-end" }}>
+                      <Text
+                        style={{
+                          fontWeight: "900",
+                          color: g.won ? "#16a34a" : "#dc2626",
+                        }}
+                      >
+                        {g.won ? `+${g.points_earned}` : "0"} pts
+                      </Text>
+                      <Text style={{ color: "#6b7280", fontSize: 12 }}>
+                        {g.guesses_attempted} {g.guesses_attempted === 1 ? "guess" : "guesses"}
+                        {g.is_daily_challenge ? " • Daily" : ""}
+                        {g.is_elimination_game ? (
+                          <>
+                            {" "}
+                            • <Text style={{ color: "#7c3aed" }}>Elimination</Text>
+                          </>
+                        ) : (
+                          ""
+                        )}
+                      </Text>
+                    </View>
                   </View>
-                ))}
-              </View>
+                );
+              })
             )}
           </ScrollView>
         </View>
@@ -833,7 +977,7 @@ export default function LeaguesScreen() {
   ];
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#f5f7f5" }}>
+    <View style={{ flex: 1, backgroundColor: "#F0FDF4" }}>
       {/* Header row: tabs with counts */}
       <View
         style={{

@@ -386,7 +386,7 @@ export default function LeaderboardScreen() {
   }
 
   return (
-    <View style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: "#F0FDF4" }}>
       {/* Tabs row — centered and wrapped */}
       <View style={styles.filtersRow}>
         {TABS.map((t) => (

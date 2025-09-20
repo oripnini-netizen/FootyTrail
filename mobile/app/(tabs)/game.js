@@ -750,7 +750,7 @@ export default function GameScreen() {
   return (
     <ScrollView
       ref={scrollRef} // <-- ADDED
-      style={{ backgroundColor: "#f7faf7" }}
+      style={{ backgroundColor: "#F0FDF4" }}
       contentContainerStyle={styles.container}
       refreshControl={          /* <-- ADDED: pull-to-refresh */
         <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
@@ -863,7 +863,7 @@ export default function GameScreen() {
             <View
               style={[
                 styles.poolCard,
-                { marginTop: 12, backgroundColor: "#fff7ed", borderColor: "#fed7aa" },
+                { marginTop: 12, marginBottom: 12, backgroundColor: "#fff7ed", borderColor: "#fed7aa" },
               ]}
             >
               <View>
@@ -1203,10 +1203,13 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: "#fff",
-    borderRadius: 12,
+    borderRadius: 16,
     padding: 12,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderWidth: 1,
     borderColor: "#e5e7eb",
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
     marginBottom: 4,
   },
   subCard: {

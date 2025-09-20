@@ -197,7 +197,7 @@ export default function ProfileInfoScreen() {
 
     try {
       setSaving(true);
-      const publicUrl = await uploadAvatar(asset);
+      const publicUrl = await uploadAvatar(asset, user.id);
       await supabase.auth.updateUser({
         data: { avatar_url: publicUrl, profile_photo_url: publicUrl },
       });
