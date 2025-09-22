@@ -257,7 +257,7 @@ export default function PostgameMobile() {
 
   // ---------- UI ----------
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: '#f6f7fb' }} contentContainerStyle={{ paddingBottom: 24 }}>
+    <ScrollView style={{ flex: 1, backgroundColor: '#F0FDF4' }} contentContainerStyle={{ paddingBottom: 24 }}>
       {/* Header */}
       <SafeAreaView edges={['top']} style={styles.safeArea}>
         <View style={styles.header}>
