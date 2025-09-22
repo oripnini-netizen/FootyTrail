@@ -13,6 +13,9 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { getCompetitions, getSeasons, getCounts } from "../../lib/api";
+import { useRouter } from "expo-router";
+import { DeviceEventEmitter } from "react-native";
+
 
 // ------- utils -------
 function compactMoney(n) {
@@ -83,6 +86,8 @@ function CompetitionRow({ comp, selected, onToggle }) {
 }
 
 export default function DefaultFiltersScreen() {
+  const router = useRouter();
+
   const [user, setUser] = useState(null);
 
   // Data
@@ -362,26 +367,34 @@ export default function DefaultFiltersScreen() {
   const isClearSeasons = defaultSeasons.length === 0;
 
   const handleSave = async () => {
-    if (!user) return;
-    try {
-      setSaving(true);
-      const { error } = await supabase
-        .from("users")
-        .update({
-          default_competitions: defaultCompetitionIds,
-          default_seasons: defaultSeasons,
-          default_min_market_value: Number(defaultMinMarket) || 0,
-          default_min_appearances: Number(defaultMinAppearances) || 0,
-        })
-        .eq("id", user.id);
-      if (error) throw error;
-      Alert.alert("Saved", "Default filters updated.");
-    } catch (e) {
-      Alert.alert("Error", e?.message || "Could not save filters.");
-    } finally {
-      setSaving(false);
-    }
-  };
+  if (!user) return;
+  try {
+    setSaving(true);
+    const { error } = await supabase
+      .from("users")
+      .update({
+        default_competitions: defaultCompetitionIds,
+        default_seasons: defaultSeasons,
+        default_min_market_value: Number(defaultMinMarket) || 0,
+        default_min_appearances: Number(defaultMinAppearances) || 0,
+      })
+      .eq("id", user.id);
+    if (error) throw error;
+
+    // ✅ navigate back to game & hard-refresh defaults there
+    // (navigate first, then emit so the listener is mounted)
+    router.replace("/game");
+    setTimeout(() => {
+      DeviceEventEmitter.emit("FT_FORCE_RELOAD_DEFAULT_FILTERS");
+    }, 350);
+
+    Alert.alert("Saved", "Default filters updated.");
+  } catch (e) {
+    Alert.alert("Error", e?.message || "Could not save filters.");
+  } finally {
+    setSaving(false);
+  }
+};
 
   if (loading) {
     return (
@@ -579,7 +592,7 @@ export default function DefaultFiltersScreen() {
           style={styles.input}
         />
         <View style={styles.rowWrap}>
-          {[0, 5, 10, 15, 20, 25, 30].map((v) => (
+          {[0, 5, 10, 15, 20, 25, 30, 50, 100].map((v) => (
             <Chip
               key={v}
               selected={Number(defaultMinAppearances) === v}

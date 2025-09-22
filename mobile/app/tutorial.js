@@ -23,7 +23,7 @@ import * as FileSystem from "expo-file-system";
 import { Ionicons } from "@expo/vector-icons";
 import { getCounts } from "../lib/api";
 
-const BG = "#F0FDF4"; // brand bg
+const BG = "#F0FDF4";
 const SCREEN = Dimensions.get("window");
 const SLIDE_WIDTH = SCREEN.width;
 
@@ -39,7 +39,7 @@ export default function TutorialScreen() {
   const [avatarUrl, setAvatarUrl] = useState("");
   const [uploading, setUploading] = useState(false);
 
-  // ---------- Filters state (matches default-filters.js) ----------
+  // ---------- Filters state (keep in sync with default-filters) ----------
   const [allCompetitions, setAllCompetitions] = useState([]);
   const [allSeasons, setAllSeasons] = useState([]);
 
@@ -100,7 +100,7 @@ export default function TutorialScreen() {
     })();
   }, [router]);
 
-  // ---------- web API first, fallback to Supabase (same idea as default-filters.js) ----------
+  // ---------- web API first, fallback to Supabase ----------
   async function fetchFromWebAPI() {
     const base = process.env.EXPO_PUBLIC_API_BASE;
     if (!base) return null;
@@ -402,6 +402,7 @@ export default function TutorialScreen() {
     scrollerRef.current?.scrollTo({ x: i * SLIDE_WIDTH, animated: true });
   };
 
+  // HEADER — Skip removed
   const Header = () => (
     <View
       style={{
@@ -423,28 +424,14 @@ export default function TutorialScreen() {
         <Text style={{ fontSize: 18, fontWeight: "700", color: "#065f46" }}>FootyTrail</Text>
       </View>
 
-      {index < 7 ? (
-        <TouchableOpacity
-          onPress={onSkip}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Text style={{ fontSize: 16, fontWeight: "600", color: "#047857" }}>Skip</Text>
-        </TouchableOpacity>
-      ) : (
-        <View style={{ width: 48 }} />
-      )}
+      {/* spacer keeps layout even without Skip */}
+      <View style={{ width: 48 }} />
     </View>
   );
 
-  const onSkip = useCallback(() => {
-    router.replace("/");
-  }, [router]);
-
   const Footer = () => (
     <View style={{ width: "100%", padding: 16, gap: 10 }}>
-      <View
-        style={{ flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 8 }}
-      >
+      <View style={{ flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 8 }}>
         {new Array(8).fill(0).map((_, i) => (
           <View
             key={i}
@@ -549,42 +536,46 @@ export default function TutorialScreen() {
         <SlideContainer>
           <Text style={styles.h1}>Welcome! 🌟</Text>
           <Text style={styles.p}>
-            FootyTrail is your daily football guessing adventure. Earn points by identifying
-            players from smart hints, climb leaderboards, take on Daily Challenges, battle in
-            Elimination arenas, and compete in Leagues with friends.
+            FootyTrail is your daily football guessing adventure. Earn points by identifying players
+            from smart hints, climb leaderboards, take on Daily Challenges, battle in Elimination
+            arenas, and compete in Leagues with friends.
           </Text>
+
+          {/* Splash image to make it lively */}
+          <Image
+            source={require("../assets/images/footytrail_splash-icon.png")}
+            resizeMode="contain"
+            style={{ width: "100%", height: 400, marginTop: 12, borderRadius: 16 }}
+          />
         </SlideContainer>
 
         {/* 2) Live Game */}
         <SlideContainer>
           <Text style={styles.h1}>Live Game ⚡</Text>
           <Text style={styles.p}>
-            Guess the player by his transfer history. Fewer hints used = more points. Tap hints wisely and lock your guess when ready.
+            Guess the player by his transfer history. Fewer hints used = more points. Tap hints
+            wisely and lock your guess when ready.
           </Text>
 
           {/* side-by-side screenshots */}
           <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
             <Image
-              source={require("../assets/images/live-game_screenshot1.jpg")}
+              source={require("../assets/images/live-game_screenshot1.png")}
               resizeMode="cover"
-              style={{ flex: 1, height: 280, borderRadius: 12 }}
+              style={{ width: "50%", height: 320, borderRadius: 12 }}
             />
             <Image
-              source={require("../assets/images/live-game_screenshot2.jpg")}
+              source={require("../assets/images/live-game_screenshot2.png")}
               resizeMode="cover"
-              style={{ flex: 1, height: 280, borderRadius: 12 }}
+              style={{ width: "50%", height: 320, borderRadius: 12 }}
             />
           </View>
 
           <View style={{ marginTop: 12 }}>
             <Text style={styles.li}>• 2 minutes to solve.</Text>
             <Text style={styles.li}>• 3 guesses allowed.</Text>
-            <Text style={styles.li}>
-              • Start typing to see matching players quickly.
-            </Text>
-            <Text style={styles.li}>
-              • Use hints wisely; the more you reveal, the fewer points you’ll score.
-            </Text>
+            <Text style={styles.li}>• Start typing to see matching players quickly.</Text>
+            <Text style={styles.li}>• Use hints wisely; the more you reveal, the fewer points you’ll score.</Text>
           </View>
         </SlideContainer>
 
@@ -592,37 +583,71 @@ export default function TutorialScreen() {
         <SlideContainer>
           <Text style={styles.h1}>Daily Progress 📆</Text>
           <Text style={styles.p}>
-            Your main screen shows how many games you’ve played today, and how many points you’ve earned. You get 10 games a day to play with your filters of choice + the Daily Challenge.
-            Come back daily to keep momentum—and unlock an extra game by winning the Daily Challenge!
+            Your main screen shows how many games you’ve played today, and how many points you’ve
+            earned. You get 10 games a day to play with your filters of choice + the Daily
+            Challenge. Come back daily to keep momentum—and unlock an extra game by winning the
+            Daily Challenge!
           </Text>
+
+          <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
+            <Image
+              source={require("../assets/images/daily-screenshot.png")}
+              resizeMode="cover"
+              style={{ flex: 1, height: 360, borderRadius: 12 }}
+            />
+            <Image
+              source={require("../assets/images/leaderboard-screenshot.png")}
+              resizeMode="cover"
+              style={{ flex: 1, height: 360, borderRadius: 12 }}
+            />
+          </View>
         </SlideContainer>
 
         {/* 4) Daily Challenge */}
         <SlideContainer>
           <Text style={styles.h1}>Daily Challenge 🔥</Text>
           <Text style={styles.p}>
-            One special puzzle per day. Same high caliber player from the top 10 leagues for all FootyTrail users to guess. Win it to earn an extra game for your daily allowance and show off your badge in the leaderboard.
-            Turn on Notifications to remind you—don’t miss it!
+            One special puzzle per day. Same high caliber player from the top 10 leagues for all
+            FootyTrail users to guess. Win it to earn an extra game for your daily allowance and
+            show off your badge in the leaderboard. Turn on Notifications to remind you—don’t miss
+            it!
           </Text>
+
+          <Image
+            source={require("../assets/images/dailychallenge-screenshot.png")}
+            resizeMode="cover"
+            style={{ width: "100%", height: 380, borderRadius: 12, marginTop: 12 }}
+          />
         </SlideContainer>
 
         {/* 5) Elimination Challenges */}
         <SlideContainer>
           <Text style={styles.h1}>Elimination Challenges 🪓</Text>
           <Text style={styles.p}>
-            Stake points, survive round by round, and avoid being the lowest scorer when
-            elimination hits. Private or public—invite friends or join the crowd. Last survivor
-            takes the pot!
+            Stake points, survive round by round, and avoid being the lowest scorer when elimination
+            hits. Private or public—invite friends or join the crowd. Last survivor takes the pot!
           </Text>
+
+          <Image
+            source={require("../assets/images/elimination-screenshot.png")}
+            resizeMode="cover"
+            style={{ width: "100%", height: 380, borderRadius: 12, marginTop: 12 }}
+          />
         </SlideContainer>
 
         {/* 6) Leagues */}
         <SlideContainer>
           <Text style={styles.h1}>Leagues 🏆</Text>
           <Text style={styles.p}>
-            Create or join leagues, compare tables and fixtures, and track head-to-head results.
-            Avatars = identity, bragging rights = priceless.
+            Create or join leagues with friends and track head-to-head results. Your daily points are your match days scores! 
+            Your avatar = your identity, bragging rights = priceless.
           </Text>
+
+          <Image
+            source={require("../assets/images/leagues-screenshot.png")}
+            resizeMode="cover"
+            style={{ width: "100%", height: 400, borderRadius: 12, marginTop: 12 }}
+          />
         </SlideContainer>
 
         {/* 7) User Details (username + avatar) */}
@@ -691,8 +716,9 @@ export default function TutorialScreen() {
           </KeyboardAvoidingView>
         </SlideContainer>
 
-        {/* 8) Default Filters — full mechanism (competitions, seasons, thresholds + counts) */}
+        {/* 8) Default Filters — competitions, seasons, min market value, min appearances + counts */}
         <SlideContainer>
+         <ScrollView>
           <Text style={styles.h1}>Default Filters 🎛️</Text>
           <Text style={[styles.p, { fontSize: 12, marginBottom: 12 }]}>
             Choose your go-to pool. You can change these anytime in your profile.
@@ -854,14 +880,14 @@ export default function TutorialScreen() {
             )}
           </View>
 
-          {/* MARKET VALUE */}
+          {/* MINIMUM MARKET VALUE */}
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Minimum Market Value (€)</Text>
             <TextInput
               keyboardType="number-pad"
               value={String(minMarketValue ?? 0)}
               onChangeText={(t) => setMinMarketValue(parseInt(t || "0", 10) || 0)}
-              style={styles.input}
+              style={[styles.input, { marginBottom: 6 }]}
             />
             <View style={styles.rowWrap}>
               {[0, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000].map(
@@ -878,17 +904,17 @@ export default function TutorialScreen() {
             </View>
           </View>
 
-          {/* APPEARANCES */}
+          {/* ✅ NEW: MINIMUM APPEARANCES */}
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Minimum Appearances</Text>
             <TextInput
               keyboardType="number-pad"
               value={String(minAppearances ?? 0)}
               onChangeText={(t) => setMinAppearances(parseInt(t || "0", 10) || 0)}
-              style={styles.input}
+              style={[styles.input, { marginBottom: 6 }]}
             />
             <View style={styles.rowWrap}>
-              {[0, 5, 10, 15, 20, 25, 30].map((v) => (
+              {[0, 5, 10, 15, 20, 25, 30, 50, 100].map((v) => (
                 <Chip
                   key={v}
                   selected={Number(minAppearances) === v}
@@ -920,6 +946,7 @@ export default function TutorialScreen() {
           <Text style={[styles.p, { fontSize: 12, marginTop: 6 }]}>
             Finishing will save these defaults and complete onboarding.
           </Text>
+          </ScrollView>
         </SlideContainer>
       </ScrollView>
 
@@ -1100,4 +1127,12 @@ const styles = StyleSheet.create({
   },
   poolLabel: { fontSize: 14, color: "#92400e", fontWeight: "700" },
   poolValue: { fontSize: 14, color: "#92400e", fontWeight: "800" },
+  optionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#f1f5f9",
+  },
 });

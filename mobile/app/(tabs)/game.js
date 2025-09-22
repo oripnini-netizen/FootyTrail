@@ -149,6 +149,7 @@ export default function GameScreen() {
 
   // >>> ADDED: ref + listener to handle FT_SCROLL_TO_TOP_GAME
   const scrollRef = useRef(null);
+  
   useEffect(() => {
     const sub = DeviceEventEmitter.addListener("FT_SCROLL_TO_TOP_GAME", () => {
       // scroll the top-level ScrollView to the top
@@ -156,6 +157,41 @@ export default function GameScreen() {
     });
     return () => sub.remove();
   }, []);
+
+useEffect(() => {
+  const sub = DeviceEventEmitter.addListener("FT_FORCE_RELOAD_DEFAULT_FILTERS", async () => {
+    try {
+      if (!user?.id) return;
+
+      const { data: profile, error } = await supabase
+        .from("users")
+        .select(
+          "default_competitions, default_seasons, default_min_market_value, default_min_appearances"
+        )
+        .eq("id", user.id)
+        .single();
+      if (error) throw error;
+
+      const dbDefaults = {
+        competitions: (profile?.default_competitions || []).map(String),
+        seasons: (profile?.default_seasons || []).map(String),
+        minMarketValue: Number(profile?.default_min_market_value ?? 0),
+        minAppearances: Number(profile?.default_min_appearances ?? 0),
+      };
+
+      // update our "source of truth" + visible filters
+      defaultRef.current = dbDefaults;
+      setSelectedCompetitionIds(dbDefaults.competitions);
+      setSelectedSeasons(dbDefaults.seasons);
+      setMinMarketValue(dbDefaults.minMarketValue);
+      setMinAppearances(dbDefaults.minAppearances);
+    } catch (e) {
+      console.warn("[game] Failed to reload defaults", e);
+    }
+  });
+  return () => sub.remove();
+}, [user?.id]);
+
 
   // >>> NEW (fonts) <<<
   const [fontsLoaded] = useFonts({
@@ -701,40 +737,62 @@ export default function GameScreen() {
 
   // === ADDED: pull-to-refresh handler ===
   const handleRefresh = async () => {
-    if (!user?.id) return;
-    setRefreshing(true);
-    try {
-      // Refresh limits & daily
-      const [lim, d] = await Promise.all([
-        getLimits(user.id).catch(() => null),
-        getDailyChallenge().catch(() => null),
-      ]);
-      if (lim) setLimits((l) => ({ ...l, ...lim }));
-      setDaily(d || null);
+  if (!user?.id) return;
+  setRefreshing(true);
+  try {
+    // 1) refresh limits & daily
+    const [lim, d] = await Promise.all([
+      getLimits(user.id).catch(() => null),
+      getDailyChallenge().catch(() => null),
+    ]);
+    if (lim) setLimits((l) => ({ ...l, ...lim }));
+    setDaily(d || null);
 
-      // Refresh counts for current filters
-      setCountsError("");
-      setLoadingCounts(true);
-      const payload = {
-        competitions: selectedCompetitionIds,
-        seasons: selectedSeasons,
-        minMarketValue: Number(minMarketValue) || 0,
-        minAppearances: Number(minAppearences) || 0,
-        userId: user.id,
-      };
-      const res = await getCounts(payload).catch((e) => {
-        setCountsError(String(e?.message || e));
-        return null;
-      });
-      if (res) {
-        setPoolCount(res?.poolCount || 0);
-        setTotalCount(res?.totalCount || 0);
-      }
-    } finally {
-      setLoadingCounts(false);
-      setRefreshing(false);
+    // 2) refresh the user's DEFAULT FILTERS from DB and apply
+    const { data: profile, error } = await supabase
+      .from("users")
+      .select(
+        "default_competitions, default_seasons, default_min_market_value, default_min_appearances"
+      )
+      .eq("id", user.id)
+      .single();
+    if (error) throw error;
+
+    const dbDefaults = {
+      competitions: (profile?.default_competitions || []).map(String),
+      seasons: (profile?.default_seasons || []).map(String),
+      minMarketValue: Number(profile?.default_min_market_value ?? 0),
+      minAppearances: Number(profile?.default_min_appearances ?? 0),
+    };
+    defaultRef.current = dbDefaults;
+    setSelectedCompetitionIds(dbDefaults.competitions);
+    setSelectedSeasons(dbDefaults.seasons);
+    setMinMarketValue(dbDefaults.minMarketValue);
+    setMinAppearances(dbDefaults.minAppearances);
+
+    // 3) refresh counts for the (now updated) filters
+    setCountsError("");
+    setLoadingCounts(true);
+    const payload = {
+      competitions: dbDefaults.competitions,
+      seasons: dbDefaults.seasons,
+      minMarketValue: Number(dbDefaults.minMarketValue) || 0,
+      minAppearances: Number(dbDefaults.minAppearances) || 0, // <-- fixed spelling
+      userId: user.id,
+    };
+    const res = await getCounts(payload).catch((e) => {
+      setCountsError(String(e?.message || e));
+      return null;
+    });
+    if (res) {
+      setPoolCount(res?.poolCount || 0);
+      setTotalCount(res?.totalCount || 0);
     }
-  };
+  } finally {
+    setLoadingCounts(false);
+    setRefreshing(false);
+  }
+};
 
   /* ---------------- UI ---------------- */
 
@@ -1144,7 +1202,7 @@ export default function GameScreen() {
                 style={styles.input}
               />
               <View style={styles.rowWrap}>
-                {[0, 5, 10, 15, 20, 25, 30].map((v) => (
+                {[0, 5, 10, 15, 20, 25, 30, 50, 100].map((v) => (
                   <Chip
                     key={v}
                     selected={Number(minAppearances) === v}
