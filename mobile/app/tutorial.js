@@ -14,6 +14,7 @@ import {
   ActivityIndicator,
   StyleSheet,
   Pressable,
+  Switch, // ⬅️ NEW
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
@@ -58,6 +59,23 @@ export default function TutorialScreen() {
   const [loadingCounts, setLoadingCounts] = useState(false);
   const [countsError, setCountsError] = useState("");
 
+  // ---------- Notifications state (same columns as profile-info.js) ----------
+  const [notifs, setNotifs] = useState({
+    notifications_all: true,
+    notify_daily_challenge: true,
+    notify_daily_games: true,
+    notify_private_elims: true,
+    notify_public_elims: true,
+  });
+  const allIndividualsOn = useMemo(
+    () =>
+      notifs.notify_daily_challenge &&
+      notifs.notify_daily_games &&
+      notifs.notify_private_elims &&
+      notifs.notify_public_elims,
+    [notifs]
+  );
+
   const scrollerRef = useRef(null);
 
   // Pull current session + profile + defaults
@@ -72,11 +90,24 @@ export default function TutorialScreen() {
       }
       setUser(sessionUser);
 
-      // load profile defaults
+      // load profile defaults (+ notification prefs)
       const { data, error } = await supabase
         .from("users")
         .select(
-          "full_name, profile_photo_url, default_min_market_value, default_min_appearances, default_competitions, default_seasons"
+          [
+            "full_name",
+            "profile_photo_url",
+            "default_min_market_value",
+            "default_min_appearances",
+            "default_competitions",
+            "default_seasons",
+            // ⬇️ NEW: notifications columns pulled like in profile-info.js
+            "notifications_all",
+            "notify_daily_challenge",
+            "notify_daily_games",
+            "notify_private_elims",
+            "notify_public_elims",
+          ].join(",")
         )
         .eq("id", sessionUser.id)
         .maybeSingle();
@@ -88,6 +119,15 @@ export default function TutorialScreen() {
         setMinAppearances(Number(data.default_min_appearances || 0));
         setDefaultCompetitionIds((data.default_competitions || []).map(String));
         setDefaultSeasons((data.default_seasons || []).map(String));
+
+        // ⬇️ Initialize notification prefs same as Profile
+        setNotifs({
+          notifications_all: data?.notifications_all ?? true,
+          notify_daily_challenge: data?.notify_daily_challenge ?? true,
+          notify_daily_games: data?.notify_daily_games ?? true,
+          notify_private_elims: data?.notify_private_elims ?? true,
+          notify_public_elims: data?.notify_public_elims ?? true,
+        });
       }
 
       // load competitions & seasons like default-filters.js
@@ -378,6 +418,12 @@ export default function TutorialScreen() {
         default_min_market_value: Number(minMarketValue) || 0,
         default_min_appearances: Number(minAppearances) || 0,
         has_completed_onboarding: true,
+        // also persist notifications in case they changed here
+        notifications_all: notifs.notifications_all,
+        notify_daily_challenge: notifs.notify_daily_challenge,
+        notify_daily_games: notifs.notify_daily_games,
+        notify_private_elims: notifs.notify_private_elims,
+        notify_public_elims: notifs.notify_public_elims,
       };
       const { error } = await supabase.from("users").update(updates).eq("id", user.id);
       if (error) throw error;
@@ -394,12 +440,58 @@ export default function TutorialScreen() {
     defaultSeasons,
     minMarketValue,
     minAppearances,
+    notifs,
     router,
   ]);
 
   const goTo = (i) => {
     setIndex(i);
     scrollerRef.current?.scrollTo({ x: i * SLIDE_WIDTH, animated: true });
+  };
+
+  // --- Persist notifications helper (same idea as profile-info.js) ---
+  const persistNotifs = useCallback(
+    async (next) => {
+      if (!user?.id) return;
+      try {
+        await supabase
+          .from("users")
+          .update({
+            notifications_all: next.notifications_all,
+            notify_daily_challenge: next.notify_daily_challenge,
+            notify_daily_games: next.notify_daily_games,
+            notify_private_elims: next.notify_private_elims,
+            notify_public_elims: next.notify_public_elims,
+          })
+          .eq("id", user.id);
+      } catch (e) {
+        Alert.alert("Save failed", "Could not update notification preferences.");
+      }
+    },
+    [user?.id]
+  );
+
+  const onToggleAll = (value) => {
+    const next = {
+      notifications_all: value,
+      notify_daily_challenge: value,
+      notify_daily_games: value,
+      notify_private_elims: value,
+      notify_public_elims: value,
+    };
+    setNotifs(next);
+    persistNotifs(next);
+  };
+
+  const onToggleOne = (key, value) => {
+    const next = { ...notifs, [key]: value };
+    next.notifications_all =
+      next.notify_daily_challenge &&
+      next.notify_daily_games &&
+      next.notify_private_elims &&
+      next.notify_public_elims;
+    setNotifs(next);
+    persistNotifs(next);
   };
 
   // HEADER — Skip removed
@@ -432,7 +524,7 @@ export default function TutorialScreen() {
   const Footer = () => (
     <View style={{ width: "100%", padding: 16, gap: 10 }}>
       <View style={{ flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 8 }}>
-        {new Array(8).fill(0).map((_, i) => (
+        {new Array(9).fill(0).map((_, i) => ( // ⬅️ updated to 9 slides
           <View
             key={i}
             style={{
@@ -462,7 +554,7 @@ export default function TutorialScreen() {
           <Text style={{ color: "#064E3B", fontWeight: "700" }}>Back</Text>
         </TouchableOpacity>
 
-        {index < 7 ? (
+        {index < 8 ? ( // ⬅️ last slide index = 8
           <TouchableOpacity
             onPress={() => goTo(index + 1)}
             style={{
@@ -716,236 +808,285 @@ export default function TutorialScreen() {
           </KeyboardAvoidingView>
         </SlideContainer>
 
-        {/* 8) Default Filters — competitions, seasons, min market value, min appearances + counts */}
+        {/* 8) Notifications — NEW (matches profile-info look & logic) */}
         <SlideContainer>
-         <ScrollView>
-          <Text style={styles.h1}>Default Filters 🎛️</Text>
-          <Text style={[styles.p, { fontSize: 12, marginBottom: 12 }]}>
-            Choose your go-to pool. You can change these anytime in your profile.
+          <Text style={styles.h1}>Notifications 🔔</Text>
+          <Text style={[styles.p, { marginBottom: 10 }]}>
+            Stay in the loop: reminders for the Daily Challenge, gentle nudges to keep your streak,
+            and heads-up when you’re invited to Elimination challenges. You can tweak these anytime
+            in Settings.
           </Text>
 
-          {/* COMPETITIONS */}
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>Competitions</Text>
+            <Text style={styles.cardTitle}>Notification Preferences</Text>
 
-            <View style={styles.rowWrap}>
-              <Chip onPress={selectTop10} selected={isTop10Selected}>
-                Top 10
-              </Chip>
-              <Chip onPress={selectAllComps} selected={isAllCompsSelected}>
-                Select All
-              </Chip>
-              <Chip onPress={clearComps} variant="outline" selected={isClearComps}>
-                Clear All
-              </Chip>
-            </View>
-
-            <Pressable onPress={() => setCompOpen((v) => !v)} style={styles.selectHeader}>
-              <Ionicons name="flag-outline" size={18} color="#0b3d24" />
-              <Text style={styles.selectHeaderText}>
-                {defaultCompetitionIds.length
-                  ? `${defaultCompetitionIds.length} selected`
-                  : "Select competitions"}
-              </Text>
-              <Ionicons
-                name={compOpen ? "chevron-up" : "chevron-down"}
-                size={18}
-                color="#111827"
-              />
-            </Pressable>
-
-            {compOpen && (
-              <View style={styles.dropdown}>
-                <View style={styles.searchRow}>
-                  <Ionicons name="search" size={16} color="#6b7280" style={{ marginRight: 6 }} />
-                  <TextInput
-                    placeholder="Search by competition or country"
-                    value={compQuery}
-                    onChangeText={setCompQuery}
-                    style={styles.searchInput}
-                    autoCorrect={false}
-                    autoCapitalize="none"
-                  />
-                  {compQuery.length > 0 && (
-                    <Pressable onPress={() => setCompQuery("")}>
-                      <Ionicons name="close-circle" size={18} color="#9ca3af" />
-                    </Pressable>
-                  )}
-                </View>
-
-                <View style={{ maxHeight: 320 }}>
-                  <ScrollView>
-                    {compsOrderedForDropdown.map((c) => {
-                      const id = String(c.competition_id);
-                      const selected = defaultCompetitionIds.includes(id);
-                      return (
-                        <CompetitionRow
-                          key={id}
-                          comp={c}
-                          selected={selected}
-                          onToggle={toggleCompetition}
-                        />
-                      );
-                    })}
-                    {compsOrderedForDropdown.length === 0 && (
-                      <Text style={styles.muted}>No matches.</Text>
-                    )}
-                  </ScrollView>
-                </View>
-              </View>
-            )}
-          </View>
-
-          {/* SEASONS */}
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Seasons</Text>
-
-            <View style={styles.rowWrap}>
-              <Chip
-                onPress={() => setDefaultSeasons(allSeasons.slice(0, 3))}
-                selected={isLast3Seasons}
-              >
-                Last 3
-              </Chip>
-              <Chip
-                onPress={() => setDefaultSeasons(allSeasons.slice(0, 5))}
-                selected={isLast5Seasons}
-              >
-                Last 5
-              </Chip>
-              <Chip onPress={() => setDefaultSeasons(allSeasons)} selected={isAllSeasons}>
-                Select All
-              </Chip>
-              <Chip
-                onPress={() => setDefaultSeasons([])}
-                variant="outline"
-                selected={isClearSeasons}
-              >
-                Clear All
-              </Chip>
-            </View>
-
-            <Pressable onPress={() => setSeasonsOpen((v) => !v)} style={styles.selectHeader}>
-              <Ionicons name="calendar-outline" size={18} color="#0b3d24" />
-              <Text style={styles.selectHeaderText}>
-                {defaultSeasons.length ? `${defaultSeasons.length} selected` : "Select seasons"}
-              </Text>
-              <Ionicons
-                name={seasonsOpen ? "chevron-up" : "chevron-down"}
-                size={18}
-                color="#111827"
-              />
-            </Pressable>
-
-            {seasonsOpen && (
-              <View style={styles.dropdown}>
-                <View style={styles.searchRow}>
-                  <Ionicons name="search" size={16} color="#6b7280" style={{ marginRight: 6 }} />
-                  <TextInput
-                    placeholder="Search season (e.g., 2021)"
-                    value={seasonQuery}
-                    onChangeText={setSeasonQuery}
-                    style={styles.searchInput}
-                    autoCorrect={false}
-                    autoCapitalize="none"
-                  />
-                  {seasonQuery.length > 0 && (
-                    <Pressable onPress={() => setSeasonQuery("")}>
-                      <Ionicons name="close-circle" size={18} color="#9ca3af" />
-                    </Pressable>
-                  )}
-                </View>
-
-                <View style={{ maxHeight: 280 }}>
-                  <ScrollView>
-                    {seasonsOrderedForDropdown.map((s) => {
-                      const selected = defaultSeasons.includes(s);
-                      return (
-                        <Pressable key={s} style={styles.optionRow} onPress={() => toggleSeason(s)}>
-                          <Text style={{ color: "#111827" }}>{s}</Text>
-                          <Ionicons
-                            name={selected ? "checkbox" : "square-outline"}
-                            size={18}
-                            color={selected ? "#14532d" : "#9ca3af"}
-                          />
-                        </Pressable>
-                      );
-                    })}
-                    {seasonsOrderedForDropdown.length === 0 && (
-                      <Text style={styles.muted}>No seasons.</Text>
-                    )}
-                  </ScrollView>
-                </View>
-              </View>
-            )}
-          </View>
-
-          {/* MINIMUM MARKET VALUE */}
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Minimum Market Value (€)</Text>
-            <TextInput
-              keyboardType="number-pad"
-              value={String(minMarketValue ?? 0)}
-              onChangeText={(t) => setMinMarketValue(parseInt(t || "0", 10) || 0)}
-              style={[styles.input, { marginBottom: 6 }]}
+            <NotifRow
+              title="All notifications"
+              value={notifs.notifications_all}
+              onValueChange={onToggleAll}
             />
-            <View style={styles.rowWrap}>
-              {[0, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000].map(
-                (v) => (
-                  <Chip
-                    key={v}
-                    selected={Number(minMarketValue) === v}
-                    onPress={() => setMinMarketValue(v)}
-                  >
-                    {compactMoney(v)}
-                  </Chip>
-                )
+
+            <View style={styles.divider} />
+
+            <NotifRow
+              title="Daily challenge reminders"
+              value={notifs.notify_daily_challenge}
+              onValueChange={(v) => onToggleOne("notify_daily_challenge", v)}
+            />
+            <NotifRow
+              title="Daily games reminders"
+              value={notifs.notify_daily_games}
+              onValueChange={(v) => onToggleOne("notify_daily_games", v)}
+            />
+            <NotifRow
+              title="Private elimination challenges"
+              value={notifs.notify_private_elims}
+              onValueChange={(v) => onToggleOne("notify_private_elims", v)}
+            />
+            <NotifRow
+              title="Public elimination challenges"
+              value={notifs.notify_public_elims}
+              onValueChange={(v) => onToggleOne("notify_public_elims", v)}
+            />
+
+            {!allIndividualsOn && notifs.notifications_all ? (
+              <Text style={styles.hintText}>
+                Tip: “All notifications” turns off automatically if you disable a specific type.
+              </Text>
+            ) : null}
+          </View>
+        </SlideContainer>
+
+        {/* 9) Default Filters — competitions, seasons, min market value, min appearances + counts */}
+        <SlideContainer>
+          <ScrollView>
+            <Text style={styles.h1}>Default Filters 🎛️</Text>
+            <Text style={[styles.p, { fontSize: 12, marginBottom: 12 }]}>
+              Choose your go-to pool. You can change these anytime in your profile.
+            </Text>
+
+            {/* COMPETITIONS */}
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Competitions</Text>
+
+              <View style={styles.rowWrap}>
+                <Chip onPress={selectTop10} selected={isTop10Selected}>
+                  Top 10
+                </Chip>
+                <Chip onPress={selectAllComps} selected={isAllCompsSelected}>
+                  Select All
+                </Chip>
+                <Chip onPress={clearComps} variant="outline" selected={isClearComps}>
+                  Clear All
+                </Chip>
+              </View>
+
+              <Pressable onPress={() => setCompOpen((v) => !v)} style={styles.selectHeader}>
+                <Ionicons name="flag-outline" size={18} color="#0b3d24" />
+                <Text style={styles.selectHeaderText}>
+                  {defaultCompetitionIds.length
+                    ? `${defaultCompetitionIds.length} selected`
+                    : "Select competitions"}
+                </Text>
+                <Ionicons
+                  name={compOpen ? "chevron-up" : "chevron-down"}
+                  size={18}
+                  color="#111827"
+                />
+              </Pressable>
+
+              {compOpen && (
+                <View style={styles.dropdown}>
+                  <View style={styles.searchRow}>
+                    <Ionicons name="search" size={16} color="#6b7280" style={{ marginRight: 6 }} />
+                    <TextInput
+                      placeholder="Search by competition or country"
+                      value={compQuery}
+                      onChangeText={setCompQuery}
+                      style={styles.searchInput}
+                      autoCorrect={false}
+                      autoCapitalize="none"
+                    />
+                    {compQuery.length > 0 && (
+                      <Pressable onPress={() => setCompQuery("")}>
+                        <Ionicons name="close-circle" size={18} color="#9ca3af" />
+                      </Pressable>
+                    )}
+                  </View>
+
+                  <View style={{ maxHeight: 320 }}>
+                    <ScrollView>
+                      {compsOrderedForDropdown.map((c) => {
+                        const id = String(c.competition_id);
+                        const selected = defaultCompetitionIds.includes(id);
+                        return (
+                          <CompetitionRow
+                            key={id}
+                            comp={c}
+                            selected={selected}
+                            onToggle={toggleCompetition}
+                          />
+                        );
+                      })}
+                      {compsOrderedForDropdown.length === 0 && (
+                        <Text style={styles.muted}>No matches.</Text>
+                      )}
+                    </ScrollView>
+                  </View>
+                </View>
               )}
             </View>
-          </View>
 
-          {/* ✅ NEW: MINIMUM APPEARANCES */}
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Minimum Appearances</Text>
-            <TextInput
-              keyboardType="number-pad"
-              value={String(minAppearances ?? 0)}
-              onChangeText={(t) => setMinAppearances(parseInt(t || "0", 10) || 0)}
-              style={[styles.input, { marginBottom: 6 }]}
-            />
-            <View style={styles.rowWrap}>
-              {[0, 5, 10, 15, 20, 25, 30, 50, 100].map((v) => (
+            {/* SEASONS */}
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Seasons</Text>
+
+              <View style={styles.rowWrap}>
                 <Chip
-                  key={v}
-                  selected={Number(minAppearances) === v}
-                  onPress={() => setMinAppearances(v)}
+                  onPress={() => setDefaultSeasons(allSeasons.slice(0, 3))}
+                  selected={isLast3Seasons}
                 >
-                  {v}
+                  Last 3
                 </Chip>
-              ))}
-            </View>
-          </View>
+                <Chip
+                  onPress={() => setDefaultSeasons(allSeasons.slice(0, 5))}
+                  selected={isLast5Seasons}
+                >
+                  Last 5
+                </Chip>
+                <Chip onPress={() => setDefaultSeasons(allSeasons)} selected={isAllSeasons}>
+                  Select All
+                </Chip>
+                <Chip
+                  onPress={() => setDefaultSeasons([])}
+                  variant="outline"
+                  selected={isClearSeasons}
+                >
+                  Clear All
+                </Chip>
+              </View>
 
-          {/* Pool counts */}
-          <View style={styles.poolCard}>
-            <Text style={styles.poolLabel}>Player Pool:</Text>
-            {loadingCounts ? (
-              <ActivityIndicator size="small" />
-            ) : (
-              <Text style={styles.poolValue}>
-                {poolCount} / {totalCount}
+              <Pressable onPress={() => setSeasonsOpen((v) => !v)} style={styles.selectHeader}>
+                <Ionicons name="calendar-outline" size={18} color="#0b3d24" />
+                <Text style={styles.selectHeaderText}>
+                  {defaultSeasons.length ? `${defaultSeasons.length} selected` : "Select seasons"}
+                </Text>
+                <Ionicons
+                  name={seasonsOpen ? "chevron-up" : "chevron-down"}
+                  size={18}
+                  color="#111827"
+                />
+              </Pressable>
+
+              {seasonsOpen && (
+                <View style={styles.dropdown}>
+                  <View style={styles.searchRow}>
+                    <Ionicons name="search" size={16} color="#6b7280" style={{ marginRight: 6 }} />
+                    <TextInput
+                      placeholder="Search season (e.g., 2021)"
+                      value={seasonQuery}
+                      onChangeText={setSeasonQuery}
+                      style={styles.searchInput}
+                      autoCorrect={false}
+                      autoCapitalize="none"
+                    />
+                    {seasonQuery.length > 0 && (
+                      <Pressable onPress={() => setSeasonQuery("")}>
+                        <Ionicons name="close-circle" size={18} color="#9ca3af" />
+                      </Pressable>
+                    )}
+                  </View>
+
+                  <View style={{ maxHeight: 280 }}>
+                    <ScrollView>
+                      {seasonsOrderedForDropdown.map((s) => {
+                        const selected = defaultSeasons.includes(s);
+                        return (
+                          <Pressable key={s} style={styles.optionRow} onPress={() => toggleSeason(s)}>
+                            <Text style={{ color: "#111827" }}>{s}</Text>
+                            <Ionicons
+                              name={selected ? "checkbox" : "square-outline"}
+                              size={18}
+                              color={selected ? "#14532d" : "#9ca3af"}
+                            />
+                          </Pressable>
+                        );
+                      })}
+                      {seasonsOrderedForDropdown.length === 0 && (
+                        <Text style={styles.muted}>No seasons.</Text>
+                      )}
+                    </ScrollView>
+                  </View>
+                </View>
+              )}
+            </View>
+
+            {/* MINIMUM MARKET VALUE */}
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Minimum Market Value (€)</Text>
+              <TextInput
+                keyboardType="number-pad"
+                value={String(minMarketValue ?? 0)}
+                onChangeText={(t) => setMinMarketValue(parseInt(t || "0", 10) || 0)}
+                style={[styles.input, { marginBottom: 6 }]}
+              />
+              <View style={styles.rowWrap}>
+                {[0, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000].map(
+                  (v) => (
+                    <Chip
+                      key={v}
+                      selected={Number(minMarketValue) === v}
+                      onPress={() => setMinMarketValue(v)}
+                    >
+                      {compactMoney(v)}
+                    </Chip>
+                  )
+                )}
+              </View>
+            </View>
+
+            {/* ✅ MINIMUM APPEARANCES */}
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Minimum Appearances</Text>
+              <TextInput
+                keyboardType="number-pad"
+                value={String(minAppearances ?? 0)}
+                onChangeText={(t) => setMinAppearances(parseInt(t || "0", 10) || 0)}
+                style={[styles.input, { marginBottom: 6 }]}
+              />
+              <View style={styles.rowWrap}>
+                {[0, 5, 10, 15, 20, 25, 30, 50, 100].map((v) => (
+                  <Chip
+                    key={v}
+                    selected={Number(minAppearances) === v}
+                    onPress={() => setMinAppearances(v)}
+                  >
+                    {v}
+                  </Chip>
+                ))}
+              </View>
+            </View>
+
+            {/* Pool counts */}
+            <View style={styles.poolCard}>
+              <Text style={styles.poolLabel}>Player Pool:</Text>
+              {loadingCounts ? (
+                <ActivityIndicator size="small" />
+              ) : (
+                <Text style={styles.poolValue}>
+                  {poolCount} / {totalCount}
+                </Text>
+              )}
+            </View>
+            {!!countsError && (
+              <Text style={{ color: "#b91c1c", marginTop: -8, marginBottom: 8, fontSize: 12 }}>
+                {countsError}
               </Text>
             )}
-          </View>
-          {!!countsError && (
-            <Text style={{ color: "#b91c1c", marginTop: -8, marginBottom: 8, fontSize: 12 }}>
-              {countsError}
-            </Text>
-          )}
 
-          <Text style={[styles.p, { fontSize: 12, marginTop: 6 }]}>
-            Finishing will save these defaults and complete onboarding.
-          </Text>
+            <Text style={[styles.p, { fontSize: 12, marginTop: 6 }]}>
+              Finishing will save these defaults and complete onboarding.
+            </Text>
           </ScrollView>
         </SlideContainer>
       </ScrollView>
@@ -1013,6 +1154,15 @@ function CompetitionRow({ comp, selected, onToggle }) {
         color={selected ? "#14532d" : "#9ca3af"}
       />
     </Pressable>
+  );
+}
+
+function NotifRow({ title, value, onValueChange }) {
+  return (
+    <View style={styles.notifRow}>
+      <Text style={styles.notifLabel}>{title}</Text>
+      <Switch value={value} onValueChange={onValueChange} />
+    </View>
   );
 }
 
@@ -1134,5 +1284,24 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: "#f1f5f9",
+  },
+
+  // Notifications styles (to match Profile look)
+  notifRow: {
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  notifLabel: { fontSize: 14, color: "#111827" },
+  divider: {
+    height: 1,
+    backgroundColor: "#e5e7eb",
+    marginVertical: 8,
+  },
+  hintText: {
+    marginTop: 8,
+    fontSize: 12,
+    color: "#6b7280",
   },
 });
