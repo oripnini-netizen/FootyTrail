@@ -119,6 +119,7 @@ export default function PostgameMobile() {
 
   // ---------- Games left today (UTC), excluding elimination & daily ----------
   const [gamesLeft, setGamesLeft] = useState(null);
+  
   useEffect(() => {
     (async () => {
       try {
@@ -127,7 +128,8 @@ export default function PostgameMobile() {
         if (!userId) return;
 
         const { start, end } = dayRangeUtc(new Date());
-        const { data, error } = await supabase
+        
+        const {  data: regularData, error: regularErr } = await supabase
           .from('games_records')
           .select('id')
           .eq('user_id', userId)
@@ -136,14 +138,28 @@ export default function PostgameMobile() {
           .gte('created_at', start)
           .lt('created_at', end);
 
-        if (error) throw error;
-        const played = data?.length || 0;
-        setGamesLeft(Math.max(0, 10 - played));
-      } catch {
-        setGamesLeft(null);
-      }
-    })();
-  }, []);
+        if (regularErr) throw regularErr;
+        const played = regularData?.length || 0;
+        
+        const { data: dailyRows, error: dailyErr } = await supabase
+        .from("games_records")
+        .select("won")
+        .eq("user_id", userId)
+        .eq("is_daily_challenge", true)
+        .gte("created_at", start)
+        .lt("created_at", end)
+        .limit(1);
+
+      if (dailyErr) throw dailyErr;
+      const hasDailyWin = dailyRows?.[0]?.won === true;
+
+      const dailyAdjustedCap = hasDailyWin ? 11 : 10;
+      setGamesLeft(Math.max(0, dailyAdjustedCap - played));
+    } catch {
+      setGamesLeft(null);
+    }
+  })();
+}, []);
 
   // ---------- Share (capture the card as image) ----------
   const shareText = useMemo(() => {

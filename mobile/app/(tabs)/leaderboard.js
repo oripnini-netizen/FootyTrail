@@ -165,27 +165,50 @@ export default function LeaderboardScreen() {
       const start = periodStartFromTab(now, tab);
       const startIso = start ? start.toISOString() : null;
 
-      // Base (non-elimination) games
-      let grQuery = supabase
-        .from("games_records")
-        .select("user_id, points_earned, time_taken_seconds, won, created_at")
-        .or("is_elimination_game.is.null,is_elimination_game.eq.false");
-      if (startIso) grQuery = grQuery.gte("created_at", startIso);
+      // ---- Page through all rows to avoid the 1,000-row cap ----
+const PAGE_SIZE = 1000;
 
-      // Transactions
-      let txQuery = supabase.from("point_transactions").select("user_id, amount, created_at");
-      if (startIso) txQuery = txQuery.gte("created_at", startIso);
+const buildGamesQuery = (from, to) => {
+  let q = supabase
+    .from("games_records")
+    .select("user_id, points_earned, time_taken_seconds, won, created_at", { count: "exact" })
+    .or("is_elimination_game.is.null,is_elimination_game.eq.false")
+    .range(from, to);
+  if (startIso) q = q.gte("created_at", startIso);
+  return q;
+};
 
-      // Fetch in parallel
-      const [
-        { data: daily, error: dailyErr },
-        { data: gamesRows, error: gamesErr },
-        { data: txRows, error: txErr },
-      ] = await Promise.all([dailyPromise, grQuery, txQuery]);
+const buildTxQuery = (from, to) => {
+  let q = supabase
+    .from("point_transactions")
+    .select("user_id, amount, created_at", { count: "exact" })
+    .range(from, to);
+  if (startIso) q = q.gte("created_at", startIso);
+  return q;
+};
 
-      if (dailyErr) throw dailyErr;
-      if (gamesErr) throw gamesErr;
-      if (txErr) throw txErr;
+const fetchAllPaged = async (builderFn) => {
+  let from = 0;
+  let out = [];
+  for (;;) {
+    const { data, error } = await builderFn(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    out = out.concat(data || []);
+    if (!data || data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return out;
+};
+
+// Fetch in parallel (daily champions unchanged)
+const [{ data: daily, error: dailyErr }, gamesRows, txRows] = await Promise.all([
+  dailyPromise,
+  fetchAllPaged(buildGamesQuery),
+  fetchAllPaged(buildTxQuery),
+]);
+
+if (dailyErr) throw dailyErr;
+
 
       // Wire daily champions with users table (if Today)
       let champions = [];

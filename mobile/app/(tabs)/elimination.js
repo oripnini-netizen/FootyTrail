@@ -53,6 +53,15 @@ function useCountdown(endIso) {
   }
 }
 
+function StatCard({ label, value, valueStyle }) {
+  return (
+    <View style={{ flex: 1, alignItems: "center", marginHorizontal: 4, padding: 8, borderWidth: 1, borderColor: "#ddd", borderRadius: 8, backgroundColor: "#fff" }}>
+      <Text style={{ fontSize: 12, color: "#666" }}>{label}</Text>
+      <Text style={[{ fontSize: 18, fontWeight: "bold" }, valueStyle ? { color: valueStyle.replace("text-", "").replace("-700", "") } : {}]}>{value}</Text>
+    </View>
+  );
+}
+
 // deterministic pseudo-random (so avatars don't jump every render)
 function seededRand(seed) {
   let x = seed | 0;
@@ -169,15 +178,15 @@ export default function EliminationScreen() {
   // For child cards to force reloads
   const [refreshToken, setRefreshToken] = useState(0);
   const [hardRefreshToken, setHardRefreshToken] = useState(0);
+  const [showAllFinished, setShowAllFinished] = useState(false);
 
-  // Expanded cards (default: live + upcoming + newest finished)
-  const [expandedIds, setExpandedIds] = useState(() => new Set());
-const didInitExpandedRef = useRef(false);
+  // Expanded card: always expand the top card after each lists reload
+  const [expandedIds, setExpandedIds] = useState(new Set());
 
-// Fade-in animation for the list container
-const fadeAnim = useRef(new Animated.Value(0)).current; // 0 → 1
-const slideAnim = useRef(new Animated.Value(8)).current; // 8px down → 0
 
+  // Fade-in animation for the list container
+  const fadeAnim = useRef(new Animated.Value(0)).current; // 0 → 1
+  const slideAnim = useRef(new Animated.Value(8)).current; // 8px down → 0
 
   // --- Get current user id once ---
   useEffect(() => {
@@ -185,231 +194,137 @@ const slideAnim = useRef(new Animated.Value(8)).current; // 8px down → 0
     (async () => {
       const { data, error } = await supabase.auth.getUser();
       if (!alive) return;
-      setUserId(error ? null : data?.user?.id ?? null);
+      if (error) {
+        setUserId(null);
+        return;
+      }
+      setUserId(data?.user?.id || null);
     })();
     return () => { alive = false; };
   }, []);
 
-  // --- Loader: fetch three lists (lobby/live/finished) ---
+  // --- Loader: fetch three lists
   const reloadLists = useCallback(async () => {
     if (!userId) {
-      setUpcoming([]);
-      setLive([]);
-      setFinished([]);
+      setUpcoming([]); setLive([]); setFinished([]);
       setLoading({ upcoming: false, live: false, finished: false });
       setError({ upcoming: "", live: "", finished: "" });
       return;
     }
 
-    // UPCOMING (lobby)
-    setLoading(s => ({ ...s, upcoming: true }));
-    setError(e => ({ ...e, upcoming: "" }));
+    // upcoming (lobby)
+    setLoading((s) => ({ ...s, upcoming: true }));
+    setError((e) => ({ ...e, upcoming: "" }));
     try {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
-        .select(
-          "id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id"
-        )
+        .select("id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id")
         .eq("status", "lobby")
         .order("created_at", { ascending: false });
+
       if (err) throw err;
-
-      const all = Array.isArray(data) ? data : [];
-      const pub = all.filter(t => ((t?.filters || {}).visibility || "private") === "public");
-      const priv = all.filter(t => ((t?.filters || {}).visibility || "private") !== "public");
-
-      let canSeePriv = [];
-      if (priv.length) {
-        const ids = priv.map(t => t.id);
-        const { data: mine } = await supabase
-          .from("elimination_participants")
-          .select("tournament_id, invite_status")
-          .eq("user_id", userId)
-          .in("tournament_id", ids);
-        const allowedIds = new Set((mine || []).map(r => r.tournament_id));
-        canSeePriv = priv.filter(t => t.owner_id === userId || allowedIds.has(t.id));
-      }
-
-      const list = [...pub, ...canSeePriv].sort(
-        (a, b) => new Date(b.created_at) - new Date(a.created_at)
-      );
-      setUpcoming(list);
-
-      // Best-effort auto-start for due lobbies
-      const due = list.filter(t => {
-        const dl = t?.join_deadline ? new Date(t.join_deadline) : null;
-        return dl && dl <= new Date();
-      });
-      if (due.length) {
-        await Promise.allSettled(
-          due.map(t => supabase.rpc("start_elimination_tournament", { p_tournament_id: t.id }))
-        );
-      }
+      setUpcoming(Array.isArray(data) ? data : []);
     } catch (e) {
-      setError(s => ({ ...s, upcoming: e?.message || "Failed to load." }));
+      setError((x) => ({ ...x, upcoming: e?.message || "Failed to load." }));
       setUpcoming([]);
     } finally {
-      setLoading(s => ({ ...s, upcoming: false }));
+      setLoading((s) => ({ ...s, upcoming: false }));
     }
 
-    // LIVE
-    setLoading(s => ({ ...s, live: true }));
-    setError(e => ({ ...e, live: "" }));
+    // live
+    setLoading((s) => ({ ...s, live: true }));
+    setError((e) => ({ ...e, live: "" }));
     try {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
-        .select(
-          "id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id"
-        )
+        .select("id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id")
         .eq("status", "live")
         .order("created_at", { ascending: false });
-      if (err) throw err;
 
-      const all = Array.isArray(data) ? data : [];
-      const ids = all.map(t => t.id);
-      const { data: myRows } = await supabase
-        .from("elimination_participants")
-        .select("tournament_id, invite_status")
-        .eq("user_id", userId)
-        .in("tournament_id", ids);
-      const accepted = new Set(
-        (myRows || []).filter(r => (r.invite_status || "").toLowerCase() === "accepted")
-                    .map(r => r.tournament_id)
-      );
-      setLive(all.filter(t => accepted.has(t.id)));
+      if (err) throw err;
+      setLive(Array.isArray(data) ? data : []);
     } catch (e) {
-      setError(s => ({ ...s, live: e?.message || "Failed to load." }));
+      setError((x) => ({ ...x, live: e?.message || "Failed to load." }));
       setLive([]);
     } finally {
-      setLoading(s => ({ ...s, live: false }));
+      setLoading((s) => ({ ...s, live: false }));
     }
 
-    // FINISHED
-    setLoading(s => ({ ...s, finished: true }));
-    setError(e => ({ ...e, finished: "" }));
+    // finished
+    setLoading((s) => ({ ...s, finished: true }));
+    setError((e) => ({ ...e, finished: "" }));
     try {
       const { data, error: err } = await supabase
         .from("elimination_tournaments")
-        .select(
-          "id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id"
-        )
+        .select("id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id")
         .eq("status", "finished")
         .order("created_at", { ascending: false });
+
       if (err) throw err;
       setFinished(Array.isArray(data) ? data : []);
     } catch (e) {
-      setError(s => ({ ...s, finished: e?.message || "Failed to load." }));
+      setError((x) => ({ ...x, finished: e?.message || "Failed to load." }));
       setFinished([]);
     } finally {
-      setLoading(s => ({ ...s, finished: false }));
-      setRefreshToken(t => t + 1);
+      setLoading((s) => ({ ...s, finished: false }));
+      setRefreshToken((t) => t + 1);
     }
   }, [userId]);
 
-  // Refetch on focus
-  useFocusEffect(
-    useCB(() => {
-      reloadLists();
-      return () => {};
-    }, [reloadLists])
-  );
+  // initial + on user change
+  useEffect(() => { reloadLists(); }, [reloadLists]);
 
-  // Initial + on user change
+  // Scroll-to-refresh
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    reloadLists().finally(() => setRefreshing(false));
+  }, [reloadLists]);
+
+  // simple “any” flags / lists
+  const anyError = error.upcoming || error.live || error.finished;
+  // Only live + upcoming + the *last* finished
+const lastFinished = finished && finished.length ? finished[0] : null;
+const combinedList = [
+  ...(upcoming || []),
+  ...(live || []),
+  ...(lastFinished ? [lastFinished] : []),
+];
+
+// How many finished are *not* shown yet (for the button label)
+const remainingFinishedCount = Math.max(0, (finished?.length || 0) - (lastFinished ? 1 : 0));
+
+
+  // Fade in on mount / reloads
   useEffect(() => {
-    if (!userId) return;
-    reloadLists();
-  }, [userId, reloadLists]);
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 180, useNativeDriver: true }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 180, useNativeDriver: true }),
+    ]).start();
+  }, [refreshToken]);
 
-  // Realtime: keep slim, just trigger reloads
+// Always expand the first visible card (live/upcoming + last finished) after each reload
+useEffect(() => {
+  // combinedList is defined above; it reflects the currently displayed order
+  const first = combinedList.length ? combinedList[0].id : null;
+  setExpandedIds(first ? new Set([first]) : new Set());
+  // Runs after each reloadLists() completion and realtime-triggered hard refresh
+}, [refreshToken, hardRefreshToken, combinedList.length]);
+
+
+
+
+  // Realtime bumps (optional, trimmed for this snippet)
   useEffect(() => {
     const ch = supabase
       .channel("elim-mobile-realtime")
-      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_tournaments" }, reloadLists)
-      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_rounds" }, () => {
-        setHardRefreshToken(t => t + 1);
-        reloadLists();
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_round_entries" }, reloadLists)
-      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_participants" }, () => {
-        setHardRefreshToken(t => t + 1);
-        reloadLists();
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "point_transactions" }, reloadLists);
-
-    ch.subscribe();
-    return () => {
-      try { ch.unsubscribe(); } catch { supabase.removeChannel(ch); }
-    };
-  }, [reloadLists]);
-
-  // ---------- Unified list (Live → Upcoming → Finished) ----------
-  const combinedList = useMemo(() => [...live, ...upcoming, ...finished], [live, upcoming, finished]);
-
-  // Initialize default expanded states ONCE after first load
-  useEffect(() => {
-    if (didInitExpandedRef.current) return;
-    const isAnyLoading = loading.live || loading.upcoming || loading.finished;
-    if (isAnyLoading) return;
-    const defaults = new Set([
-      ...live.map(t => t.id),
-      ...upcoming.map(t => t.id),
-    ]);
-    if (finished[0]?.id) defaults.add(finished[0].id);
-    setExpandedIds(defaults);
-    didInitExpandedRef.current = true;
-  }, [loading.live, loading.upcoming, loading.finished, live, upcoming, finished]);
-
-  const toggleCard = useCallback((id) => {
-    setExpandedIds(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_tournaments" }, () => setHardRefreshToken((t) => t + 1))
+      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_rounds" }, () => setHardRefreshToken((t) => t + 1))
+      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_round_entries" }, () => setHardRefreshToken((t) => t + 1))
+      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_participants" }, () => setHardRefreshToken((t) => t + 1))
+      .on("postgres_changes", { event: "*", schema: "public", table: "point_transactions" }, () => setHardRefreshToken((t) => t + 1))
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
   }, []);
-
-  // Pull-to-refresh handler
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    try { await reloadLists(); } finally { setRefreshing(false); }
-  }, [reloadLists]);
-
-// ----- HARD GATE (leaderboard style): wait only for userId + list loads -----
-const isAnyLoading = loading.live || loading.upcoming || loading.finished;
-
-// Trigger a quick fade/slide reveal whenever a fresh set of lists is ready
-useEffect(() => {
-  if (userId === null) return;
-  if (isAnyLoading) return; // wait until the three lists finished loading
-
-  // reset & play
-  fadeAnim.setValue(0);
-  slideAnim.setValue(8);
-  Animated.parallel([
-    Animated.timing(fadeAnim, {
-      toValue: 1,
-      duration: 220,
-      useNativeDriver: true,
-    }),
-    Animated.timing(slideAnim, {
-      toValue: 0,
-      duration: 220,
-      useNativeDriver: true,
-    }),
-  ]).start();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [userId, isAnyLoading, refreshToken, hardRefreshToken]);
-
-if (userId === null || isAnyLoading) {
-  return (
-    <View style={{ flex: 1, backgroundColor: "#F0FDF4", justifyContent: "center", alignItems: "center" }}>
-      <ActivityIndicator size="large" />
-    </View>
-  );
-}
-
-
-  // ---------- Normal render ----------
-const anyError = error.live || error.upcoming || error.finished;
 
   return (
   <View style={{ flex: 1, backgroundColor: "#F0FDF4", justifyContent: "center" }}>
@@ -429,54 +344,220 @@ const anyError = error.live || error.upcoming || error.finished;
         </TouchableOpacity>
       </View>
 
+      {userId && <UserElimStatsKPI userId={userId} />}
+
       {anyError ? (
         <ErrorBox message={anyError} />
       ) : combinedList.length === 0 ? (
         <EmptyText text="No challenges yet." />
       ) : (
         <View style={{ gap: 12 }}>
-          {combinedList.map((t) => (
-            <TournamentCardMobileBR
-              key={t.id}
-              tournament={t}
-              userId={userId}
-              refreshToken={refreshToken}
-              hardRefreshToken={hardRefreshToken}
-              onChanged={reloadLists}
-              isExpanded={expandedIds.has(t.id)}
-              onToggle={() => toggleCard(t.id)}
-            />
-          ))}
-        </View>
+  {/* live + upcoming + the last finished */}
+  {combinedList.map((t, idx) => (
+    <TournamentCardMobileBR
+      key={t.id}
+      tournament={t}
+      userId={userId}
+      refreshToken={refreshToken}
+      hardRefreshToken={hardRefreshToken}
+      onChanged={reloadLists}
+      isExpanded={expandedIds.has(t.id)}
+      onToggle={() => {
+        setExpandedIds((prev) => {
+          const n = new Set(prev);
+          if (n.has(t.id)) n.delete(t.id); else n.add(t.id);
+          return n;
+        });
+      }}
+    />
+  ))}
+
+  {/* Toggle goes RIGHT AFTER the always-shown last finished */}
+  {remainingFinishedCount > 0 && (
+    <View style={{ alignItems: "center", marginTop: 4 }}>
+      <TouchableOpacity
+        onPress={() => setShowAllFinished((v) => !v)}
+        activeOpacity={0.85}
+        style={[styles.secondaryBtn, { paddingHorizontal: 16, paddingVertical: 10 }]}
+      >
+        <Text style={styles.secondaryBtnText}>
+          {showAllFinished
+            ? "hide finished challenges"
+            : `show all finished challenges (${remainingFinishedCount})`}
+        </Text>
+      </TouchableOpacity>
+    </View>
+  )}
+
+  {/* The rest of the finished go AFTER the button (collapsed by default) */}
+  {showAllFinished &&
+    (finished?.slice(1) || []).map((t) => (
+      <TournamentCardMobileBR
+        key={t.id}
+        tournament={t}
+        userId={userId}
+        refreshToken={refreshToken}
+        hardRefreshToken={hardRefreshToken}
+        onChanged={reloadLists}
+        isExpanded={expandedIds.has(t.id)}  // collapsed unless user opens
+        onToggle={() => {
+          setExpandedIds((prev) => {
+            const n = new Set(prev);
+            if (n.has(t.id)) n.delete(t.id); else n.add(t.id);
+            return n;
+          });
+        }}
+      />
+    ))}
+</View>
+
+
+
       )}
-      <View style={{ height: 24 }} />
     </Animated.ScrollView>
   </View>
+  );
+
+  /* ------------------- Small inner components for this screen ------------------- */
+  function EmptyText({ text }) {
+    return (
+      <View style={{ paddingVertical: 40, alignItems: "center" }}>
+        <Text style={{ color: "#6B7280" }}>{text}</Text>
+      </View>
+    );
+  }
+  function ErrorBox({ message }) {
+    return (
+      <View style={styles.errorBox}>
+        <Text style={styles.errorTitle}>Couldn’t load</Text>
+        <Text style={styles.errorText}>{String(message)}</Text>
+      </View>
+    );
+  }
+  function Skeleton() {
+    return (
+      <View style={{ gap: 12 }}>
+        {[0, 1].map((i) => (
+          <View key={i} style={styles.skeleton} />
+        ))}
+      </View>
+    );
+  }
+
+  /* ------------------------ User KPI stats (mobile) ------------------------ */
+  function UserElimStatsKPI({ userId }) {
+    const [stats, setStats] = useState({
+      created: 0,
+      participated: 0,
+      wins: 0,
+      roundsSurvived: 0,
+      pointsNet: 0,
+    });
+
+    useEffect(() => {
+      let cancelled = false;
+      (async () => {
+        try {
+          const [p1, p2, p3, p4] = await Promise.all([
+            supabase
+              .from("elimination_participants")
+              .select("tournament_id", { count: "exact", head: true })
+              .eq("user_id", userId)
+              .eq("invite_status", "accepted"),
+            supabase
+              .from("elimination_tournaments")
+              .select("id", { count: "exact", head: true })
+              .eq("winner_user_id", userId),
+            supabase
+              .from("elimination_tournaments")
+              .select("id", { count: "exact", head: true })
+              .eq("owner_id", userId),
+            supabase
+              .from("elimination_round_entries")
+              .select("round_id", { count: "exact", head: true })
+              .eq("user_id", userId),
+          ]);
+
+          // Net points from point_transactions
+          let net = 0;
+          try {
+            const { data: tx } = await supabase
+              .from("point_transactions")
+              .select("amount")
+              .eq("user_id", userId)
+              .limit(10000);
+            if (Array.isArray(tx)) {
+              net = tx.reduce((acc, r) => acc + (Number(r?.amount) || 0), 0);
+            }
+          } catch {}
+
+          if (!cancelled) {
+            setStats({
+              created: p3?.count || 0,
+              participated: p1?.count || 0,
+              wins: p2?.count || 0,
+              roundsSurvived: p4?.count || 0,
+              pointsNet: net,
+            });
+          }
+        } catch {}
+      })();
+      return () => { cancelled = true; };
+    }, [userId]);
+
+    const netPositive = stats.pointsNet > 0;
+    const netNegative = stats.pointsNet < 0;
+
+    return (
+  <View style={{ alignItems: "center", marginBottom: 8 }}>
+    {/* Row 1: Created, Played, Won */}
+    <View style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
+      <StatCardKPI label="Created" value={String(stats.created)} />
+      <StatCardKPI label="Played" value={String(stats.participated)} />
+      <StatCardKPI label="Won" value={String(stats.wins)} />
+    </View>
+
+    {/* Row 2: Survived, Points */}
+    <View style={{ flexDirection: "row", gap: 8 }}>
+      <StatCardKPI label="Survived" value={String(stats.roundsSurvived)} />
+      <StatCardKPI
+        label="Points"
+        value={(netPositive ? "+" : "") + String(stats.pointsNet)}
+        valueStyle={{
+          color: netPositive
+            ? "#047857"
+            : netNegative
+            ? "#b91c1c"
+            : "#111827",
+        }}
+      />
+    </View>
+  </View>
 );
+
+  }
+
+  function StatCardKPI({ label, value, valueStyle }) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: "white",
+          borderColor: "#E5E7EB",
+          borderWidth: 1,
+          borderRadius: 10,
+          paddingVertical: 8,
+          paddingHorizontal: 6,
+          alignItems: "center",
+        }}
+      >
+        <Text style={{ fontSize: 11, color: "#6B7280" }}>{label}</Text>
+        <Text style={[{ fontSize: 18, fontWeight: "700", color: "#111827" }, valueStyle]}>{value}</Text>
+      </View>
+    );
+  }
 }
 
-
-/* --------------------------- Small UI atoms --------------------------- */
-function EmptyText({ text }) {
-  return <Text style={{ color: "#94a3b8" }}>{text}</Text>;
-}
-function ErrorBox({ message }) {
-  return (
-    <View style={styles.errorBox}>
-      <Text style={styles.errorTitle}>Couldn’t load</Text>
-      <Text style={styles.errorText}>{String(message)}</Text>
-    </View>
-  );
-}
-function Skeleton() {
-  return (
-    <View style={{ gap: 12 }}>
-      {[0, 1].map((i) => (
-        <View key={i} style={styles.skeleton} />
-      ))}
-    </View>
-  );
-}
 
 /* --------------- Battle-Royale styled tournament card (RN) --------------- */
 function TournamentCardMobileBR({
@@ -887,7 +968,29 @@ return (
     {tournament.name || "Untitled"}
   </Text>
 
-  {/* Row 2: Left (status + participants) | Right (actions + chevron) */}
+{/* Row 2: Centered meta line */}
+<View
+  style={{
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "100%",
+    gap: 10,
+    flexWrap: "wrap",
+  }}
+>
+  <Text style={styles.smallMuted}>
+    Participants: <Text style={styles.bold}>{acceptedCount}</Text>
+  </Text>
+
+  <Text style={styles.smallMuted}>•</Text>
+
+  <Text style={styles.smallMuted}>
+    <Text style={styles.bold}>{fmtDateTime(tournament.created_at)}</Text>
+  </Text>
+</View>
+
+  {/* Row 3: Left (status + participants) | Right (actions + chevron) */}
   <View
     style={{
       flexDirection: "row",
@@ -953,21 +1056,6 @@ return (
     </View>
   </View>
 
-  {/* Row 3: Centered meta line */}
-<View
-  style={{
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    width: "100%",
-  }}
->
-  <Text style={styles.smallMuted}>
-    <Text>
-      Participants: <Text style={styles.bold}>{acceptedCount}</Text> 
-    </Text>
-  </Text>
- </View>
 </TouchableOpacity>
 
 
@@ -1281,6 +1369,21 @@ function LobbyArena({ tournament, acceptedParticipants, pendingParticipants, use
   );
 }
 
+/* ----------------------------- Pagination dots ----------------------------- */
+function PaginationDots({ total, index }) {
+  if (!Number.isFinite(total) || total <= 1) return null;
+  return (
+    <View style={styles.dotsRow}>
+      {Array.from({ length: total }).map((_, i) => (
+        <View
+          key={i}
+          style={[styles.dot, i === index && styles.dotActive]}
+        />
+      ))}
+    </View>
+  );
+}
+
 /* ------------------------- Swipeable rounds + arena ------------------------ */
 function SwipeableArena({
   tournament,
@@ -1305,6 +1408,7 @@ function SwipeableArena({
   const stake = Number(tournament?.stake_points || 0);
 
   const containerW = screenW - 24 - 24; // prevent right-edge cut
+  const [page, setPage] = useState(0);
 
   // --- unified height across slides (ROUNDS)
   const maxStartedCount = useMemo(() => {
@@ -1355,14 +1459,24 @@ function SwipeableArena({
 
   return (
     <View style={{ marginTop: 6 }}>
+      {/* ---- Pagination dots OUTSIDE the slide card ---- */}
+<View style={{ width: containerW, alignSelf: "center", marginBottom: 6 }}>
+  <PaginationDots total={slides.length} index={page} />
+</View>
+
       <ScrollView
-        horizontal
-        pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        snapToInterval={containerW}
-        decelerationRate="fast"
-        contentContainerStyle={{ paddingVertical: 4 }}
-      >
+  horizontal
+  pagingEnabled
+  showsHorizontalScrollIndicator={false}
+  snapToInterval={containerW}
+  decelerationRate="fast"
+  contentContainerStyle={{ paddingVertical: 4 }}
+  scrollEventThrottle={16}
+  onScroll={({ nativeEvent }) => {
+    const i = Math.round((nativeEvent.contentOffset?.x || 0) / containerW);
+    if (i !== page) setPage(i);
+  }}
+>
         {slides.map((slide) => {
           const containerStyle = { width: containerW };
 
@@ -1371,6 +1485,7 @@ function SwipeableArena({
             const name = winner?.full_name || winner?.email || "Winner";
             return (
               <View key={`winner-${tournament.id}`} style={containerStyle}>
+
                 <View style={{ alignItems: "center", marginBottom: 6, minHeight: TITLE_BLOCK_MIN_H, justifyContent: "center" }}>
                   <Text style={{ fontWeight: "800", color: "#a89500ff", marginBottom: 6 }}>Challenge Winner</Text>
                   <View style={styles.winnerChip}>
@@ -1411,23 +1526,24 @@ function SwipeableArena({
           // ---- Round slide (refactored into its own component to safely use hooks like useCountdown)
           const r = slide.round;
           return (
-            <RoundSlide
-              key={r.id}
-              containerStyle={containerStyle}
-              tournament={tournament}
-              userId={userId}
-              round={r}
-              roundsAsc={roundsAsc}
-              participants={participants}
-              entries={entriesByRound[r.id] || []}
-              usersById={usersById}
-              playersById={playersById}
-              pulse={pulse}
-              containerW={containerW}
-              unifiedPitchHAll={unifiedPitchHAll}
-              onPlay={onPlay}
-            />
-          );
+  <View key={r.id} style={containerStyle}>
+    <RoundSlide
+      containerStyle={{}} // RoundSlide already wraps with its own containerStyle prop
+      tournament={tournament}
+      userId={userId}
+      round={r}
+      roundsAsc={roundsAsc}
+      participants={participants}
+      entries={entriesByRound[r.id] || []}
+      usersById={usersById}
+      playersById={playersById}
+      pulse={pulse}
+      containerW={containerW}
+      unifiedPitchHAll={unifiedPitchHAll}
+      onPlay={onPlay}
+    />
+  </View>
+);
         })}
       </ScrollView>
     </View>
@@ -2110,6 +2226,23 @@ const styles = StyleSheet.create({
 },
 secondaryBtnText: { color: "#111827", fontWeight: "800" },
 
+  dotsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    marginBottom: 4,
+  },
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#d1d5db", // gray-300
+    opacity: 0.9,
+  },
+  dotActive: {
+    backgroundColor: "#6b7280", // gray-500
+  },
 
   joinedChip: {
     backgroundColor: "#064e3b",
