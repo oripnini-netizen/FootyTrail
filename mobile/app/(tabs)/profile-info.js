@@ -1,3 +1,4 @@
+// mobile/app/profile-info.js
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
   View,
@@ -92,25 +93,35 @@ export default function ProfileInfoScreen() {
           notify_public_elims: row?.notify_public_elims ?? true,
         });
 
+        // --- Games & points ---
         const { data: allGames } = await supabase
           .from("games_records")
-          .select("won, points_earned, time_taken_seconds")
+          .select("won, points_earned, time_taken_seconds, is_elimination_game")
           .eq("user_id", u.id);
 
         const totalGames = allGames?.length || 0;
         const wonGames = (allGames || []).filter((g) => g.won).length;
-        const basePoints = (allGames || []).reduce((s, g) => s + (g.points_earned || 0), 0);
         const totalTime = (allGames || []).reduce((s, g) => s + (g.time_taken_seconds || 0), 0);
 
+        // Points from NON-elimination games only
+        const nonElimGames = (allGames || []).filter(
+          (g) => g?.is_elimination_game === false
+        );
+        const basePointsNonElim = nonElimGames.reduce(
+          (s, g) => s + (g.points_earned || 0),
+          0
+        );
+
+        // Sum of amounts from point_transactions
         const { data: txs } = await supabase
-          .from("points_transactions")
+          .from("point_transactions")
           .select("amount")
           .eq("user_id", u.id);
 
         const txPoints = (txs || []).reduce((s, t) => s + Number(t.amount || 0), 0);
 
         setStats({
-          total_points: basePoints + txPoints,
+          total_points: basePointsNonElim + txPoints,
           games_played: totalGames,
           avg_time: totalGames > 0 ? Math.round(totalTime / totalGames) : 0,
           success_rate: totalGames > 0 ? Math.round((wonGames / totalGames) * 100) : 0,

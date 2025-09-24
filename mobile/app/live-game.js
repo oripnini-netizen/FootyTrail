@@ -180,35 +180,13 @@ export default function LiveGameMobile() {
       try {
         const th = await fetchTransfersLocal(gameData.id);
         setTransferHistory(Array.isArray(th) ? th : []);
-        // Generate AI 'Did you know?' fact early
-        try {
-          const { data: { session } } = await supabase.auth.getSession();
-          const resp = await fetchWithTimeout(`${API_BASE}/ai/generate-player-fact`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-            },
-            body: JSON.stringify({
-              player: {
-                id: gameData.id,
-                name: gameData.name,
-                nationality: gameData.nationality,
-                position: gameData.position,
-                age: gameData.age,
-              },
-              transferHistory: Array.isArray(th) ? th : [],
-            }),
-          }, AI_FACT_TIMEOUT_MS);
-          const j = await resp.json().catch(() => ({}));
-          const fact = String(j?.fact || j?.aiGeneratedFact || '').trim();
-          if (fact) { aiFactRef.current = fact; setAiFact(fact); }
-        } catch {}
+        // Transfers are enough to enable the page UI; AI fact will be fetched separately
+        setLoadingTransfers(false);
       } catch {
         setTransferHistory([]);
-      } finally {
         setLoadingTransfers(false);
       }
+
     })();
 
     // Display name
@@ -239,6 +217,42 @@ export default function LiveGameMobile() {
     };
   }, [gameData?.id, gameData?.name]);
 
+  // Fetch AI fact in the background after transfers are ready
+  useEffect(() => {
+    if (!transferHistory || transferHistory.length === 0) return;
+    if (aiFactRef.current) return; // already fetched or set
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const resp = await fetchWithTimeout(`${API_BASE}/ai/generate-player-fact`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+          },
+          body: JSON.stringify({
+            player: {
+              id: gameData.id,
+              name: gameData.name,
+              nationality: gameData.nationality,
+              position: gameData.position,
+              age: gameData.age,
+            },
+            transferHistory: Array.isArray(transferHistory) ? transferHistory : [],
+          }),
+        }, AI_FACT_TIMEOUT_MS);
+
+        const j = await resp.json().catch(() => ({}));
+        const fact = String(j?.fact || j?.aiGeneratedFact || '').trim();
+        if (!cancelled && fact) { aiFactRef.current = fact; setAiFact(fact); }
+      } catch { }
+    })();
+
+    return () => { cancelled = true; };
+  }, [transferHistory, gameData?.id]);
+
   // Start countdown ONLY after transfers are fully loaded
   useEffect(() => {
     clearInterval(timerRef.current);
@@ -253,7 +267,7 @@ export default function LiveGameMobile() {
             setSuggestions([]);
             Keyboard.dismiss();
             // Scroll to top BEFORE rain
-            try { scrollRef.current?.scrollTo({ y: 0, animated: true }); } catch {}
+            try { scrollRef.current?.scrollTo({ y: 0, animated: true }); } catch { }
             setTimeout(() => setShowEmojiRain(true), 180);
             setTimeout(async () => {
               await saveGameRecord(false);
@@ -289,7 +303,7 @@ export default function LiveGameMobile() {
           .eq('id', userId)
           .maybeSingle();
         if (mounted && data?.profile_photo_url) setAvatarUrl(data.profile_photo_url);
-      } catch {}
+      } catch { }
     })();
     return () => { mounted = false; };
   }, []);
@@ -382,9 +396,12 @@ export default function LiveGameMobile() {
     return /\/default\.jpg(\?|$)/i.test(url);
   }, [gameData?.photo]);
 
+  // For elimination games, force a 10,000 starting potential (like Daily).
   const potentialPointsSource = Number(
-    gameData?.potentialPoints || filters?.potentialPoints || computedPotential || 0
+    gameData?.potentialPoints
+    || (elimination ? 10000 : (filters?.potentialPoints || computedPotential || 0))
   );
+
 
   const points = useMemo(() => {
     let p = potentialPointsSource;
@@ -443,7 +460,7 @@ export default function LiveGameMobile() {
       clearInterval(timerRef.current);
 
       // Scroll to top BEFORE confetti
-      try { scrollRef.current?.scrollTo({ y: 0, animated: true }); } catch {}
+      try { scrollRef.current?.scrollTo({ y: 0, animated: true }); } catch { }
       setTimeout(() => setShowConfetti(true), 180);
 
       setTimeout(async () => {
@@ -476,7 +493,7 @@ export default function LiveGameMobile() {
       Keyboard.dismiss();
 
       // Scroll to top BEFORE emoji rain
-      try { scrollRef.current?.scrollTo({ y: 0, animated: true }); } catch {}
+      try { scrollRef.current?.scrollTo({ y: 0, animated: true }); } catch { }
       setTimeout(() => setShowEmojiRain(true), 180);
 
       setTimeout(async () => {
@@ -509,7 +526,7 @@ export default function LiveGameMobile() {
     Keyboard.dismiss();
 
     // Scroll to top BEFORE emoji rain
-    try { scrollRef.current?.scrollTo({ y: 0, animated: true }); } catch {}
+    try { scrollRef.current?.scrollTo({ y: 0, animated: true }); } catch { }
     setTimeout(() => setShowEmojiRain(true), 180);
 
     setTimeout(async () => {
@@ -640,7 +657,9 @@ export default function LiveGameMobile() {
   };
 
   const goPostgame = ({ didWin, pointsEarned, elapsed, guessesUsed, outroLine }) => {
-    router.replace({ pathname: '/postgame', params: { aiFact: aiFactRef.current || aiFact || '',
+    router.replace({
+      pathname: '/postgame', params: {
+        aiFact: aiFactRef.current || aiFact || '',
         didWin: didWin ? '1' : '0',
         player: JSON.stringify({
           id: gameData.id,
@@ -677,7 +696,7 @@ export default function LiveGameMobile() {
 
   const timeTone =
     timeSec <= 30 ? styles.timeRed :
-    timeSec <= 60 ? styles.timeYellow : styles.timeNormal;
+      timeSec <= 60 ? styles.timeYellow : styles.timeNormal;
   const guessesTone = guessesLeft <= 1 ? styles.guessRed : (guessesLeft === 2 ? styles.guessWarn : styles.guessNormal);
 
   const displayPotential = Number(potentialPointsSource || 0);
@@ -884,8 +903,8 @@ export default function LiveGameMobile() {
                 <View style={{ gap: 12 }}>
                   {transferHistory?.length
                     ? transferHistory.map((t, idx) => (
-                        <TransferSlide key={`${t.date || t.season || 'row'}-${idx}`} t={t} /* width auto in list */ />
-                      ))
+                      <TransferSlide key={`${t.date || t.season || 'row'}-${idx}`} t={t} /* width auto in list */ />
+                    ))
                     : <Text style={styles.emptyTransfers}>No transfers found.</Text>}
                 </View>
               )}

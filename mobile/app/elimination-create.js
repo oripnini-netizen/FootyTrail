@@ -31,6 +31,7 @@ import { supabase } from "../lib/supabase";
 export default function EliminationCreateScreen() {
   const router = useRouter();
   const [userId, setUserId] = useState(null);
+  const [myEmail, setMyEmail] = useState("");                 // ← NEW: keep creator email
   const [avatarUrl, setAvatarUrl] = useState(null);
   const [fullName, setFullName] = useState("");
 
@@ -89,6 +90,7 @@ export default function EliminationCreateScreen() {
       if (!error) {
         const uid = data?.user?.id || null;
         setUserId(uid);
+        setMyEmail((data?.user?.email || "").toLowerCase());  // ← NEW: store creator email
         if (uid) {
           const { data: userRow } = await supabase
             .from("users")
@@ -351,6 +353,13 @@ export default function EliminationCreateScreen() {
   const addInvite = (u) => {
     const email = (u?.email || "").trim().toLowerCase();
     if (!email) return;
+
+    // ← NEW: prevent inviting yourself (by id or by email)
+    if ((u?.id && u.id === userId) || (myEmail && email === myEmail)) {
+      setInviteError("You can't invite yourself.");
+      return;
+    }
+
     setInvites((prev) => {
       if (prev.some((x) => x.email.toLowerCase() === email)) return prev;
       return [...prev, { id: u?.id, email, full_name: u?.full_name }];
@@ -362,10 +371,15 @@ export default function EliminationCreateScreen() {
   };
 
   const addTypedEmailIfValid = () => {
-    const e = (searchEmail || "").trim();
+    const e = (searchEmail || "").trim().toLowerCase();
     if (!e) return;
     if (!emailRegex.test(e)) {
       setInviteError("Please enter a valid email address.");
+      return;
+    }
+    // ← NEW: block adding your own email manually
+    if (myEmail && e === myEmail) {
+      setInviteError("You can't invite yourself.");
       return;
     }
     addInvite({ email: e });
@@ -408,12 +422,13 @@ export default function EliminationCreateScreen() {
           return;
         }
 
+        // ← NEW: filter out the creator from search results, and already-added duplicates
         const filtered = (data || []).filter(
           (u) =>
             u?.email &&
-            !invites.some(
-              (x) => x.email.toLowerCase() === u.email.toLowerCase()
-            )
+            u.id !== userId &&
+            u.email.toLowerCase() !== myEmail &&
+            !invites.some((x) => x.email.toLowerCase() === u.email.toLowerCase())
         );
         setEmailResults(filtered);
       } catch {
@@ -424,7 +439,7 @@ export default function EliminationCreateScreen() {
     return () => {
       if (emailDebounceRef.current) clearTimeout(emailDebounceRef.current);
     };
-  }, [searchEmail, invites]);
+  }, [searchEmail, invites, userId, myEmail]);
 
   // --- Create handler: build filters based on toggle state ---
   const onCreate = async () => {
@@ -470,6 +485,9 @@ export default function EliminationCreateScreen() {
 
         (found || []).forEach((u) => invitedUserIds.push(u.id));
       }
+
+      // ← NEW: ensure creator cannot slip in (by id), and require at least one other invitee
+      invitedUserIds = invitedUserIds.filter((id) => id !== userId);
 
       if (invitedUserIds.length === 0) {
         setInviteError("Add at least one existing user (or set to Public).");
@@ -522,10 +540,10 @@ export default function EliminationCreateScreen() {
       if (error) throw error;
 
       Alert.alert(
-        "Challenge created",
+        "Challenge created! 🪓",
         isPublic
-          ? "Share it and start when you're ready!"
-          : "Invites recorded. Share and start when you're ready!"
+          ? "Share it with friendsand start when you're ready!"
+          : "Invites were sent. Waiting for them to join!"
       );
       router.back();
     } catch (e) {
@@ -962,4 +980,7 @@ const styles = StyleSheet.create({
   createBtnText: { color: "#fff", fontWeight: "800" },
   cancelBtn: { paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10, backgroundColor: "#e5e7eb" },
   cancelBtnText: { color: "#111827", fontWeight: "700" },
+
+  addBtn: { marginLeft: 8, backgroundColor: "#14532d", paddingVertical: 10, paddingHorizontal: 14, borderRadius: 8 }, // ensures styles exist
+  addBtnText: { color: "#fff", fontWeight: "700" },
 });

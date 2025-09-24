@@ -140,16 +140,16 @@ function useRealtimeTournament({ tournamentId, roundIds, onChange }) {
     channel.subscribe();
 
     return () => {
-  if (debouncedRefetchTimer.current) {
-    clearTimeout(debouncedRefetchTimer.current);
-    debouncedRefetchTimer.current = null;
-  }
-  try {
-    channel.unsubscribe();
-  } catch {
-    supabase.removeChannel(channel);
-  }
-};
+      if (debouncedRefetchTimer.current) {
+        clearTimeout(debouncedRefetchTimer.current);
+        debouncedRefetchTimer.current = null;
+      }
+      try {
+        channel.unsubscribe();
+      } catch {
+        supabase.removeChannel(channel);
+      }
+    };
 
   }, [tournamentId, roundIdSet, refetchSoon]);
 }
@@ -182,7 +182,6 @@ export default function EliminationScreen() {
 
   // Expanded card: always expand the top card after each lists reload
   const [expandedIds, setExpandedIds] = useState(new Set());
-
 
   // Fade-in animation for the list container
   const fadeAnim = useRef(new Animated.Value(0)).current; // 0 → 1
@@ -274,6 +273,14 @@ export default function EliminationScreen() {
   // initial + on user change
   useEffect(() => { reloadLists(); }, [reloadLists]);
 
+  // Also reload every time the Elimination tab/screen regains focus
+  useFocusEffect(
+    useCallback(() => {
+      reloadLists();  // refetch lobby/live/finished and re-expand top card
+      return () => { };
+    }, [reloadLists])
+  );
+
   // Scroll-to-refresh
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -283,15 +290,15 @@ export default function EliminationScreen() {
   // simple “any” flags / lists
   const anyError = error.upcoming || error.live || error.finished;
   // Only live + upcoming + the *last* finished
-const lastFinished = finished && finished.length ? finished[0] : null;
-const combinedList = [
-  ...(upcoming || []),
-  ...(live || []),
-  ...(lastFinished ? [lastFinished] : []),
-];
+  const lastFinished = finished && finished.length ? finished[0] : null;
+  const combinedList = [
+    ...(upcoming || []),
+    ...(live || []),
+    ...(lastFinished ? [lastFinished] : []),
+  ];
 
-// How many finished are *not* shown yet (for the button label)
-const remainingFinishedCount = Math.max(0, (finished?.length || 0) - (lastFinished ? 1 : 0));
+  // How many finished are *not* shown yet (for the button label)
+  const remainingFinishedCount = Math.max(0, (finished?.length || 0) - (lastFinished ? 1 : 0));
 
 
   // Fade in on mount / reloads
@@ -302,120 +309,156 @@ const remainingFinishedCount = Math.max(0, (finished?.length || 0) - (lastFinish
     ]).start();
   }, [refreshToken]);
 
-// Always expand the first visible card (live/upcoming + last finished) after each reload
-useEffect(() => {
-  // combinedList is defined above; it reflects the currently displayed order
-  const first = combinedList.length ? combinedList[0].id : null;
-  setExpandedIds(first ? new Set([first]) : new Set());
-  // Runs after each reloadLists() completion and realtime-triggered hard refresh
-}, [refreshToken, hardRefreshToken, combinedList.length]);
+  // Always expand the first visible card (live/upcoming + last finished) after each reload
+  useEffect(() => {
+    // combinedList is defined above; it reflects the currently displayed order
+    const first = combinedList.length ? combinedList[0].id : null;
+    setExpandedIds(first ? new Set([first]) : new Set());
+    // Runs after each reloadLists() completion and realtime-triggered hard refresh
+  }, [refreshToken, hardRefreshToken, combinedList.length]);
 
-
-
-
-  // Realtime bumps (optional, trimmed for this snippet)
+  // Realtime: reload lists when tournaments/rounds change; per-card hard refresh for other tables
   useEffect(() => {
     const ch = supabase
       .channel("elim-mobile-realtime")
-      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_tournaments" }, () => setHardRefreshToken((t) => t + 1))
-      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_rounds" }, () => setHardRefreshToken((t) => t + 1))
-      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_round_entries" }, () => setHardRefreshToken((t) => t + 1))
-      .on("postgres_changes", { event: "*", schema: "public", table: "elimination_participants" }, () => setHardRefreshToken((t) => t + 1))
-      .on("postgres_changes", { event: "*", schema: "public", table: "point_transactions" }, () => setHardRefreshToken((t) => t + 1))
+
+      // 👉 Any change to tournaments should re-query the three lists
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "elimination_tournaments" },
+        () => {
+          // Light page reload: refetch lobby/live/finished + re-expand top card
+          reloadLists();
+        }
+      )
+
+      // 👉 Any change to rounds should also re-query the three lists
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "elimination_rounds" },
+        () => {
+          reloadLists();
+        }
+      )
+
+      // For these, keep the heavier per-card refresh only
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "elimination_rounds" },
+        () => setHardRefreshToken((t) => t + 1)
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "elimination_round_entries" },
+        () => setHardRefreshToken((t) => t + 1)
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "elimination_participants" },
+        () => setHardRefreshToken((t) => t + 1)
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "point_transactions" },
+        () => setHardRefreshToken((t) => t + 1)
+      )
       .subscribe();
-    return () => { supabase.removeChannel(ch); };
-  }, []);
+
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [reloadLists]);
 
   return (
-  <View style={{ flex: 1, backgroundColor: "#F0FDF4", justifyContent: "center" }}>
-    <Animated.ScrollView
-      contentContainerStyle={{ padding: 12, paddingBottom: 32 }}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-      // Fade + slight up-slide to avoid any flash on mount/reloads
-      style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}
-    >
-      {/* Top CTA */}
-      <View style={{ marginBottom: 12, justifyContent: "center" }}>
-        <TouchableOpacity
-          style={[styles.primaryBtn, { alignSelf: "center", paddingHorizontal: 14 }]}
-          onPress={() => router.push("/elimination-create")}
-        >
-          <Text style={styles.primaryBtnText}>+ Create New Challenge</Text>
-        </TouchableOpacity>
-      </View>
-
-      {userId && <UserElimStatsKPI userId={userId} />}
-
-      {anyError ? (
-        <ErrorBox message={anyError} />
-      ) : combinedList.length === 0 ? (
-        <EmptyText text="No challenges yet." />
-      ) : (
-        <View style={{ gap: 12 }}>
-  {/* live + upcoming + the last finished */}
-  {combinedList.map((t, idx) => (
-    <TournamentCardMobileBR
-      key={t.id}
-      tournament={t}
-      userId={userId}
-      refreshToken={refreshToken}
-      hardRefreshToken={hardRefreshToken}
-      onChanged={reloadLists}
-      isExpanded={expandedIds.has(t.id)}
-      onToggle={() => {
-        setExpandedIds((prev) => {
-          const n = new Set(prev);
-          if (n.has(t.id)) n.delete(t.id); else n.add(t.id);
-          return n;
-        });
-      }}
-    />
-  ))}
-
-  {/* Toggle goes RIGHT AFTER the always-shown last finished */}
-  {remainingFinishedCount > 0 && (
-    <View style={{ alignItems: "center", marginTop: 4 }}>
-      <TouchableOpacity
-        onPress={() => setShowAllFinished((v) => !v)}
-        activeOpacity={0.85}
-        style={[styles.secondaryBtn, { paddingHorizontal: 16, paddingVertical: 10 }]}
+    <View style={{ flex: 1, backgroundColor: "#F0FDF4", justifyContent: "center" }}>
+      <Animated.ScrollView
+        contentContainerStyle={{ padding: 12, paddingBottom: 32 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        // Fade + slight up-slide to avoid any flash on mount/reloads
+        style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}
       >
-        <Text style={styles.secondaryBtnText}>
-          {showAllFinished
-            ? "hide finished challenges"
-            : `show all finished challenges (${remainingFinishedCount})`}
-        </Text>
-      </TouchableOpacity>
+        {/* Top CTA */}
+        <View style={{ marginBottom: 12, justifyContent: "center" }}>
+          <TouchableOpacity
+            style={[styles.primaryBtn, { alignSelf: "center", paddingHorizontal: 14 }]}
+            onPress={() => router.push("/elimination-create")}
+          >
+            <Text style={styles.primaryBtnText}>+ Create New Challenge</Text>
+          </TouchableOpacity>
+        </View>
+
+        {userId && <UserElimStatsKPI userId={userId} />}
+
+        {anyError ? (
+          <ErrorBox message={anyError} />
+        ) : combinedList.length === 0 ? (
+          <EmptyText text="No challenges yet." />
+        ) : (
+          <View style={{ gap: 12 }}>
+            {/* live + upcoming + the last finished */}
+            {combinedList.map((t, idx) => (
+              <TournamentCardMobileBR
+                key={t.id}
+                tournament={t}
+                userId={userId}
+                refreshToken={refreshToken}
+                hardRefreshToken={hardRefreshToken}
+                onChanged={reloadLists}
+                isExpanded={expandedIds.has(t.id)}
+                onToggle={() => {
+                  setExpandedIds((prev) => {
+                    const n = new Set(prev);
+                    if (n.has(t.id)) n.delete(t.id); else n.add(t.id);
+                    return n;
+                  });
+                }}
+              />
+            ))}
+
+            {/* Toggle goes RIGHT AFTER the always-shown last finished */}
+            {remainingFinishedCount > 0 && (
+              <View style={{ alignItems: "center", marginTop: 4 }}>
+                <TouchableOpacity
+                  onPress={() => setShowAllFinished((v) => !v)}
+                  activeOpacity={0.85}
+                  style={[styles.secondaryBtn, { paddingHorizontal: 16, paddingVertical: 10 }]}
+                >
+                  <Text style={styles.secondaryBtnText}>
+                    {showAllFinished
+                      ? "hide finished challenges"
+                      : `show all finished challenges (${remainingFinishedCount})`}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* The rest of the finished go AFTER the button (collapsed by default) */}
+            {showAllFinished &&
+              (finished?.slice(1) || []).map((t) => (
+                <TournamentCardMobileBR
+                  key={t.id}
+                  tournament={t}
+                  userId={userId}
+                  refreshToken={refreshToken}
+                  hardRefreshToken={hardRefreshToken}
+                  onChanged={reloadLists}
+                  isExpanded={expandedIds.has(t.id)}  // collapsed unless user opens
+                  onToggle={() => {
+                    setExpandedIds((prev) => {
+                      const n = new Set(prev);
+                      if (n.has(t.id)) n.delete(t.id); else n.add(t.id);
+                      return n;
+                    });
+                  }}
+                />
+              ))}
+          </View>
+
+
+
+        )}
+      </Animated.ScrollView>
     </View>
-  )}
-
-  {/* The rest of the finished go AFTER the button (collapsed by default) */}
-  {showAllFinished &&
-    (finished?.slice(1) || []).map((t) => (
-      <TournamentCardMobileBR
-        key={t.id}
-        tournament={t}
-        userId={userId}
-        refreshToken={refreshToken}
-        hardRefreshToken={hardRefreshToken}
-        onChanged={reloadLists}
-        isExpanded={expandedIds.has(t.id)}  // collapsed unless user opens
-        onToggle={() => {
-          setExpandedIds((prev) => {
-            const n = new Set(prev);
-            if (n.has(t.id)) n.delete(t.id); else n.add(t.id);
-            return n;
-          });
-        }}
-      />
-    ))}
-</View>
-
-
-
-      )}
-    </Animated.ScrollView>
-  </View>
   );
 
   /* ------------------- Small inner components for this screen ------------------- */
@@ -489,7 +532,7 @@ useEffect(() => {
             if (Array.isArray(tx)) {
               net = tx.reduce((acc, r) => acc + (Number(r?.amount) || 0), 0);
             }
-          } catch {}
+          } catch { }
 
           if (!cancelled) {
             setStats({
@@ -500,7 +543,7 @@ useEffect(() => {
               pointsNet: net,
             });
           }
-        } catch {}
+        } catch { }
       })();
       return () => { cancelled = true; };
     }, [userId]);
@@ -509,31 +552,31 @@ useEffect(() => {
     const netNegative = stats.pointsNet < 0;
 
     return (
-  <View style={{ alignItems: "center", marginBottom: 8 }}>
-    {/* Row 1: Created, Played, Won */}
-    <View style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
-      <StatCardKPI label="Created" value={String(stats.created)} />
-      <StatCardKPI label="Played" value={String(stats.participated)} />
-      <StatCardKPI label="Won" value={String(stats.wins)} />
-    </View>
+      <View style={{ alignItems: "center", marginBottom: 8 }}>
+        {/* Row 1: Created, Played, Won */}
+        <View style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
+          <StatCardKPI label="Created" value={String(stats.created)} />
+          <StatCardKPI label="Played" value={String(stats.participated)} />
+          <StatCardKPI label="Won" value={String(stats.wins)} />
+        </View>
 
-    {/* Row 2: Survived, Points */}
-    <View style={{ flexDirection: "row", gap: 8 }}>
-      <StatCardKPI label="Survived" value={String(stats.roundsSurvived)} />
-      <StatCardKPI
-        label="Points"
-        value={(netPositive ? "+" : "") + String(stats.pointsNet)}
-        valueStyle={{
-          color: netPositive
-            ? "#047857"
-            : netNegative
-            ? "#b91c1c"
-            : "#111827",
-        }}
-      />
-    </View>
-  </View>
-);
+        {/* Row 2: Survived, Points */}
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <StatCardKPI label="Survived" value={String(stats.roundsSurvived)} />
+          <StatCardKPI
+            label="Points"
+            value={(netPositive ? "+" : "") + String(stats.pointsNet)}
+            valueStyle={{
+              color: netPositive
+                ? "#047857"
+                : netNegative
+                  ? "#b91c1c"
+                  : "#111827",
+            }}
+          />
+        </View>
+      </View>
+    );
 
   }
 
@@ -588,47 +631,47 @@ function TournamentCardMobileBR({
   const [busy, setBusy] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-// --- Join pre-check state (derived from today's earned points) ---
-const [canAffordStakeToday, setCanAffordStakeToday] = useState(true);
-const [precheckMsg, setPrecheckMsg] = useState("");
+  // --- Join pre-check state (derived from today's earned points) ---
+  const [canAffordStakeToday, setCanAffordStakeToday] = useState(true);
+  const [precheckMsg, setPrecheckMsg] = useState("");
 
-// Decline the invite (only if I'm truly still invited and lobby is open)
-async function handleDecline() {
-  if (busy) return;
-  if (!isLobbyOpen) {
-    console.warn("Decline blocked: lobby is not in 'lobby' status.");
-    return;
-  }
-  if (!isInvitedOnly) {
-    console.warn("Decline blocked: you have already accepted (no pending invite).");
-    return;
-  }
-
-  setBusy("decline");
-  try {
-    const { error } = await supabase.rpc("decline_tournament_invite", {
-      p_tournament_id: tournament.id,
-    });
-    if (error) {
-      console.warn("decline_tournament_invite failed:", error.message);
+  // Decline the invite (only if I'm truly still invited and lobby is open)
+  async function handleDecline() {
+    if (busy) return;
+    if (!isLobbyOpen) {
+      console.warn("Decline blocked: lobby is not in 'lobby' status.");
+      return;
     }
-  } finally {
-    setBusy("");
-    onChanged && onChanged();
+    if (!isInvitedOnly) {
+      console.warn("Decline blocked: you have already accepted (no pending invite).");
+      return;
+    }
+
+    setBusy("decline");
+    try {
+      const { error } = await supabase.rpc("decline_tournament_invite", {
+        p_tournament_id: tournament.id,
+      });
+      if (error) {
+        console.warn("decline_tournament_invite failed:", error.message);
+      }
+    } finally {
+      setBusy("");
+      onChanged && onChanged();
+    }
   }
-}
 
 
-// --- UTC day range helper (today 00:00 → tomorrow 00:00 in UTC) ---
-function getTodayUtcRange() {
-  const now = new Date();
-  const utcY = now.getUTCFullYear();
-  const utcM = now.getUTCMonth();
-  const utcD = now.getUTCDate();
-  const start = new Date(Date.UTC(utcY, utcM, utcD, 0, 0, 0));
-  const end = new Date(Date.UTC(utcY, utcM, utcD + 1, 0, 0, 0));
-  return { start: start.toISOString(), end: end.toISOString() };
-}
+  // --- UTC day range helper (today 00:00 → tomorrow 00:00 in UTC) ---
+  function getTodayUtcRange() {
+    const now = new Date();
+    const utcY = now.getUTCFullYear();
+    const utcM = now.getUTCMonth();
+    const utcD = now.getUTCDate();
+    const start = new Date(Date.UTC(utcY, utcM, utcD, 0, 0, 0));
+    const end = new Date(Date.UTC(utcY, utcM, utcD + 1, 0, 0, 0));
+    return { start: start.toISOString(), end: end.toISOString() };
+  }
 
 
 
@@ -743,64 +786,64 @@ function getTodayUtcRange() {
           setYouEliminatedRound(me?.eliminated_at_round ?? null);
 
           // --- Pre-check: calculate today's available points and compare to stake ---
-(async () => {
-  try {
-    setPrecheckMsg("");
-    const stakePts = Number(tournament.stake_points || 0);
-    // If no stake, always allow
-    if (!stakePts) {
-      setCanAffordStakeToday(true);
-      return;
-    }
+          (async () => {
+            try {
+              setPrecheckMsg("");
+              const stakePts = Number(tournament.stake_points || 0);
+              // If no stake, always allow
+              if (!stakePts) {
+                setCanAffordStakeToday(true);
+                return;
+              }
 
-    const { start, end } = getTodayUtcRange();
+              const { start, end } = getTodayUtcRange();
 
-    // 1) Sum games_records.points_earned where is_elimination_game = FALSE for me, today(UTC)
-    let sumGames = 0;
-    {
-      const { data: grRows, error: grErr } = await supabase
-        .from("games_records")
-        .select("points_earned")
-        .eq("user_id", userId)
-        .eq("is_elimination_game", false)
-        .gte("created_at", start)
-        .lt("created_at", end);
+              // 1) Sum games_records.points_earned where is_elimination_game = FALSE for me, today(UTC)
+              let sumGames = 0;
+              {
+                const { data: grRows, error: grErr } = await supabase
+                  .from("games_records")
+                  .select("points_earned")
+                  .eq("user_id", userId)
+                  .eq("is_elimination_game", false)
+                  .gte("created_at", start)
+                  .lt("created_at", end);
 
-      if (!grErr && Array.isArray(grRows)) {
-        for (const r of grRows) sumGames += Number(r.points_earned) || 0;
-      }
-    }
+                if (!grErr && Array.isArray(grRows)) {
+                  for (const r of grRows) sumGames += Number(r.points_earned) || 0;
+                }
+              }
 
-    // 2) Sum point_transactions.amount for me, today(UTC)
-    let sumTx = 0;
-    {
-      const { data: txRows, error: txErr } = await supabase
-        .from("point_transactions")
-        .select("amount")
-        .eq("user_id", userId)
-        .gte("created_at", start)
-        .lt("created_at", end);
+              // 2) Sum point_transactions.amount for me, today(UTC)
+              let sumTx = 0;
+              {
+                const { data: txRows, error: txErr } = await supabase
+                  .from("point_transactions")
+                  .select("amount")
+                  .eq("user_id", userId)
+                  .gte("created_at", start)
+                  .lt("created_at", end);
 
-      if (!txErr && Array.isArray(txRows)) {
-        for (const r of txRows) sumTx += Number(r.amount) || 0;
-      }
-    }
+                if (!txErr && Array.isArray(txRows)) {
+                  for (const r of txRows) sumTx += Number(r.amount) || 0;
+                }
+              }
 
-    const availableToday = (sumGames || 0) + (sumTx || 0);
-    const ok = availableToday >= stakePts;
+              const availableToday = (sumGames || 0) + (sumTx || 0);
+              const ok = availableToday >= stakePts;
 
-    setCanAffordStakeToday(ok);
-    if (!ok) {
-      setPrecheckMsg(
-        `Stake is ${stakePts} pts. Your available today is ${availableToday} pts.`
-      );
-    }
-  } catch (e) {
-    // On any error, don't block; let them try to join (server will still enforce)
-    console.warn("join precheck failed:", e?.message);
-    setCanAffordStakeToday(true);
-  }
-})();
+              setCanAffordStakeToday(ok);
+              if (!ok) {
+                setPrecheckMsg(
+                  `Stake is ${stakePts} pts. Your available today is ${availableToday} pts.`
+                );
+              }
+            } catch (e) {
+              // On any error, don't block; let them try to join (server will still enforce)
+              console.warn("join precheck failed:", e?.message);
+              setCanAffordStakeToday(true);
+            }
+          })();
 
         }
       } finally {
@@ -813,14 +856,14 @@ function getTodayUtcRange() {
   }, [tournament.id, refreshToken, hardRefreshToken, userId, rtTick]); // ← include rtTick so realtime nudges refetch
 
 
-// NEW: Let the parent know this card finished its FIRST internal fetch
-const hasSignaledReadyRef = useRef(false);
-useEffect(() => {
-  if (!loading && !hasSignaledReadyRef.current) {
-    hasSignaledReadyRef.current = true;
-    onFirstDataLoaded && onFirstDataLoaded(tournament.id);
-  }
-}, [loading, onFirstDataLoaded, tournament.id]);
+  // NEW: Let the parent know this card finished its FIRST internal fetch
+  const hasSignaledReadyRef = useRef(false);
+  useEffect(() => {
+    if (!loading && !hasSignaledReadyRef.current) {
+      hasSignaledReadyRef.current = true;
+      onFirstDataLoaded && onFirstDataLoaded(tournament.id);
+    }
+  }, [loading, onFirstDataLoaded, tournament.id]);
 
 
   // Hook up realtime for ONLY this tournament card
@@ -898,7 +941,7 @@ useEffect(() => {
   const winnerUserId = tournament.winner_user_id || null;
   const youWon = !!winnerUserId && winnerUserId === userId;
   const winner = usersById[winnerUserId] || { id: winnerUserId };
-  
+
   const totalPointsByUserAll = useMemo(() => {
     const m = new Map();
     for (const rId in entriesByRound) {
@@ -934,129 +977,133 @@ useEffect(() => {
   const canStart = isOwner && isUpcoming && acceptedCount >= Number(tournament.min_participants || 0);
 
   // If my invite_status is 'declined', I shouldn't see this card at all
-const myInviteStatus = (participants.find((p) => p.id === userId)?.invite_status || "").toLowerCase();
-const shouldHideThisCard = myInviteStatus === "declined";
+  const myInviteStatus = (participants.find((p) => p.id === userId)?.invite_status || "").toLowerCase();
+  const shouldHideThisCard = myInviteStatus === "declined";
 
   // Treat lobby as open purely by status
-const isLobbyOpen = String(tournament.status || "").toLowerCase() === "lobby";
+  const isLobbyOpen = String(tournament.status || "").toLowerCase() === "lobby";
 
-// Am I still invited (not yet accepted)?
-const isInvitedOnly = participants.some(
-  (p) => p.id === userId && String(p.invite_status || "").toLowerCase() !== "accepted"
-);
+  // Am I still invited (not yet accepted)?
+  const isInvitedOnly = participants.some(
+    (p) => p.id === userId && String(p.invite_status || "").toLowerCase() !== "accepted"
+  );
 
-// Hide the entire card if I declined the invite
-if (shouldHideThisCard) {
-  return null;
-}
-
-return (
-<View style={styles.card}>
-      {/* ----- Header (color-coded & clickable to collapse/expand) ----- */}
-<TouchableOpacity
-  style={[styles.cardHeader, headerStyle]}
-  activeOpacity={0.85}
-  onPress={onToggle}
->
-  {/* Row 1: Name */}
-  <Text
-    style={[
-      styles.cardTitle,
-      { textAlign: "center", width: "100%", marginBottom: 6 },
-    ]}
-  >
-    {tournament.name || "Untitled"}
-  </Text>
-
-{/* Row 2: Centered meta line */}
-<View
-  style={{
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    width: "100%",
-    gap: 10,
-    flexWrap: "wrap",
-  }}
->
-  <Text style={styles.smallMuted}>
-    Participants: <Text style={styles.bold}>{acceptedCount}</Text>
-  </Text>
-
-  <Text style={styles.smallMuted}>•</Text>
-
-  <Text style={styles.smallMuted}>
-    <Text style={styles.bold}>{fmtDateTime(tournament.created_at)}</Text>
-  </Text>
-</View>
-
-  {/* Row 3: Left (status + participants) | Right (actions + chevron) */}
-  <View
-    style={{
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      width: "100%",
-    }}
-  >
-    {/* Left side */}
-    <View
-  style={
-    isUpcoming
-      ? styles.upcomingChip
-      : isLive
-      ? styles.liveChip
-      : styles.finishedChip
+  // Hide the entire card if I declined the invite
+  if (shouldHideThisCard) {
+    return null;
   }
->
-  <Text
-    style={
-      isUpcoming
-        ? styles.upcomingChipText
-        : isLive
-        ? styles.liveChipText
-        : styles.finishedChipText
-    }
-  >
-    {isUpcoming ? "Upcoming" : isLive ? "Live" : "Finished"}
-  </Text>
-      </View>
-    
-    {/* Right side */}
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-      {isUpcoming ? (
-        isOwner ? (
-          canStart ? (
-            <View style={styles.joinedChip}>
-              <Text style={styles.joinedChipText}>Ready</Text>
-            </View>
-          ) : (
-            <View style={styles.joinedChip}>
-              <Text style={styles.joinedChipText}>Creator</Text>
-            </View>
-          )
-        ) : (
-          <View style={userHasJoined ? styles.joinedChip : styles.chip}>
-            <Text
-              style={userHasJoined ? styles.joinedChipText : styles.chipValue}
-            >
-              {userHasJoined ? "Joined" : "Open to Join"}
-            </Text>
-          </View>
-        )
-      ) : isFinished ? (
-        <View style={youWon ? styles.winnerChip : styles.elimChip}>
-          <Text style={youWon ? styles.winnerChipText : styles.elimChipText}>
-            {`Won by ${winner.full_name}`}
+
+  return (
+    <View style={styles.card}>
+      {/* ----- Header (color-coded & clickable to collapse/expand) ----- */}
+      <TouchableOpacity
+        style={[styles.cardHeader, headerStyle]}
+        activeOpacity={0.85}
+        onPress={onToggle}
+      >
+        {/* Row 1: Name */}
+        <Text
+          style={[
+            styles.cardTitle,
+            { textAlign: "center", width: "100%", marginBottom: 6 },
+          ]}
+        >
+          {tournament.name || "Untitled"}
+        </Text>
+
+        {/* Row 2: Centered meta line */}
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            width: "100%",
+            gap: 10,
+            flexWrap: "wrap",
+          }}
+        >
+          <Text style={styles.smallMuted}>
+            Participants: <Text style={styles.bold}>{acceptedCount}</Text>
+          </Text>
+
+          <Text style={styles.smallMuted}>•</Text>
+
+          <Text style={styles.smallMuted}>
+            <Text style={styles.bold}>{fmtDateTime(tournament.created_at)}</Text>
           </Text>
         </View>
-      ) : <View style={styles.liveChip}>
+
+        {/* Row 3: Left (status + participants) | Right (actions + chevron) */}
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            width: "100%",
+          }}
+        >
+          {/* Left side */}
+          <View
+            style={
+              isUpcoming
+                ? styles.upcomingChip
+                : isLive
+                  ? styles.liveChip
+                  : styles.finishedChip
+            }
+          >
+            <Text
+              style={
+                isUpcoming
+                  ? styles.upcomingChipText
+                  : isLive
+                    ? styles.liveChipText
+                    : styles.finishedChipText
+              }
+            >
+              {isUpcoming ? "Upcoming" : isLive ? "Live" : "Finished"}
+            </Text>
+          </View>
+
+          {/* Right side */}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            {isUpcoming ? (
+              isOwner ? (
+                canStart ? (
+                  <TouchableOpacity
+                    style={[styles.joinedChip, busy && { opacity: 0.6 }]}
+                    disabled={busy === "start"}
+                    onPress={handleStart}
+                  >
+                    <Text style={styles.joinedChipText}>Start Challenge</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <View style={styles.joinedChip}>
+                    <Text style={styles.joinedChipText}>Waiting for min participants</Text>
+                  </View>
+                )
+              ) : (
+                <View style={userHasJoined ? styles.joinedChip : styles.chip}>
+                  <Text
+                    style={userHasJoined ? styles.joinedChipText : styles.chipValue}
+                  >
+                    {userHasJoined ? "Joined" : "Open to Join"}
+                  </Text>
+                </View>
+              )
+            ) : isFinished ? (
+              <View style={youWon ? styles.winnerChip : styles.elimChip}>
+                <Text style={youWon ? styles.winnerChipText : styles.elimChipText}>
+                  {`Won by ${winner.full_name}`}
+                </Text>
+              </View>
+            ) : <View style={styles.liveChip}>
               <Text style={styles.liveChipText}>Round {rounds.length} in progress</Text>
             </View>}
-    </View>
-  </View>
+          </View>
+        </View>
 
-</TouchableOpacity>
+      </TouchableOpacity>
 
 
 
@@ -1064,7 +1111,7 @@ return (
       {isExpanded && (
         <>
           {/* ----- Summary row ----- */}
-          <View style={[styles.row, {justifyContent: "stretched", alignItems: "center", gap: 12, marginTop: 8, minHeight: BOTTOM_BLOCK_MIN_H}]}>
+          <View style={[styles.row, { justifyContent: "stretched", alignItems: "center", gap: 12, marginTop: 8, minHeight: BOTTOM_BLOCK_MIN_H }]}>
             <InfoChip label="Stake 💸" value={`${Number(tournament.stake_points || 0)} pts`} />
             <InfoChip label="Pot 💰" value={`${Number(tournament.stake_points || 0) * Number(acceptedCount || 0)} pts`} />
             <InfoChip label="Time ⏱️" value={`${timeLimitMin} min`} />
@@ -1073,9 +1120,9 @@ return (
             {isUpcoming ? <InfoChip label="🕰️ Closes in" value={joinCountdown} tone="danger" /> : null}
 
             <TouchableOpacity onPress={() => setFiltersOpen((v) => !v)}>
-              <View style={[styles.chip, {alignSelf: "flex-start", alignItems: "stretch", paddingHorizontal: 8, paddingVertical: 8, borderRadius: 16}]}>
-              <Text style={[styles.chipValue]}>{filtersOpen ? "Hide" : "Show"} Filters</Text>
-            </View>
+              <View style={[styles.chip, { alignSelf: "flex-start", alignItems: "stretch", paddingHorizontal: 8, paddingVertical: 8, borderRadius: 16 }]}>
+                <Text style={[styles.chipValue]}>{filtersOpen ? "Hide" : "Show"} Filters</Text>
+              </View>
             </TouchableOpacity>
           </View>
 
@@ -1120,6 +1167,7 @@ return (
               playersById={playersById}
               totalPointsByUserAll={totalPointsByUserAll}
               pulse={pulse}
+              onForceRefresh={onChanged}
               onPlay={() => {
                 const latest = roundsDesc[0];
                 if (latest) {
@@ -1147,52 +1195,52 @@ return (
           )}
 
           {/* Inline actions that make sense only when body is open */}
-  {isUpcoming && (
-  <>
-    <View style={{ marginTop: 8, flexDirection: "row", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
-      {isOwner ? (
-        canStart ? (
-          <TouchableOpacity
-            style={[styles.primaryBtn, busy && { opacity: 0.6 }]}
-            disabled={busy === "start"}
-            onPress={handleStart}
-          >
-            <Text style={styles.primaryBtnText}>Start Challenge</Text>
-          </TouchableOpacity>
-        ) : null
-      ) : userHasJoined ? null : (
-        <>
-          {/* Join (your existing disable logic for stake can stay as-is if you added it) */}
-          <TouchableOpacity
-            style={[styles.primaryBtn, busy && { opacity: 0.6 }]}
-            disabled={busy === "join"}
-            onPress={handleJoin}
-          >
-            <Text style={styles.primaryBtnText}>Join Challenge</Text>
-          </TouchableOpacity>
+          {isUpcoming && (
+            <>
+              <View style={{ marginTop: 8, flexDirection: "row", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+                {isOwner ? (
+                  canStart ? (
+                    <TouchableOpacity
+                      style={[styles.primaryBtn, busy && { opacity: 0.6 }]}
+                      disabled={busy === "start"}
+                      onPress={handleStart}
+                    >
+                      <Text style={styles.primaryBtnText}>Start Challenge</Text>
+                    </TouchableOpacity>
+                  ) : null
+                ) : userHasJoined ? null : (
+                  <>
+                    {/* Join (your existing disable logic for stake can stay as-is if you added it) */}
+                    <TouchableOpacity
+                      style={[styles.primaryBtn, busy && { opacity: 0.6 }]}
+                      disabled={busy === "join"}
+                      onPress={handleJoin}
+                    >
+                      <Text style={styles.primaryBtnText}>Join Challenge</Text>
+                    </TouchableOpacity>
 
-          {/* Decline appears ONLY if you're still invited AND lobby is open */}
-          {isInvitedOnly && isLobbyOpen && (
-            <TouchableOpacity
-              style={[styles.secondaryBtn, busy && { opacity: 0.6 }]}
-              disabled={busy === "decline"}
-              onPress={handleDecline}
-            >
-              <Text style={styles.secondaryBtnText}>Decline</Text>
-            </TouchableOpacity>
+                    {/* Decline appears ONLY if you're still invited AND lobby is open */}
+                    {isInvitedOnly && isLobbyOpen && (
+                      <TouchableOpacity
+                        style={[styles.secondaryBtn, busy && { opacity: 0.6 }]}
+                        disabled={busy === "decline"}
+                        onPress={handleDecline}
+                      >
+                        <Text style={styles.secondaryBtnText}>Decline</Text>
+                      </TouchableOpacity>
+                    )}
+                  </>
+                )}
+              </View>
+
+              {/* If invited but lobby not in 'lobby' status, show why Decline isn't available */}
+              {isInvitedOnly && !isLobbyOpen && (
+                <Text style={{ textAlign: "center", marginTop: 6, fontSize: 12, color: "#ef4444" }}>
+                  Invites can only be declined while the challenge is in lobby.
+                </Text>
+              )}
+            </>
           )}
-        </>
-      )}
-    </View>
-
-    {/* If invited but lobby not in 'lobby' status, show why Decline isn't available */}
-    {isInvitedOnly && !isLobbyOpen && (
-      <Text style={{ textAlign: "center", marginTop: 6, fontSize: 12, color: "#ef4444" }}>
-        Invites can only be declined while the challenge is in lobby.
-      </Text>
-    )}
-  </>
-)}
 
           {loading && (
             <View style={styles.loadingOverlay}>
@@ -1299,7 +1347,7 @@ function LobbyArena({ tournament, acceptedParticipants, pendingParticipants, use
   return (
     <View style={{ marginTop: 0 }}>
       <View style={{ alignItems: "center", marginBottom: 6, minHeight: TITLE_BLOCK_MIN_H, justifyContent: "center" }}>
-        <Text style={{ fontWeight: "800", color: "#002d68ff" , marginBottom: 6}}>Lobby</Text>
+        <Text style={{ fontWeight: "800", color: "#002d68ff", marginBottom: 6 }}>Lobby</Text>
         <View style={styles.creatorChip}>
           <Text style={styles.creatorChipText}>Challenge Creator: {ownerLabel}</Text>
         </View>
@@ -1397,6 +1445,7 @@ function SwipeableArena({
   totalPointsByUserAll,
   pulse,
   onPlay,
+  onForceRefresh,
 }) {
   const screenW = Dimensions.get("window").width;
 
@@ -1460,23 +1509,23 @@ function SwipeableArena({
   return (
     <View style={{ marginTop: 6 }}>
       {/* ---- Pagination dots OUTSIDE the slide card ---- */}
-<View style={{ width: containerW, alignSelf: "center", marginBottom: 6 }}>
-  <PaginationDots total={slides.length} index={page} />
-</View>
+      <View style={{ width: containerW, alignSelf: "center", marginBottom: 6 }}>
+        <PaginationDots total={slides.length} index={page} />
+      </View>
 
       <ScrollView
-  horizontal
-  pagingEnabled
-  showsHorizontalScrollIndicator={false}
-  snapToInterval={containerW}
-  decelerationRate="fast"
-  contentContainerStyle={{ paddingVertical: 4 }}
-  scrollEventThrottle={16}
-  onScroll={({ nativeEvent }) => {
-    const i = Math.round((nativeEvent.contentOffset?.x || 0) / containerW);
-    if (i !== page) setPage(i);
-  }}
->
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        snapToInterval={containerW}
+        decelerationRate="fast"
+        contentContainerStyle={{ paddingVertical: 4 }}
+        scrollEventThrottle={16}
+        onScroll={({ nativeEvent }) => {
+          const i = Math.round((nativeEvent.contentOffset?.x || 0) / containerW);
+          if (i !== page) setPage(i);
+        }}
+      >
         {slides.map((slide) => {
           const containerStyle = { width: containerW };
 
@@ -1489,7 +1538,7 @@ function SwipeableArena({
                 <View style={{ alignItems: "center", marginBottom: 6, minHeight: TITLE_BLOCK_MIN_H, justifyContent: "center" }}>
                   <Text style={{ fontWeight: "800", color: "#a89500ff", marginBottom: 6 }}>Challenge Winner</Text>
                   <View style={styles.winnerChip}>
-                  <Text style={styles.winnerChipText}>{winner?.full_name}</Text>
+                    <Text style={styles.winnerChipText}>{winner?.full_name}</Text>
                   </View>
                 </View>
                 <WinnerPitch pulse={pulse} winner={winner} pitchW={containerW - 4} pitchH={unifiedPitchHAll} />
@@ -1526,24 +1575,25 @@ function SwipeableArena({
           // ---- Round slide (refactored into its own component to safely use hooks like useCountdown)
           const r = slide.round;
           return (
-  <View key={r.id} style={containerStyle}>
-    <RoundSlide
-      containerStyle={{}} // RoundSlide already wraps with its own containerStyle prop
-      tournament={tournament}
-      userId={userId}
-      round={r}
-      roundsAsc={roundsAsc}
-      participants={participants}
-      entries={entriesByRound[r.id] || []}
-      usersById={usersById}
-      playersById={playersById}
-      pulse={pulse}
-      containerW={containerW}
-      unifiedPitchHAll={unifiedPitchHAll}
-      onPlay={onPlay}
-    />
-  </View>
-);
+            <View key={r.id} style={containerStyle}>
+              <RoundSlide
+                containerStyle={{}} // RoundSlide already wraps with its own containerStyle prop
+                tournament={tournament}
+                userId={userId}
+                round={r}
+                roundsAsc={roundsAsc}
+                participants={participants}
+                entries={entriesByRound[r.id] || []}
+                usersById={usersById}
+                playersById={playersById}
+                pulse={pulse}
+                containerW={containerW}
+                unifiedPitchHAll={unifiedPitchHAll}
+                onPlay={onPlay}
+                onForceRefresh={onForceRefresh}
+              />
+            </View>
+          );
         })}
       </ScrollView>
     </View>
@@ -1565,6 +1615,7 @@ function RoundSlide({
   containerW,
   unifiedPitchHAll,
   onPlay,
+  onForceRefresh,
 }) {
   const r = round;
 
@@ -1572,12 +1623,12 @@ function RoundSlide({
   const roundUserIds = Array.isArray(r.users_participated) && r.users_participated.length
     ? r.users_participated
     : Array.from(
-        new Set(
-          entries
-            .filter((e) => e.started === true || e.points_earned !== null)
-            .map((e) => e.user_id)
-        )
-      );
+      new Set(
+        entries
+          .filter((e) => e.started === true || e.points_earned !== null)
+          .map((e) => e.user_id)
+      )
+    );
   const participantsThisRoundCount = roundUserIds.length;
 
   const eliminatedByRound = new Set(
@@ -1594,36 +1645,36 @@ function RoundSlide({
   const playedThisRound = new Set(entries.filter((e) => !!e.game_record_id).map((e) => e.user_id));
   const youPlayed = userId ? playedThisRound.has(userId) : false;
 
-// Build block-aware cumulative points that reset on the FIRST round AFTER an elimination round.
-// We sum from (last elimination round strictly BEFORE this round) + 1  → current round (inclusive).
-const eb = RoundSlide.__entriesByRound__;
-const cum = new Map();
+  // Build block-aware cumulative points that reset on the FIRST round AFTER an elimination round.
+  // We sum from (last elimination round strictly BEFORE this round) + 1  → current round (inclusive).
+  const eb = RoundSlide.__entriesByRound__;
+  const cum = new Map();
 
-if (eb && Array.isArray(roundsAsc)) {
-  const idxCur = roundsAsc.findIndex((rr) => rr.id === r.id);
+  if (eb && Array.isArray(roundsAsc)) {
+    const idxCur = roundsAsc.findIndex((rr) => rr.id === r.id);
 
-  // Find the nearest elimination round strictly BEFORE the current round.
-  // If found at index i, start summing at i+1. If none found, start at 0.
-  let startIdx = 0;
-  for (let i = idxCur - 1; i >= 0; i--) {
-    const rr = roundsAsc[i];
-    if (rr?.is_elimination) {
-      startIdx = i + 1; // reset happens on the first round AFTER an elimination round
-      break;
+    // Find the nearest elimination round strictly BEFORE the current round.
+    // If found at index i, start summing at i+1. If none found, start at 0.
+    let startIdx = 0;
+    for (let i = idxCur - 1; i >= 0; i--) {
+      const rr = roundsAsc[i];
+      if (rr?.is_elimination) {
+        startIdx = i + 1; // reset happens on the first round AFTER an elimination round
+        break;
+      }
+    }
+
+    // Sum from startIdx → idxCur (inclusive)
+    for (let i = startIdx; i <= idxCur; i++) {
+      const rr = roundsAsc[i];
+      const arr = eb[rr.id] || [];
+      for (const e of arr) {
+        cum.set(e.user_id, (cum.get(e.user_id) || 0) + (Number(e.points_earned) || 0));
+      }
     }
   }
 
-  // Sum from startIdx → idxCur (inclusive)
-  for (let i = startIdx; i <= idxCur; i++) {
-    const rr = roundsAsc[i];
-    const arr = eb[rr.id] || [];
-    for (const e of arr) {
-      cum.set(e.user_id, (cum.get(e.user_id) || 0) + (Number(e.points_earned) || 0));
-    }
-  }
-}
-
-const cumPoints = cum;
+  const cumPoints = cum;
 
 
   const [tableOpen, setTableOpen] = useState(false);
@@ -1647,96 +1698,108 @@ const cumPoints = cum;
 
   const activeUserIds = roundUserIds.filter((uid) => !eliminatedByRound.has(uid));
 
-let minCum = Infinity;
-for (const uid of activeUserIds) {
-  const v = cumPoints.get(uid) || 0;
-  if (v < minCum) minCum = v;
-}
-const lowestCumUsers = new Set(
-  activeUserIds.filter((uid) => (cumPoints.get(uid) || 0) === minCum)
-);
+  let minCum = Infinity;
+  for (const uid of activeUserIds) {
+    const v = cumPoints.get(uid) || 0;
+    if (v < minCum) minCum = v;
+  }
+  const lowestCumUsers = new Set(
+    activeUserIds.filter((uid) => (cumPoints.get(uid) || 0) === minCum)
+  );
 
   const avatars = roundUserIds.map((uid) => {
     return usersById[uid] || { id: uid, profile_photo_url: "", email: "User" };
   });
 
   // --- Use the SAME layout + seed as Lobby so positions persist across rounds
-const arenaPadding = 18;
-const avatarSize = 36; // match Lobby
-const radius = avatarSize / 2;
-const pitchW = containerW - 4;
-const pitchH = unifiedPitchHAll;
-const minGap = 8; // match Lobby
-const minDist = avatarSize + minGap;
+  const arenaPadding = 18;
+  const avatarSize = 36; // match Lobby
+  const radius = avatarSize / 2;
+  const pitchW = containerW - 4;
+  const pitchH = unifiedPitchHAll;
+  const minGap = 8; // match Lobby
+  const minDist = avatarSize + minGap;
 
-const minX = arenaPadding + radius;
-const maxX = pitchW - arenaPadding - radius;
-const minY = arenaPadding + radius;
-const maxY = pitchH - arenaPadding - radius;
+  const minX = arenaPadding + radius;
+  const maxX = pitchW - arenaPadding - radius;
+  const minY = arenaPadding + radius;
+  const maxY = pitchH - arenaPadding - radius;
 
-const placeNonOverlapping = () => {
-  const placed = [];
-  avatars.forEach((u) => {
-    // SAME seed as Lobby: tournament.id + ":lobby:" + user id
-    const baseSeed = strHash(String(tournament.id) + ":lobby:" + String(u.id));
-    let attempt = 0;
-    let placedPos = null;
-    while (attempt < 200 && !placedPos) {
-      const sx = seededRand(baseSeed + 97 * (attempt + 1));
-      const sy = seededRand(baseSeed + 131 * (attempt + 1));
-      const cx = minX + sx * (maxX - minX);
-      const cy = minY + sy * (maxY - minY);
-      let ok = true;
-      for (const p of placed) {
-        const dx = p.cx - cx;
-        const dy = p.cy - cy;
-        if (dx * dx + dy * dy < minDist * minDist) { ok = false; break; }
+  const placeNonOverlapping = () => {
+    const placed = [];
+    avatars.forEach((u) => {
+      // SAME seed as Lobby: tournament.id + ":lobby:" + user id
+      const baseSeed = strHash(String(tournament.id) + ":lobby:" + String(u.id));
+      let attempt = 0;
+      let placedPos = null;
+      while (attempt < 200 && !placedPos) {
+        const sx = seededRand(baseSeed + 97 * (attempt + 1));
+        const sy = seededRand(baseSeed + 131 * (attempt + 1));
+        const cx = minX + sx * (maxX - minX);
+        const cy = minY + sy * (maxY - minY);
+        let ok = true;
+        for (const p of placed) {
+          const dx = p.cx - cx;
+          const dy = p.cy - cy;
+          if (dx * dx + dy * dy < minDist * minDist) { ok = false; break; }
+        }
+        if (ok) placedPos = { id: u.id, cx, cy };
+        attempt++;
       }
-      if (ok) placedPos = { id: u.id, cx, cy };
-      attempt++;
-    }
-    if (!placedPos) {
-      const sx = seededRand(baseSeed + 7777);
-      const sy = seededRand(baseSeed + 8888);
-      const cx = minX + sx * (maxX - minX);
-      const cy = minY + sy * (maxY - minY);
-      placedPos = { id: u.id, cx, cy };
-    }
-    placed.push(placedPos);
-  });
-  return placed.map(({ id, cx, cy }) => ({ id, x: cx - radius, y: cy - radius }));
-};
+      if (!placedPos) {
+        const sx = seededRand(baseSeed + 7777);
+        const sy = seededRand(baseSeed + 8888);
+        const cx = minX + sx * (maxX - minX);
+        const cy = minY + sy * (maxY - minY);
+        placedPos = { id: u.id, cx, cy };
+      }
+      placed.push(placedPos);
+    });
+    return placed.map(({ id, cx, cy }) => ({ id, x: cx - radius, y: cy - radius }));
+  };
 
-const avatarPositions = placeNonOverlapping();
+  const avatarPositions = placeNonOverlapping();
 
 
   // --- NEW: Countdown for live rounds subtitle
   const liveCountdown = useCountdown(!r.closed_at ? r.ends_at : null);
+
+  // When countdown hits zero (returns "—") and round isn't closed yet,
+  // show "Round Ended" and force a refresh so the next round appears.
+  const endedRef = useRef(false);
+  const countdownEnded = !r.closed_at && r.ends_at && liveCountdown === "—";
+  useEffect(() => {
+    if (countdownEnded && !endedRef.current) {
+      endedRef.current = true;
+      // Light refresh of lists/card; realtime should also kick in shortly after
+      onForceRefresh && onForceRefresh();
+    }
+  }, [countdownEnded, onForceRefresh]);
 
   return (
     <View style={containerStyle}>
       {/* Above the arena: round & survivors left (fixed min-height) */}
       <View style={{ alignItems: "center", marginBottom: 6, minHeight: TITLE_BLOCK_MIN_H, justifyContent: "center" }}>
         <Text
-  style={{
-    fontWeight: "800",
-    color: r.is_elimination ? "#8d0000ff" : "#000000ff", // 🔴 red if elimination
-    marginBottom: 6,
-  }}
->
-  Round {r.round_number} {r.is_elimination ? "🪓" : ""}
-</Text>
+          style={{
+            fontWeight: "800",
+            color: r.is_elimination ? "#8d0000ff" : "#000000ff", // 🔴 red if elimination
+            marginBottom: 6,
+          }}
+        >
+          Round {r.round_number} {r.is_elimination ? "🪓" : ""}
+        </Text>
 
         <View style={styles.countdownChip}>
-        <Text style={styles.countdownChipText}>
-          {r.closed_at
-            ? `Closed ${fmtDateTime(r.closed_at)}`
-            : r.ends_at
-            ? `Ends in ${liveCountdown}`
-            : r.started_at
-            ? `Started ${fmtDateTime(r.started_at)}`
-            : "—"}
-        </Text>
+          <Text style={styles.countdownChipText}>
+            {r.closed_at
+              ? `Closed ${fmtDateTime(r.closed_at)}`
+              : r.ends_at
+              ? (liveCountdown === "—" ? "Round Ended" : `Ends in ${liveCountdown}`)
+              : r.started_at
+              ? `Started ${fmtDateTime(r.started_at)}`
+              : "—"}
+          </Text>
         </View>
       </View>
 
@@ -1753,7 +1816,7 @@ const avatarPositions = placeNonOverlapping();
         cumPointsAtRound={cumPoints}
         lowestCumUsers={lowestCumUsers}
         playedThisRound={playedThisRound}
-        isElimination={r.is_elimination} 
+        isElimination={r.is_elimination}
       />
 
       {/* Under arena: finished => player info or live => Play (fixed min-height) */}
@@ -1772,38 +1835,38 @@ const avatarPositions = placeNonOverlapping();
             const p = playersById[r.player_id];
             return (
               <View style={{ flexDirection: "row", gap: 10, alignItems: "center" }}>
-  {p?.photo ? (
-    <Image
-      source={{ uri: p.photo }}
-      style={{ width: 44, height: 44, borderRadius: 8, backgroundColor: "#17202a" }}
-    />
-  ) : (
-    <View
-      style={{
-        width: 44,
-        height: 44,
-        borderRadius: 8,
-        backgroundColor: "#17202a",
-      }}
-    />
-  )}
-  <View>
-    <Text style={{ color: "#4e4e4eff", fontWeight: "800" }}>
-      {p?.name || "Round Player"}
-    </Text>
-    {(p?.nationality || p?.position) && (
-      <Text style={{ color: "#6b7280", fontSize: 12 }}>
-        {[p?.nationality, p?.position].filter(Boolean).join(" • ")}
-      </Text>
-    )}
-  </View>
-</View>
+                {p?.photo ? (
+                  <Image
+                    source={{ uri: p.photo }}
+                    style={{ width: 44, height: 44, borderRadius: 8, backgroundColor: "#17202a" }}
+                  />
+                ) : (
+                  <View
+                    style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: 8,
+                      backgroundColor: "#17202a",
+                    }}
+                  />
+                )}
+                <View>
+                  <Text style={{ color: "#4e4e4eff", fontWeight: "800" }}>
+                    {p?.name || "Round Player"}
+                  </Text>
+                  {(p?.nationality || p?.position) && (
+                    <Text style={{ color: "#6b7280", fontSize: 12 }}>
+                      {[p?.nationality, p?.position].filter(Boolean).join(" • ")}
+                    </Text>
+                  )}
+                </View>
+              </View>
 
             );
           })()
         )}
       </View>
-            {/* --- Collapsible per-round standings table --- */}
+      {/* --- Collapsible per-round standings table --- */}
       <View style={{ marginTop: 10 }}>
         <TouchableOpacity
           onPress={() => setTableOpen((v) => !v)}
@@ -1978,7 +2041,7 @@ function ArenaPitch({
 
   return (
     <Animated.View style={[styles.arenaContainer, heightOverride ? { paddingVertical: 6 } : null,
-      {
+    {
       shadowOpacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.08, 0.85] }),
       shadowRadius: pulse.interpolate({ inputRange: [0, 1], outputRange: [5, 15] }),
       shadowColor: isElimination ? "#ef4444" : "#a5f8ddff", // 🔴 red pulse if elimination
@@ -1987,15 +2050,15 @@ function ArenaPitch({
     ]}>
       <Animated.View
         style={[
-    styles.pitch,
-    heightOverride ? { height: heightOverride, borderRadius: 20, width: pitchW } : { width: pitchW },
-    {
-      shadowOpacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.08, 0.85] }),
-      shadowRadius: pulse.interpolate({ inputRange: [0, 1], outputRange: [5, 15] }),
-      shadowColor: isElimination ? "#ef4444" : "#10b981", // 🔴 red pulse if elimination
-      borderColor: isElimination ? "rgba(239,68,68,0.25)" : "rgba(16,185,129,0.25)",
-    },
-  ]}
+          styles.pitch,
+          heightOverride ? { height: heightOverride, borderRadius: 20, width: pitchW } : { width: pitchW },
+          {
+            shadowOpacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.08, 0.85] }),
+            shadowRadius: pulse.interpolate({ inputRange: [0, 1], outputRange: [5, 15] }),
+            shadowColor: isElimination ? "#ef4444" : "#10b981", // 🔴 red pulse if elimination
+            borderColor: isElimination ? "rgba(239,68,68,0.25)" : "rgba(16,185,129,0.25)",
+          },
+        ]}
       >
         {/* Football pitch lines */}
         <View style={styles.pitchBorderOuter} />
@@ -2004,45 +2067,45 @@ function ArenaPitch({
         <View style={styles.pitchCenterCircle} />
 
         {/* Avatars */}
-{avatars.map((u) => {
-  const pos = avatarPositions.find((p) => p.id === u.id) || { x: 20, y: 20 };
-  const isLowest = lowestCumUsers.has(u.id);
-  const played = playedThisRound.has(u.id);
-  const baseColor = isLowest ? "#ef4444" : "#10b981"; // red (to be eliminated) / green (safe)
+        {avatars.map((u) => {
+          const pos = avatarPositions.find((p) => p.id === u.id) || { x: 20, y: 20 };
+          const isLowest = lowestCumUsers.has(u.id);
+          const played = playedThisRound.has(u.id);
+          const baseColor = isLowest ? "#ef4444" : "#10b981"; // red (to be eliminated) / green (safe)
 
-  return (
-    <TouchableOpacity
-      key={u.id}
-      onPress={() => handleAvatarPress(u, pos)}
-      activeOpacity={0.85}
-      style={[
-        styles.avatarAbsWrap,
-        {
-          left: pos.x,
-          top: pos.y,
-          borderColor: baseColor,
-          borderWidth: 2,
-        },
-      ]}
-    >
-      {/* ⭐ Star behind the avatar (can extend outside the circle) */}
-      {played && (
-        <View pointerEvents="none" style={styles.playedStar}>
-          <Text style={styles.playedStarGlyph}>🔆</Text>
-        </View>
-      )}
+          return (
+            <TouchableOpacity
+              key={u.id}
+              onPress={() => handleAvatarPress(u, pos)}
+              activeOpacity={0.85}
+              style={[
+                styles.avatarAbsWrap,
+                {
+                  left: pos.x,
+                  top: pos.y,
+                  borderColor: baseColor,
+                  borderWidth: 2,
+                },
+              ]}
+            >
+              {/* ⭐ Star behind the avatar (can extend outside the circle) */}
+              {played && (
+                <View pointerEvents="none" style={styles.playedStar}>
+                  <Text style={styles.playedStarGlyph}>🔆</Text>
+                </View>
+              )}
 
-      {/* Inner circular mask for the image */}
-      <View style={styles.avatarInnerMask}>
-        {u.profile_photo_url ? (
-          <Image source={{ uri: u.profile_photo_url }} style={[styles.userAvatarArena, { zIndex: 1 }]} />
-        ) : (
-          <View style={[styles.userAvatarArena, { backgroundColor: "#17202a", zIndex: 1 }]} />
-        )}
-      </View>
-    </TouchableOpacity>
-  );
-})}
+              {/* Inner circular mask for the image */}
+              <View style={styles.avatarInnerMask}>
+                {u.profile_photo_url ? (
+                  <Image source={{ uri: u.profile_photo_url }} style={[styles.userAvatarArena, { zIndex: 1 }]} />
+                ) : (
+                  <View style={[styles.userAvatarArena, { backgroundColor: "#17202a", zIndex: 1 }]} />
+                )}
+              </View>
+            </TouchableOpacity>
+          );
+        })}
 
 
         {/* Clicking anywhere outside the tooltip closes it */}
@@ -2219,12 +2282,12 @@ const styles = StyleSheet.create({
   primaryBtnText: { color: "#ffffffff", fontWeight: "800" },
 
   secondaryBtn: {
-  backgroundColor: "#e5e7eb",
-  paddingVertical: 6,
-  paddingHorizontal: 10,
-  borderRadius: 8,
-},
-secondaryBtnText: { color: "#111827", fontWeight: "800" },
+    backgroundColor: "#e5e7eb",
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+  },
+  secondaryBtnText: { color: "#111827", fontWeight: "800" },
 
   dotsRow: {
     flexDirection: "row",
@@ -2254,7 +2317,7 @@ secondaryBtnText: { color: "#111827", fontWeight: "800" },
   },
   joinedChipText: { color: "#ecfeff", fontWeight: "800", fontSize: 12 },
 
-    finishedChip: {
+  finishedChip: {
     backgroundColor: "#000000ff",
     borderWidth: 1,
     borderColor: "#10b981",
@@ -2354,13 +2417,13 @@ secondaryBtnText: { color: "#111827", fontWeight: "800" },
   },
 
   bootOverlay: {
-  position: "absolute",
-  top: 0, right: 0, bottom: 0, left: 0,
-  alignItems: "center",
-  justifyContent: "center",
-  backgroundColor: "#F0FDF4",
-  zIndex: 999,
-},
+    position: "absolute",
+    top: 0, right: 0, bottom: 0, left: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#F0FDF4",
+    zIndex: 999,
+  },
 
   // Avatars (absolute jittered)
   avatarAbsWrap: {
@@ -2375,7 +2438,7 @@ secondaryBtnText: { color: "#111827", fontWeight: "800" },
   },
   userAvatarArena: { width: "100%", height: "100%" },
 
-   // NEW: inner circular mask so only the image is clipped, not the star
+  // NEW: inner circular mask so only the image is clipped, not the star
   avatarInnerMask: {
     position: "relative",
     width: "100%",
