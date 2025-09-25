@@ -17,6 +17,7 @@ import {
   Dimensions,
   Animated, // ← for shake & emoji rain
   ActivityIndicator, // ← ADDED: spinner
+  Modal,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -151,6 +152,10 @@ export default function LiveGameMobile() {
   const [showEmojiRain, setShowEmojiRain] = useState(false);
   const shakeX = useRef(new Animated.Value(0)).current;
 
+  // Hints modal
+  const [hintsVisible, setHintsVisible] = useState(false);
+
+
   // Sticky thresholds
   const [showStickyTimer, setShowStickyTimer] = useState(false);
   const [showStickyInput, setShowStickyInput] = useState(false);
@@ -265,6 +270,7 @@ export default function LiveGameMobile() {
             endedRef.current = true;
             setIsFinishing(true);
             setSuggestions([]);
+            setGuess('');
             Keyboard.dismiss();
             // Scroll to top BEFORE rain
             try { scrollRef.current?.scrollTo({ y: 0, animated: true }); } catch { }
@@ -447,6 +453,7 @@ export default function LiveGameMobile() {
 
     // Close suggestions on any guess & hide keyboard
     setSuggestions([]);
+    setGuess('');
     Keyboard.dismiss();
 
     // Vibrate on every guess (small tap)
@@ -490,6 +497,7 @@ export default function LiveGameMobile() {
       clearInterval(timerRef.current);
 
       setSuggestions([]);
+      setGuess('');
       Keyboard.dismiss();
 
       // Scroll to top BEFORE emoji rain
@@ -523,6 +531,7 @@ export default function LiveGameMobile() {
     // Vibrate on Give up, close suggestions & keyboard
     Vibration.vibrate(60);
     setSuggestions([]);
+    setGuess('');
     Keyboard.dismiss();
 
     // Scroll to top BEFORE emoji rain
@@ -724,6 +733,7 @@ export default function LiveGameMobile() {
             onPress={() => {
               setGuess(item.display);
               setSuggestions([]);
+              setGuess('');
               submitGuess(item.display);
               Keyboard.dismiss();
             }}
@@ -856,10 +866,9 @@ export default function LiveGameMobile() {
             <View style={styles.row}>
               <View style={[styles.card, styles.flex1, styles.center]}>
                 <Text style={styles.potentialInline}>
-                  Potential: <Text style={styles.potentialStrong}>{displayPotential}</Text>
+                  Potential Points: <Text style={styles.potentialStrong}>{displayPotential}</Text>
                 </Text>
                 <Text style={styles.pointsNow}>{points}</Text>
-                <Text style={styles.subtle}>Current points</Text>
               </View>
             </View>
 
@@ -891,6 +900,47 @@ export default function LiveGameMobile() {
               {!showStickyInput && renderSuggestions()}
             </View>
 
+            {/* Hints opener (between input and transfers) */}
+            <View style={styles.card}>
+              <TouchableOpacity
+                onPress={() => setHintsVisible(true)}
+                activeOpacity={0.9}
+                style={styles.hintsOpenBtn}
+                disabled={isFinishing || disabledUI}
+              >
+                <Text style={styles.hintsOpenText}>🧐 Need a hint? 👁️</Text>
+              
+
+              {/* Hints status chips (now on the button card) */}
+              <View style={[styles.hintsChipRow, { justifyContent: 'center', paddingVertical: 8 }]}>
+                {[
+                  { key: 'age', label: 'Age' },
+                  { key: 'nationality', label: 'Nat' },
+                  { key: 'position', label: 'Pos' },
+                  { key: 'partialImage', label: 'Img' },
+                  { key: 'firstLetter', label: '1st L' },
+                ].map((h) => {
+                  const used = !!usedHints?.[h.key];
+                  return (
+                    <View
+                      key={h.key}
+                      style={[
+                        styles.hintChip,
+                        used ? styles.hintChipUsed : styles.hintChipAvail,
+                      ]}
+                    >
+                      <Text style={used ? styles.hintChipTextUsed : styles.hintChipTextAvail}>
+                        {h.label}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+              </TouchableOpacity>
+            </View>
+        
+
+
             {/* Transfer History — LIST (no swipe) */}
             <View style={styles.card}>
               <Text style={styles.sectionTitle}>Transfer History</Text>
@@ -910,9 +960,29 @@ export default function LiveGameMobile() {
               )}
             </View>
 
-            {/* Hints — LIST (no swipe) */}
-            <View style={styles.card}>
-              <Text style={styles.sectionTitle}>Hints</Text>
+            {/* Bottom spacer */}
+            <View style={{ height: 40 }} />
+          </ScrollView>
+        </View>
+      </KeyboardAvoidingView>
+
+      {/* Hints Modal */}
+      <Modal
+        visible={hintsVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setHintsVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Hints</Text>
+              <TouchableOpacity onPress={() => setHintsVisible(false)} style={styles.modalCloseBtn} activeOpacity={0.8}>
+                <Text style={styles.modalCloseText}>Close</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView contentContainerStyle={{ paddingBottom: 12 }}>
               <View style={{ gap: 12 }}>
                 <HintButton
                   label={"Player's Age"}
@@ -958,13 +1028,11 @@ export default function LiveGameMobile() {
                   valueShown={usedHints.firstLetter ? String(gameData?.name?.[0]?.toUpperCase() || '') : null}
                 />
               </View>
-            </View>
-
-            {/* Bottom spacer */}
-            <View style={{ height: 40 }} />
-          </ScrollView>
+            </ScrollView>
+          </View>
         </View>
-      </KeyboardAvoidingView>
+      </Modal>
+
 
       {/* Confetti (win) */}
       {showConfetti && (
@@ -1000,10 +1068,7 @@ function HintButton({ label, multiplier, onPress, disabled, valueShown, style })
     >
       <View style={styles.hintHeader}>
         <Text style={[styles.hintLabel, hasValue && styles.hintLabelRevealed]}>{label}</Text>
-        <Text style={[styles.hintMult, hasValue && styles.hintMultRevealed]}>{multiplier}</Text>
-        {hasValue ? (
-          <Text style={styles.hintChip}>Revealed</Text>
-        ) : null}
+        <Text style={[styles.hintMult, hasValue && styles.hintMultRevealed]}>Points {multiplier}</Text>
       </View>
 
       {hasValue ? (
@@ -1253,6 +1318,69 @@ const styles = StyleSheet.create({
   guessRed: { color: '#dc2626' },
   headerAvatar: { width: 28, height: 28, borderRadius: 14 },
   fxOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 9999, elevation: 9999 },
+
+  // Hints opener
+  hintsOpenBtn: { alignItems: 'center'},
+  hintsOpenText: { fontSize: 16, fontWeight: '800', color: '#111827', fontFamily: 'Tektur_700Bold' },
+  hintsOpenSub: { marginTop: 4, fontSize: 12, color: '#6b7280', fontFamily: 'Tektur_400Regular' },
+
+  // Modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'flex-end',
+  },
+  modalCard: {
+    backgroundColor: 'white',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    padding: 16,
+    maxHeight: '80%',
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: -4 },
+    borderTopWidth: 1,
+    borderColor: '#eef1f6',
+  },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  modalTitle: { flex: 1, fontSize: 18, fontWeight: '800', color: '#111827', fontFamily: 'Tektur_700Bold' },
+  modalCloseBtn: { paddingHorizontal: 10, paddingVertical: 6, backgroundColor: '#111827', borderRadius: 8 },
+  modalCloseText: { color: 'white', fontWeight: '700', fontFamily: 'Tektur_700Bold' },
+
+  // Hints chips
+  hintsChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  hintChip: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  hintChipAvail: {
+    backgroundColor: '#ecfdf5', // light green-ish
+    borderColor: '#a7f3d0',
+  },
+  hintChipUsed: {
+    backgroundColor: '#f3f4f6', // light gray
+    borderColor: '#e5e7eb',
+  },
+  hintChipTextAvail: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#065f46',
+    fontFamily: 'Tektur_700Bold',
+  },
+  hintChipTextUsed: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#6b7280',
+    fontFamily: 'Tektur_700Bold',
+  },
+
 });
 
 /* ------------------------- helpers ------------------------- */

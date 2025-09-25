@@ -18,6 +18,8 @@ import { supabase } from "../../lib/supabase";
 import { useRouter } from "expo-router";
 import { useFocusEffect } from "expo-router";
 import { useCallback as useCB } from "react";
+import * as Notifications from "expo-notifications";
+
 
 /* ------------------------------- Small utils ------------------------------ */
 function fmtDuration(ms) {
@@ -281,6 +283,43 @@ export default function EliminationScreen() {
     }, [reloadLists])
   );
 
+  // --- Refresh when the user taps a push notification about an elimination challenge
+  useEffect(() => {
+    // Decide whether the tapped notification is about an elimination challenge
+    const isEliminationNotification = (data) => {
+      const k = data?.kind;
+      return (
+        k === "round_started" ||
+        k === "tournament_new_accept" ||
+        k === "private_elim_invited"
+      );
+    };
+
+    const handleTap = (response) => {
+      const data = response?.notification?.request?.content?.data ?? {};
+      if (isEliminationNotification(data)) {
+        // User is on the Elimination screen already; just refresh the lists
+        reloadLists?.();
+      }
+    };
+
+    // 1) Handle taps while app is foreground/background
+    const sub = Notifications.addNotificationResponseReceivedListener(handleTap);
+
+    // 2) Handle the case where the app was launched/opened from a tap
+    (async () => {
+      try {
+        const last = await Notifications.getLastNotificationResponseAsync();
+        if (last) handleTap(last);
+      } catch { }
+    })();
+
+    return () => {
+      sub?.remove?.();
+    };
+  }, [reloadLists]);
+
+
   // Scroll-to-refresh
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -300,12 +339,11 @@ export default function EliminationScreen() {
   // How many finished are *not* shown yet (for the button label)
   const remainingFinishedCount = Math.max(0, (finished?.length || 0) - (lastFinished ? 1 : 0));
 
-
   // Fade in on mount / reloads
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 180, useNativeDriver: true }),
-      Animated.timing(slideAnim, { toValue: 0, duration: 180, useNativeDriver: true }),
+      Animated.timing(fadeAnim, { toValue: 1, duration: 60, useNativeDriver: true }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 60, useNativeDriver: true }),
     ]).start();
   }, [refreshToken]);
 
@@ -425,8 +463,8 @@ export default function EliminationScreen() {
                 >
                   <Text style={styles.secondaryBtnText}>
                     {showAllFinished
-                      ? "hide finished challenges"
-                      : `show all finished challenges (${remainingFinishedCount})`}
+                      ? "Hide previous finished challenges"
+                      : `Show previous finished challenges (${remainingFinishedCount})`}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -696,7 +734,7 @@ function TournamentCardMobileBR({
       try {
         const { data: partRows } = await supabase
           .from("elimination_participants")
-          .select("user_id, state, invite_status")
+          .select("user_id, state, invite_status, eliminated_at_round")
           .eq("tournament_id", tournament.id);
 
         const participantIds = (partRows || []).map((r) => r.user_id);
@@ -1070,13 +1108,9 @@ function TournamentCardMobileBR({
             {isUpcoming ? (
               isOwner ? (
                 canStart ? (
-                  <TouchableOpacity
-                    style={[styles.joinedChip, busy && { opacity: 0.6 }]}
-                    disabled={busy === "start"}
-                    onPress={handleStart}
-                  >
-                    <Text style={styles.joinedChipText}>Start Challenge</Text>
-                  </TouchableOpacity>
+                  <View style={[styles.joinedChip]}>
+                    <Text style={styles.joinedChipText}>Ready to start challenge</Text>
+                  </View>
                 ) : (
                   <View style={styles.joinedChip}>
                     <Text style={styles.joinedChipText}>Waiting for min participants</Text>
@@ -1376,7 +1410,7 @@ function LobbyArena({ tournament, acceptedParticipants, pendingParticipants, use
                     width: 36,
                     height: 36,
                     transform: [{ scale }],
-                    borderColor: isPending ? "#64748b" : "#10b981", // gray for invited, green for joined
+                    borderColor: isPending ? "#64748b" : "#0077ffff", // gray for invited, blue for joined
                     opacity: isPending ? 0.7 : 1,
                     overflow: "hidden",
                   },
@@ -1405,7 +1439,7 @@ function LobbyArena({ tournament, acceptedParticipants, pendingParticipants, use
         }}
       >
         <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-          <View style={{ width: 10, height: 10, borderRadius: 10, backgroundColor: "#10b981" }} />
+          <View style={{ width: 10, height: 10, borderRadius: 10, backgroundColor: "#0077ffff" }} />
           <Text style={{ color: "#94a3b8", fontSize: 12 }}>Joined</Text>
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
@@ -1645,6 +1679,13 @@ function RoundSlide({
   const playedThisRound = new Set(entries.filter((e) => !!e.game_record_id).map((e) => e.user_id));
   const youPlayed = userId ? playedThisRound.has(userId) : false;
 
+  // ⬇️ Add this inside RoundSlide (near the other consts), so we can use it below
+  const youEliminatedRound = React.useMemo(() => {
+    const me = participants.find((p) => p.id === userId);
+    const val = me?.eliminated_at_round;
+    return Number.isFinite(val) ? val : null;
+  }, [participants, userId]);
+
   // Build block-aware cumulative points that reset on the FIRST round AFTER an elimination round.
   // We sum from (last elimination round strictly BEFORE this round) + 1  → current round (inclusive).
   const eb = RoundSlide.__entriesByRound__;
@@ -1795,10 +1836,10 @@ function RoundSlide({
             {r.closed_at
               ? `Closed ${fmtDateTime(r.closed_at)}`
               : r.ends_at
-              ? (liveCountdown === "—" ? "Round Ended" : `Ends in ${liveCountdown}`)
-              : r.started_at
-              ? `Started ${fmtDateTime(r.started_at)}`
-              : "—"}
+                ? (liveCountdown === "—" ? "Round Ended" : `Ends in ${liveCountdown}`)
+                : r.started_at
+                  ? `Started ${fmtDateTime(r.started_at)}`
+                  : "—"}
           </Text>
         </View>
       </View>
@@ -1819,18 +1860,48 @@ function RoundSlide({
         isElimination={r.is_elimination}
       />
 
+      {/* Legend below arena */}
+      <View
+        style={{
+          flexDirection: "row",
+          gap: 14,
+          justifyContent: "center",
+          marginTop: 6,
+          minHeight: 28,
+          alignItems: "center",
+        }}
+      >
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+          <View style={{ width: 10, height: 10, borderRadius: 10, backgroundColor: "#10b981" }} />
+          <Text style={{ color: "#94a3b8", fontSize: 12 }}>Safe</Text>
+        </View>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+          <View style={{ width: 10, height: 10, borderRadius: 10, backgroundColor: "#ef4444" }} />
+          <Text style={{ color: "#94a3b8", fontSize: 12 }}>In danger</Text>
+        </View>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+          <Text style={{ fontSize: 14 }}>🔆</Text>
+          <Text style={{ color: "#94a3b8", fontSize: 12 }}>Played</Text>
+        </View>
+      </View>
+
+
       {/* Under arena: finished => player info or live => Play (fixed min-height) */}
       <View style={{ marginTop: 8, alignItems: "center", minHeight: BOTTOM_BLOCK_MIN_H, justifyContent: "center" }}>
         {!r.closed_at ? (
           youPlayed ? (
-            // already played => no button
-            <Text style={{ color: "#000000ff", fontSize: 12 }}>lets see if you've survived...</Text>
+            <Text style={{ color: "#000000ff", fontSize: 12 }}>Was this enough to keep you from being chopped?</Text>
+          ) : youEliminatedRound && youEliminatedRound <= r.round_number ? (
+            <View style={styles.elimChip}>
+              <Text style={styles.elimChipText}>Eliminated on Round {youEliminatedRound}</Text>
+            </View>
           ) : (
             <TouchableOpacity onPress={onPlay} style={[styles.primaryBtn, { alignSelf: "center" }]}>
               <Text style={styles.primaryBtnText}>Play to Survive</Text>
             </TouchableOpacity>
           )
         ) : (
+
           (() => {
             const p = playersById[r.player_id];
             return (

@@ -23,7 +23,7 @@ function Avatar({ uri }) {
   return <Image source={{ uri }} style={{ width: 32, height: 32, borderRadius: 16 }} />;
 }
 
-function TopNav({ title, subtitle, showSubtitle, avatarUrl, onAvatarPress, titleFontFamily }) {
+function TopNav({ title, subtitle, showSubtitle, avatarUrl, onAvatarPress, titleFontFamily, router }) {
   return (
     <SafeAreaView edges={['top']} style={{ backgroundColor: '#fff' }}>
       <View
@@ -38,10 +38,13 @@ function TopNav({ title, subtitle, showSubtitle, avatarUrl, onAvatarPress, title
           borderBottomWidth: Platform.OS === 'ios' ? 0.5 : 0.7,
         }}
       >
-        <Image
-          source={require('../../assets/images/footytrail_logo.png')}
-          style={{ width: 40, height: 40, resizeMode: 'contain' }}
-        />
+        <Pressable onPress={() => router.replace('/(tabs)/game')} hitSlop={8}>
+          <Image
+            source={require('../../assets/images/footytrail_logo.png')}
+            style={{ width: 40, height: 40, resizeMode: 'contain' }}
+          />
+        </Pressable>
+
 
         {/* Center title + optional small subtitle */}
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
@@ -214,9 +217,9 @@ function formatHeaderDateUTC(d) {
     });
   } catch {
     // Fallback using UTC getters
-    const wk = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getUTCDay()];
+    const wk = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()];
     const dd = String(d.getUTCDate()).padStart(2, '0');
-    const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()];
+    const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getUTCMonth()];
     const yyyy = d.getUTCFullYear();
     return `${wk}, ${dd} ${mon} ${yyyy}`;
   }
@@ -307,7 +310,9 @@ export default function TabsLayout() {
               avatarUrl={avatarUrl}
               onAvatarPress={() => setMenuOpen((v) => !v)}
               titleFontFamily={fontsLoaded ? 'Tektur_700Bold' : undefined}
+              router={router}
             />
+
           ),
           tabBarShowLabel: false,
           tabBarActiveTintColor: THEME_GREEN,
@@ -433,8 +438,8 @@ export default function TabsLayout() {
                 setMenuOpen(false);
                 try {
                   await supabase.auth.signOut({ scope: 'local' });
-                  try { supabase.removeAllChannels?.(); } catch {}
-                } catch {}
+                  try { supabase.removeAllChannels?.(); } catch { }
+                } catch { }
                 router.replace('/login');
               }}
             >

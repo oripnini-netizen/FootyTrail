@@ -119,7 +119,7 @@ export default function PostgameMobile() {
 
   // ---------- Games left today (UTC), excluding elimination & daily ----------
   const [gamesLeft, setGamesLeft] = useState(null);
-  
+
   useEffect(() => {
     (async () => {
       try {
@@ -128,8 +128,8 @@ export default function PostgameMobile() {
         if (!userId) return;
 
         const { start, end } = dayRangeUtc(new Date());
-        
-        const {  data: regularData, error: regularErr } = await supabase
+
+        const { data: regularData, error: regularErr } = await supabase
           .from('games_records')
           .select('id')
           .eq('user_id', userId)
@@ -140,26 +140,26 @@ export default function PostgameMobile() {
 
         if (regularErr) throw regularErr;
         const played = regularData?.length || 0;
-        
+
         const { data: dailyRows, error: dailyErr } = await supabase
-        .from("games_records")
-        .select("won")
-        .eq("user_id", userId)
-        .eq("is_daily_challenge", true)
-        .gte("created_at", start)
-        .lt("created_at", end)
-        .limit(1);
+          .from("games_records")
+          .select("won")
+          .eq("user_id", userId)
+          .eq("is_daily_challenge", true)
+          .gte("created_at", start)
+          .lt("created_at", end)
+          .limit(1);
 
-      if (dailyErr) throw dailyErr;
-      const hasDailyWin = dailyRows?.[0]?.won === true;
+        if (dailyErr) throw dailyErr;
+        const hasDailyWin = dailyRows?.[0]?.won === true;
 
-      const dailyAdjustedCap = hasDailyWin ? 11 : 10;
-      setGamesLeft(Math.max(0, dailyAdjustedCap - played));
-    } catch {
-      setGamesLeft(null);
-    }
-  })();
-}, []);
+        const dailyAdjustedCap = hasDailyWin ? 11 : 10;
+        setGamesLeft(Math.max(0, dailyAdjustedCap - played));
+      } catch {
+        setGamesLeft(null);
+      }
+    })();
+  }, []);
 
   // ---------- Share (capture the card as image) ----------
   const shareText = useMemo(() => {
@@ -200,12 +200,12 @@ export default function PostgameMobile() {
             await RNShare.share({ message: shareText });
           }
         }
-        try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+        try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch { }
       } else {
         await RNShare.share({ message: shareText });
       }
     } catch {
-      try { await RNShare.share({ message: shareText }); } catch {}
+      try { await RNShare.share({ message: shareText }); } catch { }
     } finally {
       setShareBusy(false);
     }
@@ -278,8 +278,11 @@ export default function PostgameMobile() {
       <SafeAreaView edges={['top']} style={styles.safeArea}>
         <View style={styles.header}>
           <View style={styles.headerSide}>
-            <Image source={Logo} style={styles.headerLogo} />
+            <Pressable onPress={() => router.replace('/(tabs)/game')} hitSlop={8}>
+              <Image source={Logo} style={styles.headerLogo} />
+            </Pressable>
           </View>
+
           <Text style={styles.headerTitle}>{headerTitle}</Text>
           <View style={[styles.headerSide, { alignItems: 'flex-end' }]}>
             <Pressable hitSlop={8}>
@@ -394,25 +397,25 @@ export default function PostgameMobile() {
 
             {/* Play Again with remaining games label; disabled at 0 left */}
             <TouchableOpacity
-  onPress={onPlayAgain}
-  activeOpacity={0.85}
-  disabled={!canPlayAgain || playAgainBusy}
-  style={[
-    styles.btn,
-    styles.btnPrimary,
-    (!canPlayAgain || playAgainBusy) && { opacity: 0.6 },
-  ]}
->
-  {playAgainBusy ? (
-    <ActivityIndicator color="#fff" />
-  ) : (
-    <Text style={styles.btnTxt}>
-      {gamesLeft === 0
-        ? 'Finished for today'
-        : `Play Again${gamesLeft !== null ? ` (${gamesLeft} left)` : ''}`}
-    </Text>
-  )}
-</TouchableOpacity>
+              onPress={onPlayAgain}
+              activeOpacity={0.85}
+              disabled={!canPlayAgain || playAgainBusy}
+              style={[
+                styles.btn,
+                styles.btnPrimary,
+                (!canPlayAgain || playAgainBusy) && { opacity: 0.6 },
+              ]}
+            >
+              {playAgainBusy ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.btnTxt}>
+                  {gamesLeft === 0
+                    ? 'Finished for today'
+                    : `Play Again${gamesLeft !== null ? ` (${gamesLeft} left)` : ''}`}
+                </Text>
+              )}
+            </TouchableOpacity>
 
             <TouchableOpacity onPress={onShare} activeOpacity={0.85} style={styles.btnIconShare} disabled={shareBusy}>
               {shareBusy ? <ActivityIndicator color="#fff" /> : <MaterialCommunityIcons name="share-variant" size={22} color="#fff" />}
