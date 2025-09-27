@@ -19,7 +19,8 @@ import { useRouter } from "expo-router";
 import { useFocusEffect } from "expo-router";
 import { useCallback as useCB } from "react";
 import * as Notifications from "expo-notifications";
-
+import ReverseTimerBar from "../../components/ReverseTimerBar";
+import { useAudioPlayer } from "expo-audio";
 
 /* ------------------------------- Small utils ------------------------------ */
 function fmtDuration(ms) {
@@ -1376,15 +1377,19 @@ function LobbyArena({ tournament, acceptedParticipants, pendingParticipants, use
 
   // NEW: Title + subtitle with fixed min-height for alignment
   const ownerUser = usersById[tournament.owner_id] || {};
-  const ownerLabel = ownerUser.full_name || ownerUser.email || String(tournament.owner_id || "");
+  const ownerLabel = ownerUser.full_name || null;
 
   return (
     <View style={{ marginTop: 0 }}>
       <View style={{ alignItems: "center", marginBottom: 6, minHeight: TITLE_BLOCK_MIN_H, justifyContent: "center" }}>
         <Text style={{ fontWeight: "800", color: "#002d68ff", marginBottom: 6 }}>Lobby</Text>
-        <View style={styles.creatorChip}>
-          <Text style={styles.creatorChipText}>Challenge Creator: {ownerLabel}</Text>
-        </View>
+        {ownerLabel && (
+          <View style={styles.creatorChip}>
+            <Text style={styles.creatorChipText}>
+              Challenge Creator: {ownerLabel}
+            </Text>
+          </View>
+        )}
       </View>
       <View style={[styles.arenaContainer, { paddingVertical: 6 }]}>
         <View style={[styles.pitch, { height: pitchH, borderRadius: 20, width: pitchW }]}>
@@ -1609,7 +1614,7 @@ function SwipeableArena({
           // ---- Round slide (refactored into its own component to safely use hooks like useCountdown)
           const r = slide.round;
           return (
-            <View key={r.id} style={containerStyle}>
+            <View key={r.id} style={[containerStyle, { position: "relative" }]}>
               <RoundSlide
                 containerStyle={{}} // RoundSlide already wraps with its own containerStyle prop
                 tournament={tournament}
@@ -1717,7 +1722,6 @@ function RoundSlide({
 
   const cumPoints = cum;
 
-
   const [tableOpen, setTableOpen] = useState(false);
 
   const tableRows = useMemo(() => {
@@ -1735,7 +1739,6 @@ function RoundSlide({
     rows.sort((a, b) => b.acc - a.acc || b.rnd - a.rnd || a.name.localeCompare(b.name));
     return rows;
   }, [roundUserIds, usersById, cumPoints, roundPts, playedThisRound]);
-
 
   const activeUserIds = roundUserIds.filter((uid) => !eliminatedByRound.has(uid));
 
@@ -1801,21 +1804,47 @@ function RoundSlide({
 
   const avatarPositions = placeNonOverlapping();
 
+  const whistle = useAudioPlayer(require("../../assets/sounds/final_whistle.wav"));
 
   // --- NEW: Countdown for live rounds subtitle
   const liveCountdown = useCountdown(!r.closed_at ? r.ends_at : null);
+  const countdownEnded = !r.closed_at && !!r.ends_at && liveCountdown === "—";
+
+  const [showEndedBanner, setShowEndedBanner] = useState(false);
 
   // When countdown hits zero (returns "—") and round isn't closed yet,
   // show "Round Ended" and force a refresh so the next round appears.
   const endedRef = useRef(false);
-  const countdownEnded = !r.closed_at && r.ends_at && liveCountdown === "—";
-  useEffect(() => {
-    if (countdownEnded && !endedRef.current) {
-      endedRef.current = true;
-      // Light refresh of lists/card; realtime should also kick in shortly after
-      onForceRefresh && onForceRefresh();
-    }
-  }, [countdownEnded, onForceRefresh]);
+
+  // Consider the round "ended" if (a) DB marked it closed, (b) everyone who should play has played, or (c) timer hit zero.
+const allPlayed =
+  Array.isArray(roundUserIds) &&
+  roundUserIds.length > 0 &&
+  roundUserIds.every((uid) => playedThisRound.has(uid));
+
+const roundEndedNow = !!r.closed_at || allPlayed || countdownEnded;
+
+// Fire once when a round ends (any reason): show overlay, whistle, and refresh
+useEffect(() => {
+  if (roundEndedNow && !endedRef.current) {
+    endedRef.current = true;
+
+    // Overlay for ~2.5s
+    setShowEndedBanner(true);
+    const hideT = setTimeout(() => setShowEndedBanner(false), 2500);
+
+    // Whistle
+    try {
+      whistle.seekTo(0);
+      whistle.play();
+    } catch {}
+
+    // Let parent refresh so the next round appears
+    onForceRefresh && onForceRefresh();
+
+    return () => clearTimeout(hideT);
+  }
+}, [roundEndedNow, onForceRefresh]);
 
   return (
     <View style={containerStyle}>
@@ -1831,18 +1860,62 @@ function RoundSlide({
           Round {r.round_number} {r.is_elimination ? "🪓" : ""}
         </Text>
 
-        <View style={styles.countdownChip}>
-          <Text style={styles.countdownChipText}>
-            {r.closed_at
-              ? `Closed ${fmtDateTime(r.closed_at)}`
-              : r.ends_at
-                ? (liveCountdown === "—" ? "Round Ended" : `Ends in ${liveCountdown}`)
-                : r.started_at
-                  ? `Started ${fmtDateTime(r.started_at)}`
-                  : "—"}
-          </Text>
-        </View>
+        <ReverseTimerBar
+  endAt={r.ends_at}
+  totalSeconds={tournament.round_time_limit_seconds}
+  forceEnded={roundEndedNow}           // <= NEW: makes the bar show "Round Ended" immediately
+/>
+
       </View>
+
+      {/* Centered modal-style alert like your screenshot */}
+      {showEndedBanner && (
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            top: 0,
+            bottom: 0,
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: "rgba(0,0,0,0.30)", // dim backdrop
+            zIndex: 50,
+          }}
+        >
+          <View
+            style={{
+              width: 280,
+              borderRadius: 16,
+              backgroundColor: "#ffffff",
+              paddingVertical: 18,
+              paddingHorizontal: 18,
+              alignItems: "center",
+              // soft shadow
+              shadowColor: "#000",
+              shadowOpacity: 0.18,
+              shadowRadius: 18,
+              elevation: 8,
+            }}
+          >
+            <Text style={{ fontSize: 34, marginBottom: 6 }}>⏳</Text>
+            <Text
+              style={{
+                fontSize: 18,
+                fontWeight: "800",
+                color: "#111827",
+                marginBottom: 4,
+              }}
+            >
+              Round Ended!
+            </Text>
+            <Text style={{ fontSize: 14, color: "#6B7280" }}>
+              Get back to the arena!
+            </Text>
+          </View>
+        </View>
+      )}
 
       {/* Single arena with avatars */}
       <ArenaPitch

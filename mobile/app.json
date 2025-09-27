@@ -10,10 +10,17 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+    "notification": {
+      "iosDisplayInForeground": true,
+      "sound": true
+    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "co.footytrail.app",
       "infoPlist": {
+        "UIBackgroundModes": [
+          "remote-notification"
+        ],
         "ITSAppUsesNonExemptEncryption": false,
         "NSPhotoLibraryUsageDescription": "We use your photo to show your avatar."
       }
@@ -23,7 +30,12 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "co.footytrail.app"
+      "package": "co.footytrail.app",
+      "notification": {
+        "sound": true,
+        "color": "#ffffff",
+        "channelId": "default"
+      }
     },
     "web": {
       "bundler": "metro"
@@ -37,7 +49,16 @@
     "plugins": [
       "expo-font",
       "expo-router",
-      "expo-notifications"
+      [
+        "expo-notifications",
+        {
+          "sounds": [
+            "./assets/sounds/who_are_ya.wav"
+          ],
+          "color": "#ffffff"
+        }
+      ],
+      "expo-audio"
     ]
   }
 }
