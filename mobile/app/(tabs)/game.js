@@ -10,11 +10,12 @@ import {
   StyleSheet,
   TextInput,
   Image,
-  DeviceEventEmitter, // <-- ADDED
-  RefreshControl,     // <-- ADDED for pull-to-refresh
+  DeviceEventEmitter,
+  RefreshControl,
+  AppState,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import {
   getCompetitions,   // (left intact, not used now for dropdowns)
@@ -29,6 +30,7 @@ import {
 
 // ✨ NEW: detect when this screen regains focus (so we refresh limits/daily)
 import { useIsFocused } from "@react-navigation/native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // >>> NEW (fonts): load Google Font "Tektur"
 import {
@@ -75,6 +77,22 @@ function useCountdownToTomorrow() {
   return timeLeft;
 }
 
+// ---- UTC day key helpers (to force-refresh after 00:00 UTC) ----
+const UTC_DAY_KEY = "ft:lastUtcDaySeen";
+function getUtcDayKey(d = utcNow()) {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`; // e.g., 2025-09-28 (UTC)
+}
+
+// Run a callback exactly at the next UTC midnight while app is in foreground
+function scheduleRefreshAtUtcMidnight(cb) {
+  const ms = msUntilNextUtcMidnight();
+  const id = setTimeout(cb, Math.max(0, ms) + 50); // tiny buffer
+  return () => clearTimeout(id);
+}
+
 /* ---------------- UI atoms ---------------- */
 
 function Chip({ children, onPress, selected = false, variant = "solid", style }) {
@@ -87,8 +105,8 @@ function Chip({ children, onPress, selected = false, variant = "solid", style })
         selected
           ? { backgroundColor: "#14532d", borderColor: "#14532d" }
           : solid
-          ? { backgroundColor: "#fff", borderColor: "#d1d5db" }
-          : { backgroundColor: "transparent", borderColor: "#d1d5db" },
+            ? { backgroundColor: "#fff", borderColor: "#d1d5db" }
+            : { backgroundColor: "transparent", borderColor: "#d1d5db" },
         style,
       ]}
     >
@@ -149,7 +167,98 @@ export default function GameScreen() {
 
   // >>> ADDED: ref + listener to handle FT_SCROLL_TO_TOP_GAME
   const scrollRef = useRef(null);
-  
+
+  // Build a map of UTC-day => rows for that day (non-elimination only)
+  function dayKeyUTC(ts) {
+    const d = new Date(ts);
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+  }
+
+  async function fetchRecentNonElimRows(userId, daysBack = 60) {
+    const now = utcNow();
+    const startUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - daysBack));
+    const { data, error } = await supabase
+      .from("games_records")
+      .select("created_at, is_daily_challenge, won, is_elimination_game")
+      .eq("user_id", userId)
+      .eq("is_elimination_game", false)
+      .gte("created_at", startUtc.toISOString())
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
+  }
+
+  function computeDailyStreak(dayMap) {
+  // helper: did the user play the daily on a given UTC day?
+  const hasDaily = (key) => {
+    const rows = dayMap.get(key) || [];
+    return rows.some((r) => r.is_daily_challenge === true);
+  };
+
+  let cursor = utcNow();
+  // if today doesn't qualify, start counting from yesterday
+  if (!hasDaily(getUtcDayKey(cursor))) {
+    cursor = new Date(
+      Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() - 1)
+    );
+  }
+
+  let streak = 0;
+  while (true) {
+    const key = getUtcDayKey(cursor);
+    if (!hasDaily(key)) break;
+    streak += 1;
+    cursor = new Date(
+      Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() - 1)
+    );
+  }
+  return streak;
+}
+
+function computeRegularStreak(dayMap) {
+  // helper: did the user complete ALL regular games on a given UTC day?
+  // (10 if daily not won that day, 11 if daily was won)
+  const completedRegulars = (key) => {
+    const rows = dayMap.get(key) || [];
+    const dailyWon = rows.some((r) => r.is_daily_challenge === true && r.won === true);
+    const required = dailyWon ? 11 : 10;
+    const regularCount = rows.filter((r) => r.is_daily_challenge !== true).length;
+    return regularCount >= required;
+  };
+
+  let cursor = utcNow();
+  // if today doesn't qualify, start counting from yesterday
+  if (!completedRegulars(getUtcDayKey(cursor))) {
+    cursor = new Date(
+      Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() - 1)
+    );
+  }
+
+  let streak = 0;
+  while (true) {
+    const key = getUtcDayKey(cursor);
+    if (!completedRegulars(key)) break;
+    streak += 1;
+    cursor = new Date(
+      Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() - 1)
+    );
+  }
+  return streak;
+}
+
+  async function refreshStreaks(userId) {
+    const rows = await fetchRecentNonElimRows(userId);
+    const map = new Map();
+    rows.forEach(r => {
+      const key = dayKeyUTC(r.created_at);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(r);
+    });
+    setDailyStreak(computeDailyStreak(map));
+    setRegularStreak(computeRegularStreak(map));
+  }
+
+
   useEffect(() => {
     const sub = DeviceEventEmitter.addListener("FT_SCROLL_TO_TOP_GAME", () => {
       // scroll the top-level ScrollView to the top
@@ -158,39 +267,39 @@ export default function GameScreen() {
     return () => sub.remove();
   }, []);
 
-useEffect(() => {
-  const sub = DeviceEventEmitter.addListener("FT_FORCE_RELOAD_DEFAULT_FILTERS", async () => {
-    try {
-      if (!user?.id) return;
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener("FT_FORCE_RELOAD_DEFAULT_FILTERS", async () => {
+      try {
+        if (!user?.id) return;
 
-      const { data: profile, error } = await supabase
-        .from("users")
-        .select(
-          "default_competitions, default_seasons, default_min_market_value, default_min_appearances"
-        )
-        .eq("id", user.id)
-        .single();
-      if (error) throw error;
+        const { data: profile, error } = await supabase
+          .from("users")
+          .select(
+            "default_competitions, default_seasons, default_min_market_value, default_min_appearances"
+          )
+          .eq("id", user.id)
+          .single();
+        if (error) throw error;
 
-      const dbDefaults = {
-        competitions: (profile?.default_competitions || []).map(String),
-        seasons: (profile?.default_seasons || []).map(String),
-        minMarketValue: Number(profile?.default_min_market_value ?? 0),
-        minAppearances: Number(profile?.default_min_appearances ?? 0),
-      };
+        const dbDefaults = {
+          competitions: (profile?.default_competitions || []).map(String),
+          seasons: (profile?.default_seasons || []).map(String),
+          minMarketValue: Number(profile?.default_min_market_value ?? 0),
+          minAppearances: Number(profile?.default_min_appearances ?? 0),
+        };
 
-      // update our "source of truth" + visible filters
-      defaultRef.current = dbDefaults;
-      setSelectedCompetitionIds(dbDefaults.competitions);
-      setSelectedSeasons(dbDefaults.seasons);
-      setMinMarketValue(dbDefaults.minMarketValue);
-      setMinAppearances(dbDefaults.minAppearances);
-    } catch (e) {
-      console.warn("[game] Failed to reload defaults", e);
-    }
-  });
-  return () => sub.remove();
-}, [user?.id]);
+        // update our "source of truth" + visible filters
+        defaultRef.current = dbDefaults;
+        setSelectedCompetitionIds(dbDefaults.competitions);
+        setSelectedSeasons(dbDefaults.seasons);
+        setMinMarketValue(dbDefaults.minMarketValue);
+        setMinAppearances(dbDefaults.minAppearances);
+      } catch (e) {
+        console.warn("[game] Failed to reload defaults", e);
+      }
+    });
+    return () => sub.remove();
+  }, [user?.id]);
 
 
   // >>> NEW (fonts) <<<
@@ -214,6 +323,10 @@ useEffect(() => {
   });
   const [daily, setDaily] = useState(null);
   const [dailyLoading, setDailyLoading] = useState(false);
+  // Streaks
+  const [dailyStreak, setDailyStreak] = useState(0);     // # of consecutive UTC days with a daily played
+  const [regularStreak, setRegularStreak] = useState(0); // # of consecutive UTC days with all regular games completed
+
 
   // Data for filters
   const [allCompetitions, setAllCompetitions] = useState([]);
@@ -276,7 +389,11 @@ useEffect(() => {
 
       return {
         flatCompetitions: flat,
-        seasons: Array.isArray(seas.seasons) ? seas.seasons.map(String) : [],
+        seasons: Array.isArray(seas.seasons)
+          ? seas.seasons
+            .map(String)
+            .filter((s) => s && s.toLowerCase() !== "null" && s.toLowerCase() !== "undefined")
+          : [],
       };
     } catch {
       return null;
@@ -307,7 +424,12 @@ useEffect(() => {
           if (Array.isArray(parsed)) arr = parsed;
         } catch { /* ignore */ }
       }
-      arr.forEach((s) => set.add(String(s)));
+      arr.forEach((s) => {
+        const v = String(s ?? "").trim();
+        if (v && v.toLowerCase() !== "null" && v.toLowerCase() !== "undefined") {
+          set.add(v);
+        }
+      });
     });
 
     const seasons = Array.from(set)
@@ -380,6 +502,10 @@ useEffect(() => {
 
         const d = await getDailyChallenge().catch(() => null);
         setDaily(d || null);
+        if (session?.user?.id) {
+          try { await refreshStreaks(session.user.id); } catch { }
+        }
+
       } finally {
         if (mounted) setBootLoading(false);
       }
@@ -399,6 +525,7 @@ useEffect(() => {
         if (!cancelled && lim) setLimits((l) => ({ ...l, ...lim }));
         const d = await getDailyChallenge().catch(() => null);
         if (!cancelled) setDaily(d || null);
+        try { await refreshStreaks(user.id); } catch { }
       } catch {
         // ignore
       }
@@ -675,7 +802,7 @@ useEffect(() => {
         // UTC boundaries for "today"
         const now = utcNow(); // <-- use UTC helper
         const startUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-        const endUtc   = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+        const endUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
 
         // Today (non-elimination)
         const { data: todayRows, error: e1 } = await supabase
@@ -687,7 +814,7 @@ useEffect(() => {
           .lt("created_at", endUtc.toISOString());
         if (e1) throw e1;
 
-        const todayCount  = (todayRows || []).filter((r) => r?.is_daily_challenge !== true).length;
+        const todayCount = (todayRows || []).filter((r) => r?.is_daily_challenge !== true).length;
         const todayPoints = (todayRows || []).reduce((sum, r) => sum + Number(r?.points_earned || 0), 0);
 
         // Total (non-elimination)
@@ -737,65 +864,119 @@ useEffect(() => {
 
   // === ADDED: pull-to-refresh handler ===
   const handleRefresh = async () => {
-  if (!user?.id) return;
-  setRefreshing(true);
-  try {
-    // 1) refresh limits & daily
-    const [lim, d] = await Promise.all([
-      getLimits(user.id).catch(() => null),
-      getDailyChallenge().catch(() => null),
-    ]);
-    if (lim) setLimits((l) => ({ ...l, ...lim }));
-    setDaily(d || null);
+    if (!user?.id) return;
+    setRefreshing(true);
+    try {
+      // 1) refresh limits & daily
+      const [lim, d] = await Promise.all([
+        getLimits(user.id).catch(() => null),
+        getDailyChallenge().catch(() => null),
+      ]);
+      if (lim) setLimits((l) => ({ ...l, ...lim }));
+      setDaily(d || null);
 
-    // 2) refresh the user's DEFAULT FILTERS from DB and apply
-    const { data: profile, error } = await supabase
-      .from("users")
-      .select(
-        "default_competitions, default_seasons, default_min_market_value, default_min_appearances"
-      )
-      .eq("id", user.id)
-      .single();
-    if (error) throw error;
+      // 2) refresh the user's DEFAULT FILTERS from DB and apply
+      const { data: profile, error } = await supabase
+        .from("users")
+        .select(
+          "default_competitions, default_seasons, default_min_market_value, default_min_appearances"
+        )
+        .eq("id", user.id)
+        .single();
+      if (error) throw error;
 
-    const dbDefaults = {
-      competitions: (profile?.default_competitions || []).map(String),
-      seasons: (profile?.default_seasons || []).map(String),
-      minMarketValue: Number(profile?.default_min_market_value ?? 0),
-      minAppearances: Number(profile?.default_min_appearances ?? 0),
-    };
-    defaultRef.current = dbDefaults;
-    setSelectedCompetitionIds(dbDefaults.competitions);
-    setSelectedSeasons(dbDefaults.seasons);
-    setMinMarketValue(dbDefaults.minMarketValue);
-    setMinAppearances(dbDefaults.minAppearances);
+      const dbDefaults = {
+        competitions: (profile?.default_competitions || []).map(String),
+        seasons: (profile?.default_seasons || []).map(String),
+        minMarketValue: Number(profile?.default_min_market_value ?? 0),
+        minAppearances: Number(profile?.default_min_appearances ?? 0),
+      };
+      defaultRef.current = dbDefaults;
+      setSelectedCompetitionIds(dbDefaults.competitions);
+      setSelectedSeasons(dbDefaults.seasons);
+      setMinMarketValue(dbDefaults.minMarketValue);
+      setMinAppearances(dbDefaults.minAppearances);
 
-    // 3) refresh counts for the (now updated) filters
-    setCountsError("");
-    setLoadingCounts(true);
-    const payload = {
-      competitions: dbDefaults.competitions,
-      seasons: dbDefaults.seasons,
-      minMarketValue: Number(dbDefaults.minMarketValue) || 0,
-      minAppearances: Number(dbDefaults.minAppearances) || 0, // <-- fixed spelling
-      userId: user.id,
-    };
-    const res = await getCounts(payload).catch((e) => {
-      setCountsError(String(e?.message || e));
-      return null;
-    });
-    if (res) {
-      setPoolCount(res?.poolCount || 0);
-      setTotalCount(res?.totalCount || 0);
+      // 3) refresh counts for the (now updated) filters
+      setCountsError("");
+      setLoadingCounts(true);
+      const payload = {
+        competitions: dbDefaults.competitions,
+        seasons: dbDefaults.seasons,
+        minMarketValue: Number(dbDefaults.minMarketValue) || 0,
+        minAppearances: Number(dbDefaults.minAppearances) || 0, // <-- fixed spelling
+        userId: user.id,
+      };
+      const res = await getCounts(payload).catch((e) => {
+        setCountsError(String(e?.message || e));
+        return null;
+      });
+      if (res) {
+        setPoolCount(res?.poolCount || 0);
+        setTotalCount(res?.totalCount || 0);
+      }
+      if (user?.id) { try { await refreshStreaks(user.id); } catch { } }
+    } finally {
+      setLoadingCounts(false);
+      setRefreshing(false);
     }
-  } finally {
-    setLoadingCounts(false);
-    setRefreshing(false);
-  }
-};
+  };
+
+  // Store today's UTC day key on initial boot
+  useEffect(() => {
+    (async () => {
+      try {
+        const todayKey = getUtcDayKey();
+        await AsyncStorage.setItem(UTC_DAY_KEY, todayKey);
+      } catch { }
+    })();
+  }, []);
+
+  // On focus: if UTC day changed while app was away, force-refresh
+  useEffect(() => {
+    if (!isFocused) return;
+    (async () => {
+      try {
+        const stored = await AsyncStorage.getItem(UTC_DAY_KEY);
+        const nowKey = getUtcDayKey();
+        if (stored !== nowKey) {
+          await handleRefresh();              // pulls fresh limits/daily + defaults + counts
+          await AsyncStorage.setItem(UTC_DAY_KEY, nowKey);
+        }
+      } catch { }
+    })();
+  }, [isFocused]);
+
+  // While this screen is mounted/active, refresh exactly at UTC midnight
+  useEffect(() => {
+    // Only schedule while app is active; if it goes background, we'll rely on the focus effect above.
+    let clearTimer = scheduleRefreshAtUtcMidnight(async () => {
+      try {
+        await handleRefresh();
+        await AsyncStorage.setItem(UTC_DAY_KEY, getUtcDayKey());
+      } catch { }
+      // Re-schedule the next midnight tick (tomorrow)
+      clearTimer = scheduleRefreshAtUtcMidnight(async () => {
+        try {
+          await handleRefresh();
+          await AsyncStorage.setItem(UTC_DAY_KEY, getUtcDayKey());
+        } catch { }
+      });
+    });
+
+    // If app goes background/active, we can choose to re-schedule,
+    // but the focus effect already covers the reopen case.
+    const sub = AppState.addEventListener("change", (state) => {
+      // no-op: we rely on focus hook when coming back
+    });
+
+    return () => {
+      clearTimer?.();
+      sub.remove?.();
+    };
+  }, []);
 
   /* ---------------- UI ---------------- */
-
   if (bootLoading || !fontsLoaded) {
     return (
       <View style={styles.boot}>
@@ -819,13 +1000,12 @@ useEffect(() => {
         <View style={[styles.cardTitle, { textAlign: "center" }]}>
           <Text style={[styles.cardTitle, { textAlign: "center", marginLeft: 6 }]}>🌟Daily Challenge🌟</Text>
         </View>
-        
+
         <Text style={[styles.cardText, { textAlign: "center" }]}>
           {!limits.dailyPlayed
             ? "Today's Daily Challenge is live! Guess a star and grab 10,000 points and an extra game."
             : <>Next challenge in <Text style={styles.countdown}>{countdown}</Text></>}
         </Text>
-
         <Pressable
           onPress={startDaily}
           disabled={limits.dailyPlayed || dailyLoading}
@@ -841,6 +1021,10 @@ useEffect(() => {
           </Text>
         </Pressable>
 
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 8, gap: 8 }}>
+                <Ionicons name="flame" size={20} color="#f97316" />
+          <Text style={[styles.cardText, { marginRight: 6 }]}>Daily Challenge Streak: {dailyStreak}</Text>
+        </View>
         {daily && limits.dailyPlayed && (
           <View style={{ alignItems: "center", marginTop: 10 }}>
             {limits.dailyPlayerPhoto ? (
@@ -916,7 +1100,10 @@ useEffect(() => {
                 <Text style={styles.buttonText}>Play a Daily Game</Text>
               )}
             </Pressable>
-
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 8, gap: 8 }}>
+                              <Ionicons name="flame" size={20} color="#f97316" />
+              <Text style={[styles.cardText, { textAlign: "center" }]}>Daily Progress Streak: {regularStreak}</Text>
+            </View>
             {/* Potential points + Player Pool */}
             <View
               style={[
@@ -965,258 +1152,258 @@ useEffect(() => {
             </View>
           </View>
         )}
-      
-      {/* ====== Collapsible Filters Wrapper ====== */}
-      <View style={styles.card}>
-        <Pressable
-          onPress={() => setFiltersOpen((v) => !v)}
-          style={styles.filtersHeader}
-        >
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <Ionicons name="filter" size={18} color="#0b3d24" />
-            <Text style={styles.filtersTitle}>Adjust Difficulty Filters</Text>
-          </View>
-          <Ionicons
-            name={filtersOpen ? "chevron-up" : "chevron-down"}
-            size={18}
-            color={"#111827"}
-          />
-        </Pressable>
 
-        {filtersOpen && (
-          <View style={{ marginTop: 10 }}>
-            {/* ---- Defaults pill row ---- */}
-            <View style={[styles.subCard, { paddingVertical: 12 }]}>
-              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                <Chip
-                  onPress={applyDefaultFilters}
-                  selected={atDBDefaults}
-                  style={atDBDefaults ? null : { backgroundColor: "#fff" }}
+        {/* ====== Collapsible Filters Wrapper ====== */}
+        <View style={styles.card}>
+          <Pressable
+            onPress={() => setFiltersOpen((v) => !v)}
+            style={styles.filtersHeader}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Ionicons name="filter" size={18} color="#0b3d24" />
+              <Text style={styles.filtersTitle}>Adjust Difficulty Filters</Text>
+            </View>
+            <Ionicons
+              name={filtersOpen ? "chevron-up" : "chevron-down"}
+              size={18}
+              color={"#111827"}
+            />
+          </Pressable>
+
+          {filtersOpen && (
+            <View style={{ marginTop: 10 }}>
+              {/* ---- Defaults pill row ---- */}
+              <View style={[styles.subCard, { paddingVertical: 12 }]}>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                  <Chip
+                    onPress={applyDefaultFilters}
+                    selected={atDBDefaults}
+                    style={atDBDefaults ? null : { backgroundColor: "#fff" }}
+                  >
+                    Apply Default Filters
+                  </Chip>
+                </View>
+              </View>
+
+              {/* COMPETITIONS */}
+              <View style={[styles.subCard]}>
+                <Text style={styles.cardTitle}>Competitions</Text>
+
+                <View style={styles.rowWrap}>
+                  <Chip onPress={selectTop10} selected={isTop10Selected}>
+                    Top 10
+                  </Chip>
+                  <Chip onPress={selectAllComps} selected={isAllCompsSelected}>
+                    Select All
+                  </Chip>
+                  <Chip onPress={clearComps} variant="outline" selected={isClearComps}>
+                    Clear All
+                  </Chip>
+                </View>
+
+                <Pressable
+                  onPress={() => setCompOpen((v) => !v)}
+                  style={styles.selectHeader}
                 >
-                  Apply Default Filters
-                </Chip>
-              </View>
-            </View>
+                  <Ionicons name="flag-outline" size={18} color="#0b3d24" />
+                  <Text style={styles.selectHeaderText}>
+                    {selectedCompetitionIds.length
+                      ? `${selectedCompetitionIds.length} selected`
+                      : "Select competitions"}
+                  </Text>
+                  <Ionicons
+                    name={compOpen ? "chevron-up" : "chevron-down"}
+                    size={18}
+                    color={"#111827"}
+                  />
+                </Pressable>
 
-            {/* COMPETITIONS */}
-            <View style={[styles.subCard]}>
-              <Text style={styles.cardTitle}>Competitions</Text>
-
-              <View style={styles.rowWrap}>
-                <Chip onPress={selectTop10} selected={isTop10Selected}>
-                  Top 10
-                </Chip>
-                <Chip onPress={selectAllComps} selected={isAllCompsSelected}>
-                  Select All
-                </Chip>
-                <Chip onPress={clearComps} variant="outline" selected={isClearComps}>
-                  Clear All
-                </Chip>
-              </View>
-
-              <Pressable
-                onPress={() => setCompOpen((v) => !v)}
-                style={styles.selectHeader}
-              >
-                <Ionicons name="flag-outline" size={18} color="#0b3d24" />
-                <Text style={styles.selectHeaderText}>
-                  {selectedCompetitionIds.length
-                    ? `${selectedCompetitionIds.length} selected`
-                    : "Select competitions"}
-                </Text>
-                <Ionicons
-                  name={compOpen ? "chevron-up" : "chevron-down"}
-                  size={18}
-                  color={"#111827"}
-                />
-              </Pressable>
-
-              {compOpen && (
-                <View style={styles.dropdown}>
-                  {/* search */}
-                  <View style={styles.searchRow}>
-                    <Ionicons
-                      name="search"
-                      size={16}
-                      color="#6b7280"
-                      style={{ marginRight: 6 }}
-                    />
-                    <TextInput
-                      placeholder="Search by competition or country"
-                      value={compQuery}
-                      onChangeText={setCompQuery}
-                      style={styles.searchInput}
-                      autoCorrect={false}
-                      autoCapitalize="none"
-                    />
-                    {compQuery.length > 0 && (
-                      <Pressable onPress={() => setCompQuery("")}>
-                        <Ionicons name="close-circle" size={18} color="#9ca3af" />
-                      </Pressable>
-                    )}
-                  </View>
-
-                  <View style={{ maxHeight: 360 }}>
-                    <ScrollView>
-                      {compsOrderedForDropdown.map((c) => {
-                        const id = String(c.competition_id);
-                        const selected = selectedCompetitionIds.includes(id);
-                        return (
-                          <CompetitionRow
-                            key={id}
-                            comp={c}
-                            selected={selected}
-                            onToggle={toggleCompetition}
-                          />
-                        );
-                      })}
-                      {compsOrderedForDropdown.length === 0 && (
-                        <Text style={styles.muted}>No matches.</Text>
+                {compOpen && (
+                  <View style={styles.dropdown}>
+                    {/* search */}
+                    <View style={styles.searchRow}>
+                      <Ionicons
+                        name="search"
+                        size={16}
+                        color="#6b7280"
+                        style={{ marginRight: 6 }}
+                      />
+                      <TextInput
+                        placeholder="Search by competition or country"
+                        value={compQuery}
+                        onChangeText={setCompQuery}
+                        style={styles.searchInput}
+                        autoCorrect={false}
+                        autoCapitalize="none"
+                      />
+                      {compQuery.length > 0 && (
+                        <Pressable onPress={() => setCompQuery("")}>
+                          <Ionicons name="close-circle" size={18} color="#9ca3af" />
+                        </Pressable>
                       )}
-                    </ScrollView>
-                  </View>
-                </View>
-              )}
-            </View>
+                    </View>
 
-            {/* SEASONS (multi-select) */}
-            <View style={styles.subCard}>
-              <Text style={styles.cardTitle}>Seasons</Text>
-
-              <View style={styles.rowWrap}>
-                <Chip onPress={selectLast3} selected={isLast3Seasons}>
-                  Last 3
-                </Chip>
-                <Chip onPress={selectLast5} selected={isLast5Seasons}>
-                  Last 5
-                </Chip>
-                <Chip onPress={selectAllSeasons} selected={isAllSeasons}>
-                  Select All
-                </Chip>
-                <Chip onPress={clearSeasons} variant="outline" selected={isClearSeasons}>
-                  Clear All
-                </Chip>
-              </View>
-
-              <Pressable
-                onPress={() => setSeasonsOpen((v) => !v)}
-                style={styles.selectHeader}
-              >
-                <Ionicons name="calendar-outline" size={18} color="#0b3d24" />
-                <Text style={styles.selectHeaderText}>
-                  {selectedSeasons.length
-                    ? `${selectedSeasons.length} selected`
-                    : "Select seasons"}
-                </Text>
-                <Ionicons
-                  name={seasonsOpen ? "chevron-up" : "chevron-down"}
-                  size={18}
-                  color={"#111827"}
-                />
-              </Pressable>
-
-              {seasonsOpen && (
-                <View style={styles.dropdown}>
-                  <View style={styles.searchRow}>
-                    <Ionicons
-                      name="search"
-                      size={16}
-                      color="#6b7280"
-                      style={{ marginRight: 6 }}
-                    />
-                    <TextInput
-                      placeholder="Search season (e.g. 2024)"
-                      value={seasonQuery}
-                      onChangeText={setSeasonQuery}
-                      style={styles.searchInput}
-                      autoCorrect={false}
-                      autoCapitalize="none"
-                      keyboardType="numeric"
-                    />
-                    {seasonQuery.length > 0 && (
-                      <Pressable onPress={() => setSeasonQuery("")}>
-                        <Ionicons name="close-circle" size={18} color="#9ca3af" />
-                      </Pressable>
-                    )}
-                  </View>
-
-                  <View style={{ maxHeight: 280 }}>
-                    <ScrollView>
-                      {seasonsOrderedForDropdown.map((s) => {
-                        const selected = selectedSeasons.includes(s);
-                        return (
-                          <Pressable
-                            key={s}
-                            style={styles.optionRow}
-                            onPress={() => toggleSeason(s)}
-                          >
-                            <Text style={{ color: "#111827", fontFamily: "Tektur_400Regular" }}>{s}</Text>
-                            <Ionicons
-                              name={selected ? "checkbox" : "square-outline"}
-                              size={18}
-                              color={selected ? "#14532d" : "#9ca3af"}
+                    <View style={{ maxHeight: 360 }}>
+                      <ScrollView>
+                        {compsOrderedForDropdown.map((c) => {
+                          const id = String(c.competition_id);
+                          const selected = selectedCompetitionIds.includes(id);
+                          return (
+                            <CompetitionRow
+                              key={id}
+                              comp={c}
+                              selected={selected}
+                              onToggle={toggleCompetition}
                             />
-                          </Pressable>
-                        );
-                      })}
-                      {seasonsOrderedForDropdown.length === 0 && (
-                        <Text style={styles.muted}>No seasons.</Text>
-                      )}
-                    </ScrollView>
+                          );
+                        })}
+                        {compsOrderedForDropdown.length === 0 && (
+                          <Text style={styles.muted}>No matches.</Text>
+                        )}
+                      </ScrollView>
+                    </View>
                   </View>
-                </View>
-              )}
-            </View>
-
-            {/* MARKET VALUE */}
-            <View style={styles.subCard}>
-              <Text style={styles.cardTitle}>Minimum Market Value (€)</Text>
-              <TextInput
-                keyboardType="number-pad"
-                value={String(minMarketValue ?? 0)}
-                onChangeText={(t) => setMinMarketValue(parseInt(t || "0", 10) || 0)}
-                style={styles.input}
-              />
-              <View style={styles.rowWrap}>
-                {[0, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000].map(
-                  (v) => (
-                    <Chip
-                      key={v}
-                      selected={Number(minMarketValue) === v}
-                      onPress={() => setMinMarketValue(v)}
-                    >
-                      {compactMoney(v)}
-                    </Chip>
-                  )
                 )}
               </View>
-            </View>
 
-            {/* APPEARANCES */}
-            <View style={styles.subCard}>
-              <Text style={styles.cardTitle}>Minimum Appearances</Text>
-              <TextInput
-                keyboardType="number-pad"
-                value={String(minAppearances ?? 0)}
-                onChangeText={(t) => setMinAppearances(parseInt(t || "0", 10) || 0)}
-                style={styles.input}
-              />
-              <View style={styles.rowWrap}>
-                {[0, 5, 10, 15, 20, 25, 30, 50, 100].map((v) => (
-                  <Chip
-                    key={v}
-                    selected={Number(minAppearances) === v}
-                    onPress={() => setMinAppearances(v)}
-                  >
-                    {v}
+              {/* SEASONS (multi-select) */}
+              <View style={styles.subCard}>
+                <Text style={styles.cardTitle}>Seasons</Text>
+
+                <View style={styles.rowWrap}>
+                  <Chip onPress={selectLast3} selected={isLast3Seasons}>
+                    Last 3
                   </Chip>
-                ))}
+                  <Chip onPress={selectLast5} selected={isLast5Seasons}>
+                    Last 5
+                  </Chip>
+                  <Chip onPress={selectAllSeasons} selected={isAllSeasons}>
+                    Select All
+                  </Chip>
+                  <Chip onPress={clearSeasons} variant="outline" selected={isClearSeasons}>
+                    Clear All
+                  </Chip>
+                </View>
+
+                <Pressable
+                  onPress={() => setSeasonsOpen((v) => !v)}
+                  style={styles.selectHeader}
+                >
+                  <Ionicons name="calendar-outline" size={18} color="#0b3d24" />
+                  <Text style={styles.selectHeaderText}>
+                    {selectedSeasons.length
+                      ? `${selectedSeasons.length} selected`
+                      : "Select seasons"}
+                  </Text>
+                  <Ionicons
+                    name={seasonsOpen ? "chevron-up" : "chevron-down"}
+                    size={18}
+                    color={"#111827"}
+                  />
+                </Pressable>
+
+                {seasonsOpen && (
+                  <View style={styles.dropdown}>
+                    <View style={styles.searchRow}>
+                      <Ionicons
+                        name="search"
+                        size={16}
+                        color="#6b7280"
+                        style={{ marginRight: 6 }}
+                      />
+                      <TextInput
+                        placeholder="Search season (e.g. 2024)"
+                        value={seasonQuery}
+                        onChangeText={setSeasonQuery}
+                        style={styles.searchInput}
+                        autoCorrect={false}
+                        autoCapitalize="none"
+                        keyboardType="numeric"
+                      />
+                      {seasonQuery.length > 0 && (
+                        <Pressable onPress={() => setSeasonQuery("")}>
+                          <Ionicons name="close-circle" size={18} color="#9ca3af" />
+                        </Pressable>
+                      )}
+                    </View>
+
+                    <View style={{ maxHeight: 280 }}>
+                      <ScrollView>
+                        {seasonsOrderedForDropdown.map((s) => {
+                          const selected = selectedSeasons.includes(s);
+                          return (
+                            <Pressable
+                              key={s}
+                              style={styles.optionRow}
+                              onPress={() => toggleSeason(s)}
+                            >
+                              <Text style={{ color: "#111827", fontFamily: "Tektur_400Regular" }}>{s}</Text>
+                              <Ionicons
+                                name={selected ? "checkbox" : "square-outline"}
+                                size={18}
+                                color={selected ? "#14532d" : "#9ca3af"}
+                              />
+                            </Pressable>
+                          );
+                        })}
+                        {seasonsOrderedForDropdown.length === 0 && (
+                          <Text style={styles.muted}>No seasons.</Text>
+                        )}
+                      </ScrollView>
+                    </View>
+                  </View>
+                )}
+              </View>
+
+              {/* MARKET VALUE */}
+              <View style={styles.subCard}>
+                <Text style={styles.cardTitle}>Minimum Market Value (€)</Text>
+                <TextInput
+                  keyboardType="number-pad"
+                  value={String(minMarketValue ?? 0)}
+                  onChangeText={(t) => setMinMarketValue(parseInt(t || "0", 10) || 0)}
+                  style={styles.input}
+                />
+                <View style={styles.rowWrap}>
+                  {[0, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000].map(
+                    (v) => (
+                      <Chip
+                        key={v}
+                        selected={Number(minMarketValue) === v}
+                        onPress={() => setMinMarketValue(v)}
+                      >
+                        {compactMoney(v)}
+                      </Chip>
+                    )
+                  )}
+                </View>
+              </View>
+
+              {/* APPEARANCES */}
+              <View style={styles.subCard}>
+                <Text style={styles.cardTitle}>Minimum Appearances</Text>
+                <TextInput
+                  keyboardType="number-pad"
+                  value={String(minAppearances ?? 0)}
+                  onChangeText={(t) => setMinAppearances(parseInt(t || "0", 10) || 0)}
+                  style={styles.input}
+                />
+                <View style={styles.rowWrap}>
+                  {[0, 5, 10, 15, 20, 25, 30, 50, 100].map((v) => (
+                    <Chip
+                      key={v}
+                      selected={Number(minAppearances) === v}
+                      onPress={() => setMinAppearances(v)}
+                    >
+                      {v}
+                    </Chip>
+                  ))}
+                </View>
               </View>
             </View>
-          </View>
-        )}
+          )}
+        </View>
       </View>
-</View>
       {/* Spacer */}
       <View style={{ height: 24 }} />
     </ScrollView>

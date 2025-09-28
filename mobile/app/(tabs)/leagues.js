@@ -9,13 +9,19 @@ import {
   ActivityIndicator,
   Alert,
   ScrollView,
+  RefreshControl,
   Modal,
   Pressable,
   Dimensions,
   NativeSyntheticEvent,
   NativeScrollEvent,
+  KeyboardAvoidingView,
+  Platform,
+  Keyboard,
 } from "react-native";
 import { supabase } from "../../lib/supabase";
+import DateTimePicker from "@react-native-community/datetimepicker";
+import { KeyboardAwareScrollView } from "react-native-keyboard-aware-scroll-view";
 
 /* =========================
    Shared time/date helpers
@@ -41,6 +47,17 @@ function dayRangeUtc(dateStr) {
 const fmtShort = (d) =>
   new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 
+// Convert "YYYY-MM-DD" to a *local* Date (no time)
+function ymdToLocalDate(ymd) {
+  const [y, m, d] = (ymd || "").split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
+}
+// Tomorrow in UTC, returned as "YYYY-MM-DD"
+function tomorrowUtcYMD() {
+  const t = todayUtcMidnight();
+  const plus1 = new Date(t.getTime() + 24 * 60 * 60 * 1000);
+  return plus1.toISOString().slice(0, 10);
+}
 /* =========================
    Names & standings helpers
    ======================= */
@@ -181,8 +198,7 @@ const BOT_SUFFIX = [
   "Robotics",
 ];
 const randomBotName = () =>
-  `${BOT_PREFIX[Math.floor(Math.random() * BOT_PREFIX.length)]} ${
-    BOT_SUFFIX[Math.floor(Math.random() * BOT_SUFFIX.length)]
+  `${BOT_PREFIX[Math.floor(Math.random() * BOT_PREFIX.length)]} ${BOT_SUFFIX[Math.floor(Math.random() * BOT_SUFFIX.length)]
   }`;
 
 /* =========================
@@ -534,7 +550,7 @@ function UserRecentGamesModal({ visible, onClose, userRow }) {
                 }}
               >
                 <Text style={{ fontSize: 12, color: "#6b7280", textAlign: "center" }}>{s.label}</Text>
-                <Text style={{ fontSize: 18, fontWeight: "800" , color: "#065f46" , textAlign: "center"}}>{s.value}</Text>
+                <Text style={{ fontSize: 18, fontWeight: "800", color: "#065f46", textAlign: "center" }}>{s.value}</Text>
               </View>
             ))}
           </View>
@@ -559,8 +575,8 @@ function UserRecentGamesModal({ visible, onClose, userRow }) {
                   g.is_daily_challenge
                     ? { color: "#a16207" } // gold
                     : g.is_elimination_game
-                    ? { color: "#7c3aed" } // purple
-                    : null,
+                      ? { color: "#7c3aed" } // purple
+                      : null,
                 ];
 
                 return (
@@ -646,43 +662,56 @@ function CreateLeagueModal({
           justifyContent: "center",
         }}
       >
-        <View
-          style={{
-            backgroundColor: "#fff",
-            borderRadius: 12,
-            overflow: "hidden",
-            width: cardMaxWidth,
-            maxHeight: cardMaxHeight,
-          }}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={Platform.OS === "ios" ? 16 : 0}
+          style={{ width: cardMaxWidth, maxHeight: cardMaxHeight }}
         >
-          {/* Header with close */}
           <View
             style={{
-              padding: 14,
-              borderBottomWidth: 1,
-              borderBottomColor: "#e5e7eb",
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "space-between",
+              backgroundColor: "#fff",
+              borderRadius: 12,
+              overflow: "hidden",
+              width: "100%",
+              maxHeight: "100%",
             }}
           >
-            <Text style={{ fontWeight: "800", fontSize: 16 }}>Create a League</Text>
-            <TouchableOpacity onPress={onClose} hitSlop={12}>
-              <Text style={{ fontWeight: "800", fontSize: 18 }}>✕</Text>
-            </TouchableOpacity>
-          </View>
+            {/* Header with close */}
+            <View
+              style={{
+                padding: 14,
+                borderBottomWidth: 1,
+                borderBottomColor: "#e5e7eb",
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <Text style={{ fontWeight: "800", fontSize: 16 }}>Create a League</Text>
+              <TouchableOpacity onPress={onClose} hitSlop={12}>
+                <Text style={{ fontWeight: "800", fontSize: 18 }}>✕</Text>
+              </TouchableOpacity>
+            </View>
 
-          {/* Body (scrollable) */}
-          <ScrollView style={{ paddingHorizontal: 12, paddingVertical: 10 }}>
-            <CreateLeaguePanel
-              canCreateDeps={canCreateDeps}
-              ui={ui}
-              setters={setters}
-              search={search}
-              actions={actions}
-            />
-          </ScrollView>
-        </View>
+            {/* Body (scrollable) */}
+            <KeyboardAwareScrollView
+              style={{ paddingHorizontal: 12, paddingVertical: 0 }}
+              contentContainerStyle={{ paddingBottom: 4 }}
+              keyboardShouldPersistTaps="handled"
+              enableOnAndroid
+              showsVerticalScrollIndicator={true}
+            >
+              <CreateLeaguePanel
+                canCreateDeps={canCreateDeps}
+                ui={ui}
+                setters={setters}
+                search={search}
+                actions={actions}
+              />
+            </KeyboardAwareScrollView>
+          </View>
+        </KeyboardAvoidingView>
+
       </View>
     </Modal>
   );
@@ -695,6 +724,16 @@ export default function LeaguesScreen() {
   const [me, setMe] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await load(false);      // reuse your existing loader
+    } finally {
+      setRefreshing(false);
+    }
+  }, [load]);
   // Create league UI
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -735,8 +774,8 @@ export default function LeaguesScreen() {
   }, []);
 
   // Load leagues where I participate (mirror web page shape)
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (showSpinner = true) => {
+      if (showSpinner) setLoading(true);
     try {
       const {
         data: { user },
@@ -942,8 +981,8 @@ export default function LeaguesScreen() {
     tab === "Active"
       ? classified.Active
       : tab === "Scheduled"
-      ? classified.Scheduled
-      : classified.Ended;
+        ? classified.Scheduled
+        : classified.Ended;
 
   const currentList = useMemo(() => {
     const arr = [...currentListUnsorted];
@@ -1032,7 +1071,17 @@ export default function LeaguesScreen() {
       </View>
 
       {/* MAIN LIST */}
-      <ScrollView contentContainerStyle={{ padding: 12, paddingBottom: 28 }}>
+      <ScrollView
+        contentContainerStyle={{ padding: 12, paddingBottom: 28 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#065f46"         // spinner color iOS
+            colors={["#065f46"]}        // spinner color Android
+          />
+        }
+      >
         {loading ? (
           <View style={{ paddingTop: 48, alignItems: "center" }}>
             <ActivityIndicator size="large" color="#065f46" />
@@ -1129,6 +1178,7 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
   } = setters;
   const { searchEmail, emailResults } = search;
   const { load } = actions;
+  const [showDatePicker, setShowDatePicker] = useState(false);
 
   const addInvite = (u) => {
     if (!u || u.id === me?.id) return;
@@ -1143,7 +1193,9 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
   const totalChosen = 1 + invites.length;
   const totalIfOdd = totalChosen % 2 === 1 ? totalChosen + 1 : totalChosen;
   const withinLimits = totalIfOdd >= 2 && totalIfOdd <= 20;
-  const canCreate = name.trim() && startDate && withinLimits;
+  const hasOtherUser = invites.length >= 1; // creator must invite at least one real user
+  const canCreate = name.trim() && startDate && withinLimits && hasOtherUser;
+
 
   const onCreateLeague = useCallback(async () => {
     if (!me?.id || !canCreate) return;
@@ -1254,13 +1306,15 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
   ]);
 
   return (
-    <Section
-      title="Create a League"
-      right={
-        <Pressable onPress={() => setCreateOpen(false)} hitSlop={8}>
-          <Text style={{ fontWeight: "800" }}>✕</Text>
-        </Pressable>
-      }
+    <View
+      style={{
+        borderWidth: 1,
+        borderColor: "#e5e7eb",
+        borderRadius: 12,
+        backgroundColor: "#fff",
+        padding: 12,
+        marginBottom: 12,
+      }}
     >
       {/* Name */}
       <View style={{ marginBottom: 8 }}>
@@ -1269,6 +1323,10 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
           value={name}
           onChangeText={setName}
           placeholder="e.g., Weekend Legends"
+          maxLength={40}
+          returnKeyType="done"
+          blurOnSubmit
+          onSubmitEditing={() => Keyboard.dismiss()}
           style={{
             borderWidth: 1,
             borderColor: "#e5e7eb",
@@ -1277,6 +1335,11 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
             paddingVertical: 8,
           }}
         />
+        <Text style={{ color: "#6b7280", fontSize: 12, marginTop: 4 }}>
+          Max 40 characters.
+        </Text>
+
+
       </View>
 
       {/* Description */}
@@ -1288,24 +1351,10 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
           value={desc}
           onChangeText={setDesc}
           placeholder="Short description"
-          style={{
-            borderWidth: 1,
-            borderColor: "#e5e7eb",
-            borderRadius: 8,
-            paddingHorizontal: 10,
-            paddingVertical: 8,
-          }}
-        />
-      </View>
-
-      {/* Start date */}
-      <View style={{ marginBottom: 8 }}>
-        <Text style={{ fontWeight: "600", marginBottom: 4 }}>Start Date</Text>
-        <TextInput
-          value={startDate}
-          onChangeText={setStartDate}
-          placeholder="YYYY-MM-DD"
-          autoCapitalize="none"
+          maxLength={140}
+          returnKeyType="done"
+          blurOnSubmit
+          onSubmitEditing={() => Keyboard.dismiss()}
           style={{
             borderWidth: 1,
             borderColor: "#e5e7eb",
@@ -1315,9 +1364,74 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
           }}
         />
         <Text style={{ color: "#6b7280", fontSize: 12, marginTop: 4 }}>
-          Tip: UTC dates; fixtures are one match day per calendar day.
+          Max 140 characters.
+        </Text>
+
+
+      </View>
+
+      {/* Start date */}
+      <View style={{ marginBottom: 8 }}>
+        <Text style={{ fontWeight: "600", marginBottom: 4 }}>Start Date</Text>
+
+        {/* Button-looking field that opens the native date picker */}
+        <Pressable
+          onPress={() => setShowDatePicker(true)}
+          style={{
+            borderWidth: 1,
+            borderColor: "#e5e7eb",
+            borderRadius: 8,
+            paddingHorizontal: 10,
+            paddingVertical: 12,
+            backgroundColor: "#fff",
+          }}
+        >
+          <Text style={{ fontWeight: "700" }}>{startDate}</Text>
+          <Text style={{ color: "#6b7280", fontSize: 12 }}>Tap to choose a date</Text>
+        </Pressable>
+
+        {showDatePicker ? (
+          <View
+            // iOS inline calendar needs space inside modal/scroll
+            style={{
+              alignSelf: "stretch",
+              marginTop: 8,
+              height: Platform.OS === "ios" ? 340 : undefined
+            }}
+          >
+            <DateTimePicker
+              value={ymdToLocalDate(startDate)}                 // LOCAL date in
+              mode="date"
+              display={Platform.OS === "ios" ? "inline" : "default"}
+              onChange={(evt, picked) => {
+                if (!picked) return; // canceled
+                // close immediately after choosing a date
+                setShowDatePicker(false);
+
+                // Normalize picked LOCAL date to UTC Y-M-D
+                const y = picked.getFullYear();
+                const m = picked.getMonth();
+                const d = picked.getDate();
+                const chosenUtc = new Date(Date.UTC(y, m, d));
+
+                // clamp to tomorrow (UTC)
+                const minUtc = toUtcMidnight(tomorrowUtcYMD());
+                const finalUtc = chosenUtc < minUtc ? minUtc : chosenUtc;
+
+                setStartDate(finalUtc.toISOString().slice(0, 10));
+              }}
+
+              minimumDate={ymdToLocalDate(tomorrowUtcYMD())}    // show min in LOCAL
+              style={{ flex: 1 }}                                // let it fill the 340
+            />
+          </View>
+        ) : null}
+
+        <Text style={{ color: "#6b7280", fontSize: 12, marginTop: 4 }}>
+          Leagues can only start from tomorrow (UTC) onwards.
         </Text>
       </View>
+
 
       {/* Invite by email */}
       <View style={{ marginBottom: 8 }}>
@@ -1329,6 +1443,9 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
           onChangeText={setSearchEmail}
           placeholder="Type at least 2 characters"
           autoCapitalize="none"
+          returnKeyType="done"
+          blurOnSubmit
+          onSubmitEditing={() => Keyboard.dismiss()}
           style={{
             borderWidth: 1,
             borderColor: "#e5e7eb",
@@ -1337,6 +1454,7 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
             paddingVertical: 8,
           }}
         />
+
         {!!emailResults.length && (
           <View
             style={{
@@ -1394,6 +1512,15 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
             ))}
           </View>
         )}
+        {/* Participants count (includes creator) */}
+        <View style={{ marginTop: 8 }}>
+          <Text style={{ fontSize: 12, color: "#374151" }}>
+            Total participants (including you): {1 + invites.length}
+            {((1 + invites.length) % 2 === 1) ? " — odd number: a bot will be added automatically." : ""}
+          </Text>
+        </View>
+
+
       </View>
 
       {/* Create */}
@@ -1421,7 +1548,7 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
           </Text>
         </Pressable>
       </View>
-    </Section>
+    </View>
   );
 }
 
@@ -1460,9 +1587,9 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
       ? "Scheduled"
       : matches[matches.length - 1] &&
         toUtcMidnight(matches[matches.length - 1].match_date) <
-          todayUtcMidnight()
-      ? "Ended"
-      : "Live";
+        todayUtcMidnight()
+        ? "Ended"
+        : "Live";
 
   function scoreColor(isHome, H, A) {
     if (H === A) return "#6b7280"; // draw gray
@@ -1473,6 +1600,9 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
   // --- Swipe tabs (Table | Fixtures) ---
   const [subTab, setSubTab] = useState(0); // 0=Table, 1=Fixtures
   const scroller = useRef(null);
+  // Measure page heights so the card matches the active tab's content height
+  const [tableH, setTableH] = useState(0);
+  const [fixturesH, setFixturesH] = useState(0);
   const [cardWidth, setCardWidth] = useState(0);
   const screenPad = 24; // page width ~= screen - page padding
   const pageWidth =
@@ -1509,6 +1639,12 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
   // Replaced avatar-only column with a fixed player column for avatar+name
   const PLAYER_COL_W = 100;
 
+  // row height sync between frozen (POS+PLAYER) and scrollable pane
+  const [rowHeights, setRowHeights] = useState({});
+  const setRowH = useCallback((pid, h) => {
+    setRowHeights((prev) => (prev[pid] === h ? prev : { ...prev, [pid]: h }));
+  }, []);
+
   return (
     <View
       style={{
@@ -1530,7 +1666,7 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
           justifyContent: "space-between",
           paddingHorizontal: 12,
           paddingVertical: 10,
-          backgroundColor: "#dcfce7",
+          backgroundColor: "#fff",
           borderBottomWidth: 1,
           borderBottomColor: "#e5e7eb",
         }}
@@ -1538,12 +1674,11 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
         <View style={{ flex: 1, paddingRight: 8, gap: 2 }}>
           <Text
             style={{ fontWeight: "900", fontSize: 16, color: "#065f46" }}
-            numberOfLines={1}
           >
             {league.name}
           </Text>
           {!!league.description && (
-            <Text style={{ color: "#065f46", opacity: 0.8 }} numberOfLines={1}>
+            <Text style={{ color: "#065f46", opacity: 0.8 }} >
               {league.description}
             </Text>
           )}
@@ -1559,11 +1694,11 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
             const nextInfo =
               future.length > 0
                 ? {
-                    match_day: future[0].match_day,
-                    match_date: future[0].match_date,
-                    home: participantsById.get(future[0].home_participant_id),
-                    away: participantsById.get(future[0].away_participant_id),
-                  }
+                  match_day: future[0].match_day,
+                  match_date: future[0].match_date,
+                  home: participantsById.get(future[0].home_participant_id),
+                  away: participantsById.get(future[0].away_participant_id),
+                }
                 : null;
             return nextInfo ? (
               <View style={{ marginTop: 6, alignItems: "flex-end", gap: 6 }}>
@@ -1588,9 +1723,7 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
               </View>
             ) : null;
           })()}
-          <Text style={{ marginTop: 6, color: "#065f46", opacity: 0.8, fontSize: 11 }}>
-            {expanded ? "Tap to collapse" : "Tap to expand"}
-          </Text>
+
         </View>
       </TouchableOpacity>
 
@@ -1605,7 +1738,7 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                 justifyContent: "space-between",
               }}
             >
-              <View style={{ flexDirection: "row", gap: 6 }}>
+              <View style={{ flexDirection: "row", gap: 20 }}>
                 {["Table", "Fixtures & Results"].map((label, idx) => (
                   <Pressable
                     key={label}
@@ -1632,24 +1765,14 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                   </Pressable>
                 ))}
               </View>
-              <Text style={{ color: "#6b7280", fontSize: 12 }}>Swipe ↔</Text>
+              <Text style={{ color: "#6b7280", fontSize: 12 }}>↔</Text>
             </View>
           </View>
 
-          {/* Pager */}
-          <ScrollView
-            ref={scroller}
-            horizontal
-            pagingEnabled
-            showsHorizontalScrollIndicator={false}
-            onScroll={onScroll}
-            scrollEventThrottle={16}
-            style={{ marginTop: 8 }}
-          >
-            {/* PAGE 1: TABLE */}
-            <View style={{ width: pageWidth, paddingHorizontal: 12, paddingBottom: 12 }}>
-              {/* removed the duplicate "Table" title per request */}
-
+          {/* TAB BODY — render only the active tab so the card height matches its content */}
+          {subTab === 0 ? (
+            /* ---------- TABLE ---------- */
+            <View style={{ marginTop: 8, paddingHorizontal: 12, paddingBottom: 12 }}>
               <View
                 style={{
                   borderWidth: 1,
@@ -1658,208 +1781,235 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                   overflow: "hidden",
                 }}
               >
-                {/* header row (auto-fit) */}
-                <View
-                  style={{
-                    flexDirection: "row",
-                    backgroundColor: "#f9fafb",
-                    paddingVertical: 6,
-                    alignItems: "center",
-                  }}
-                >
-                  {/* POS */}
-                  <View
-                    style={{
-                      width: Math.max(colW.pos + padW, 40),
-                      alignItems: "center",
-                      paddingHorizontal: 6,
-                    }}
-                  >
-                    <Text
-                      onLayout={(e) => updateCol("pos", e.nativeEvent.layout.width)}
-                      style={{ fontWeight: "700", color: "#6b7280" }}
-                    >
-                      POS
-                    </Text>
-                  </View>
-
-                  {/* PLAYER (avatar + name, truncated) */}
-                  <View
-                    style={{
-                      width: PLAYER_COL_W,
-                      paddingHorizontal: 4,
-                      alignItems: "flex-start",
-                    }}
-                  >
-                    <Text style={{ fontWeight: "700", color: "#6b7280" }}>PLAYER</Text>
-                  </View>
-
-                  {/* P */}
-                  <View
-                    style={{
-                      width: Math.max(colW.p + padW, 36),
-                      alignItems: "center",
-                      paddingHorizontal: 6,
-                    }}
-                  >
-                    <Text
-                      onLayout={(e) => updateCol("p", e.nativeEvent.layout.width)}
-                      style={{ fontWeight: "700", color: "#6b7280" }}
-                    >
-                      P
-                    </Text>
-                  </View>
-
-                  {/* GD */}
-                  <View
-                    style={{
-                      width: Math.max(colW.gd + padW, 60),
-                      alignItems: "center",
-                      paddingHorizontal: 6,
-                      flexShrink: 0,
-                    }}
-                  >
-                    <Text
-                      onLayout={(e) => updateCol("gd", e.nativeEvent.layout.width)}
-                      style={{ fontWeight: "700", color: "#6b7280" }}
-                    >
-                      GD
-                    </Text>
-                  </View>
-
-                  {/* PTS */}
-                  <View
-                    style={{
-                      width: Math.max(colW.pts + padW, 50),
-                      alignItems: "center",
-                      paddingHorizontal: 8,
-                    }}
-                  >
-                    <Text
-                      onLayout={(e) => updateCol("pts", e.nativeEvent.layout.width)}
-                      style={{ fontWeight: "700", color: "#6b7280" }}
-                    >
-                      PTS
-                    </Text>
-                  </View>
-                </View>
-
-                {standings.map((s, i) => (
-                  <View
-                    key={s.pid}
-                    style={{
-                      flexDirection: "row",
-                      paddingVertical: 8,
-                      borderTopWidth: 1,
-                      borderTopColor: "#f3f4f6",
-                      alignItems: "center",
-                    }}
-                  >
-                    {/* POS */}
+                {/* Two-pane layout: LEFT = frozen POS + Player, RIGHT = horizontal scrollable stats */}
+                <View style={{ flexDirection: "row", width: "100%" }}>
+                  {/* LEFT (frozen) — POS + Player */}
+                  <View style={{ flexDirection: "row", backgroundColor: "#fff" }}>
+                    {/* POS (frozen) */}
                     <View
                       style={{
-                        width: Math.max(colW.pos + padW, 40),
-                        alignItems: "center",
-                        paddingHorizontal: 6,
+                        width: 56,
+                        borderRightWidth: 1,
+                        borderRightColor: "#e5e7eb",
                       }}
                     >
-                      <Text
-                        onLayout={(e) =>
-                          updateCol("pos", e.nativeEvent.layout.width)
-                        }
+                      {/* POS header */}
+                      <View
+                        style={{
+                          backgroundColor: "#f9fafb",
+                          paddingVertical: 6,
+                          paddingHorizontal: 6,
+                          borderBottomWidth: 1,
+                          borderBottomColor: "#e5e7eb",
+                          alignItems: "center",
+                        }}
                       >
-                        {i + 1}
-                      </Text>
+                        <Text style={{ fontWeight: "700", color: "#6b7280" }}>POS</Text>
+                      </View>
+
+                      {/* POS rows */}
+                      {standings.map((s, i) => (
+                        <View
+                          key={`pos-${s.pid}`}
+                          style={{
+                            height: rowHeights[s.pid] ?? undefined,
+                            paddingHorizontal: 6,
+                            borderTopWidth: 1,
+                            borderTopColor: "#f3f4f6",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          <Text style={{ fontVariant: ["tabular-nums"] }}>{i + 1}</Text>
+                        </View>
+                      ))}
                     </View>
 
-                    {/* PLAYER avatar + truncated name */}
+                    {/* Player (frozen) */}
                     <View
                       style={{
-                        width: PLAYER_COL_W,
-                        paddingHorizontal: 4,
+                        minWidth: 140,
+                        flexShrink: 1,
+                        borderRightWidth: 1,
+                        borderRightColor: "#e5e7eb",
                       }}
                     >
+                      {/* Player header */}
+                      <View
+                        style={{
+                          backgroundColor: "#f9fafb",
+                          paddingVertical: 6,
+                          paddingHorizontal: 8,
+                          borderBottomWidth: 1,
+                          borderBottomColor: "#e5e7eb",
+                        }}
+                      >
+                        <Text style={{ fontWeight: "700", color: "#6b7280" }}>PLAYER</Text>
+                      </View>
+
+                      {/* Player rows (avatar + FULL name, no ellipsis) */}
+                      {standings.map((s) => {
+                        const rowP = participantsById.get(s.pid);
+                        return (
+                          <View
+                            key={`player-${s.pid}`}
+                            onLayout={(e) => setRowH(s.pid, e.nativeEvent.layout.height)}
+                            style={{
+                              paddingVertical: 8,
+                              paddingHorizontal: 8,
+                              borderTopWidth: 1,
+                              borderTopColor: "#f3f4f6",
+                            }}
+                          >
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                              <Avatar participant={rowP} size={26} onPress={() => onAvatarPress(rowP)} />
+                              <Text style={{ flexShrink: 1, flexGrow: 1, flexWrap: "wrap" }}>
+                                {rowP?.user?.full_name || rowP?.display_name || "—"}
+                              </Text>
+                            </View>
+                          </View>
+                        );
+                      })}
+                    </View>
+                  </View>
+
+                  {/* RIGHT (scrollable) — P, PTS, GD (PTS right after P) */}
+                  <ScrollView
+                    horizontal
+                    bounces
+                    showsHorizontalScrollIndicator
+                    contentContainerStyle={{ backgroundColor: "#fff" }}
+                  >
+                    <View>
+                      {/* header row */}
                       <View
                         style={{
                           flexDirection: "row",
+                          backgroundColor: "#f9fafb",
+                          paddingVertical: 6,
                           alignItems: "center",
-                          gap: 6,
+                          borderBottomWidth: 1,
+                          borderBottomColor: "#e5e7eb",
                         }}
                       >
-                        <Avatar
-                          participant={participantsById.get(s.pid)}
-                          size={26}
-                          onPress={() => onAvatarPress(participantsById.get(s.pid))}
-                        />
-                        <Text
-                          numberOfLines={1}
-                          ellipsizeMode="tail"
-                          style={{ flexShrink: 1, maxWidth: PLAYER_COL_W - 36 /* avatar+gap */ }}
+                        {/* P */}
+                        <View
+                          style={{
+                            width: Math.max(colW.p + padW, 56),
+                            alignItems: "center",
+                            paddingHorizontal: 6,
+                          }}
                         >
-                          {participantsById.get(s.pid)?.user?.full_name ||
-                            participantsById.get(s.pid)?.display_name ||
-                            "—"}
-                        </Text>
+                          <Text
+                            onLayout={(e) => updateCol("p", e.nativeEvent.layout.width)}
+                            style={{ fontWeight: "700", color: "#6b7280" }}
+                          >
+                            P
+                          </Text>
+                        </View>
+
+                        {/* PTS — RIGHT AFTER P */}
+                        <View
+                          style={{
+                            width: Math.max(colW.pts + padW, 64),
+                            alignItems: "center",
+                            paddingHorizontal: 8,
+                          }}
+                        >
+                          <Text
+                            onLayout={(e) => updateCol("pts", e.nativeEvent.layout.width)}
+                            style={{ fontWeight: "700", color: "#6b7280" }}
+                          >
+                            PTS
+                          </Text>
+                        </View>
+
+                        {/* GD */}
+                        <View
+                          style={{
+                            width: Math.max(colW.gd + padW, 70),
+                            alignItems: "center",
+                            paddingHorizontal: 6,
+                          }}
+                        >
+                          <Text
+                            onLayout={(e) => updateCol("gd", e.nativeEvent.layout.width)}
+                            style={{ fontWeight: "700", color: "#6b7280" }}
+                          >
+                            GD
+                          </Text>
+                        </View>
                       </View>
-                    </View>
 
-                    {/* P */}
-                    <View
-                      style={{
-                        width: Math.max(colW.p + padW, 36),
-                        alignItems: "center",
-                        paddingHorizontal: 6,
-                      }}
-                    >
-                      <Text
-                        onLayout={(e) => updateCol("p", e.nativeEvent.layout.width)}
-                        style={{ fontVariant: ["tabular-nums"] }}
-                      >
-                        {s.P}
-                      </Text>
-                    </View>
+                      {/* data rows */}
+                      {standings.map((s) => (
+                        <View
+                          key={`scroll-${s.pid}`}
+                          style={{
+                            flexDirection: "row",
+                            height: rowHeights[s.pid] ?? undefined,
+                            borderTopWidth: 1,
+                            borderTopColor: "#f3f4f6",
+                            alignItems: "center",
+                          }}
+                        >
+                          {/* P */}
+                          <View
+                            style={{
+                              width: Math.max(colW.p + padW, 56),
+                              alignItems: "center",
+                              paddingHorizontal: 6,
+                            }}
+                          >
+                            <Text
+                              onLayout={(e) => updateCol("p", e.nativeEvent.layout.width)}
+                              style={{ fontVariant: ["tabular-nums"] }}
+                            >
+                              {s.P}
+                            </Text>
+                          </View>
 
-                    {/* GD */}
-                    <View
-                      style={{
-                        width: Math.max(colW.gd + padW, 60),
-                        alignItems: "center",
-                        paddingHorizontal: 6,
-                      }}
-                    >
-                      <Text
-                        onLayout={(e) => updateCol("gd", e.nativeEvent.layout.width)}
-                        style={{ fontVariant: ["tabular-nums"] }}
-                        numberOfLines={1}
-                      >
-                        {s.GD.toLocaleString()}
-                      </Text>
-                    </View>
+                          {/* PTS */}
+                          <View
+                            style={{
+                              width: Math.max(colW.pts + padW, 64),
+                              alignItems: "center",
+                              paddingHorizontal: 8,
+                            }}
+                          >
+                            <Text
+                              onLayout={(e) => updateCol("pts", e.nativeEvent.layout.width)}
+                              style={{ fontWeight: "800", fontVariant: ["tabular-nums"] }}
+                            >
+                              {s.PTS}
+                            </Text>
+                          </View>
 
-                    {/* PTS */}
-                    <View
-                      style={{
-                        width: Math.max(colW.pts + padW, 50),
-                        alignItems: "center",
-                        paddingHorizontal: 8,
-                      }}
-                    >
-                      <Text
-                        onLayout={(e) => updateCol("pts", e.nativeEvent.layout.width)}
-                        style={{ fontWeight: "800", fontVariant: ["tabular-nums"] }}
-                      >
-                        {s.PTS}
-                      </Text>
+                          {/* GD */}
+                          <View
+                            style={{
+                              width: Math.max(colW.gd + padW, 70),
+                              alignItems: "center",
+                              paddingHorizontal: 6,
+                            }}
+                          >
+                            <Text
+                              onLayout={(e) => updateCol("gd", e.nativeEvent.layout.width)}
+                              style={{ fontVariant: ["tabular-nums"] }}
+                            >
+                              {s.GD.toLocaleString()}
+                            </Text>
+                          </View>
+                        </View>
+                      ))}
                     </View>
-                  </View>
-                ))}
+                  </ScrollView>
+                </View>
               </View>
             </View>
-
-            {/* PAGE 2: FIXTURES & RESULTS (grouped by Match Day) */}
-            <View style={{ width: pageWidth, paddingHorizontal: 12, paddingBottom: 12 }}>
-              {/* removed the duplicate "Fixtures & Results" title per request */}
-
+          ) : (
+            /* ---------- FIXTURES & RESULTS ---------- */
+            <View style={{ marginTop: 8, paddingHorizontal: 12, paddingBottom: 12 }}>
               {matchesByDay.map((group) => (
                 <View
                   key={`md-${group.match_day}`}
@@ -1883,9 +2033,7 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                       justifyContent: "space-between",
                     }}
                   >
-                    <Text style={{ fontWeight: "800" }}>
-                      Match Day {group.match_day}
-                    </Text>
+                    <Text style={{ fontWeight: "800" }}>Match Day {group.match_day}</Text>
                     <Text style={{ color: "#6b7280", fontSize: 12 }}>
                       {fmtShort(group.date)}
                     </Text>
@@ -1904,7 +2052,9 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                 </View>
               ))}
             </View>
-          </ScrollView>
+          )}
+
+
         </>
       )}
     </View>
@@ -1958,17 +2108,17 @@ function ResultRow({
 
         {/* right: score + subline */}
         {/* right: score (without day/date subline) */}
-<View style={{ minWidth: 110, alignItems: "flex-end" }}>
-  {isFuture ? (
-    <Text style={{ color: "#6b7280", fontWeight: "600" }}>Scheduled</Text>
-  ) : (
-    <Text style={{ fontWeight: "900" }}>
-      <Text style={{ color: scoreColor(true, H, A) }}>{H}</Text>
-      <Text style={{ color: "#9ca3af" }}> — </Text>
-      <Text style={{ color: scoreColor(false, H, A) }}>{A}</Text>
-    </Text>
-  )}
-</View>
+        <View style={{ minWidth: 110, alignItems: "flex-end" }}>
+          {isFuture ? (
+            <Text style={{ color: "#6b7280", fontWeight: "600" }}>Scheduled</Text>
+          ) : (
+            <Text style={{ fontWeight: "900" }}>
+              <Text style={{ color: scoreColor(true, H, A) }}>{H}</Text>
+              <Text style={{ color: "#9ca3af" }}> — </Text>
+              <Text style={{ color: scoreColor(false, H, A) }}>{A}</Text>
+            </Text>
+          )}
+        </View>
 
       </Pressable>
 

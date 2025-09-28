@@ -1,5 +1,5 @@
 // mobile/app/tutorial.js
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
 import {
   View,
   Text,
@@ -27,6 +27,178 @@ import { getCounts } from "../lib/api";
 const BG = "#F0FDF4";
 const SCREEN = Dimensions.get("window");
 const SLIDE_WIDTH = SCREEN.width;
+
+// Hoisted so they keep identity across renders:
+export const SlideContainer = memo(function SlideContainer({ children, width }) {
+  return (
+    <View style={{ width, paddingHorizontal: 18, paddingTop: 6 }}>
+      <View
+        style={{
+          backgroundColor: "white",
+          borderRadius: 16,
+          padding: 16,
+          borderWidth: 1,
+          borderColor: "#DEF7EC",
+        }}
+      >
+        {children}
+      </View>
+    </View>
+  );
+});
+
+export const Header = memo(function Header() {
+  return (
+    <View
+      style={{
+        width: "100%",
+        paddingHorizontal: 16,
+        paddingTop: 12,
+        paddingBottom: 2,
+        flexDirection: "row",
+        justifyContent: "space-between",
+        alignItems: "center",
+        backgroundColor: "#F0FDF4",
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <Image
+          source={require("../assets/images/footytrail_logo.png")}
+          style={{ width: 36, height: 36, borderRadius: 8 }}
+          resizeMode="contain"
+        />
+        <Text style={{ fontSize: 18, fontWeight: "700", color: "#065f46" }}>FootyTrail</Text>
+      </View>
+      <View style={{ width: 48 }} />
+    </View>
+  );
+});
+
+export const Footer = memo(function Footer({ index, goTo, finish }) {
+  return (
+    <View style={{ width: "100%", padding: 16, gap: 10 }}>
+      <View style={{ flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 8 }}>
+        {new Array(8).fill(0).map((_, i) => (
+          <View
+            key={i}
+            style={{
+              width: index === i ? 18 : 8,
+              height: 8,
+              borderRadius: 8,
+              backgroundColor: index === i ? "#10B981" : "#A7F3D0",
+            }}
+          />
+        ))}
+      </View>
+
+      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+        <TouchableOpacity
+          onPress={() => goTo(Math.max(index - 1, 0))}
+          disabled={index === 0}
+          style={{
+            opacity: index === 0 ? 0.4 : 1,
+            backgroundColor: "white",
+            borderWidth: 1,
+            borderColor: "#D1FAE5",
+            paddingVertical: 12,
+            paddingHorizontal: 18,
+            borderRadius: 12,
+          }}
+        >
+          <Text style={{ color: "#064E3B", fontWeight: "700" }}>Back</Text>
+        </TouchableOpacity>
+
+        {index < 7 ? (
+          <TouchableOpacity
+            onPress={() => goTo(index + 1)}
+            style={{
+              backgroundColor: "#059669",
+              paddingVertical: 12,
+              paddingHorizontal: 20,
+              borderRadius: 12,
+            }}
+          >
+            <Text style={{ color: "white", fontWeight: "800" }}>Continue</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            onPress={finish}
+            style={{
+              backgroundColor: "#2563EB",
+              paddingVertical: 12,
+              paddingHorizontal: 20,
+              borderRadius: 12,
+            }}
+          >
+            <Text style={{ color: "white", fontWeight: "800" }}>Finish</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    </View>
+  );
+});
+
+export const Chip = memo(function Chip({ children, onPress, selected = false, variant = "solid", style }) {
+  const solid = variant === "solid";
+  return (
+    <Pressable
+      onPress={onPress}
+      style={[
+        styles.chip,
+        selected
+          ? { backgroundColor: "#14532d", borderColor: "#14532d" }
+          : solid
+            ? { backgroundColor: "#fff", borderColor: "#d1d5db" }
+            : { backgroundColor: "transparent", borderColor: "#d1d5db" },
+        style,
+      ]}
+    >
+      <Text style={{ color: selected ? "#fff" : "#111827", fontSize: 12, fontWeight: "700" }}>
+        {children}
+      </Text>
+    </Pressable>
+  );
+});
+
+export const CompetitionRow = memo(function CompetitionRow({ comp, selected, onToggle }) {
+  return (
+    <Pressable onPress={() => onToggle(String(comp.competition_id))} style={styles.compRow}>
+      {comp.flag_url ? (
+        <Image source={{ uri: comp.flag_url }} style={styles.flag} />
+      ) : (
+        <View style={[styles.flag, { backgroundColor: "#e5e7eb" }]} />
+      )}
+      {comp.logo_url ? (
+        <Image source={{ uri: comp.logo_url }} style={styles.logo} />
+      ) : (
+        <View style={[styles.logo, { backgroundColor: "#eef2f7" }]} />
+      )}
+      <View style={{ flex: 1 }}>
+        <Text style={{ fontWeight: "700", color: "#0b3d24" }} numberOfLines={1}>
+          {comp.competition_name}
+        </Text>
+        <Text style={{ fontSize: 12, color: "#6b7280" }} numberOfLines={1}>
+          {comp.country}
+        </Text>
+      </View>
+      <Ionicons
+        name={selected ? "checkbox" : "square-outline"}
+        size={20}
+        color={selected ? "#14532d" : "#9ca3af"}
+      />
+    </Pressable>
+  );
+});
+
+export const NotifRow = memo(function NotifRow({ title, value, onValueChange }) {
+  return (
+    <View style={styles.notifRow}>
+      <Text style={styles.notifLabel}>{title}</Text>
+      {/* Switch is already imported in the file */}
+      <Switch value={value} onValueChange={onValueChange} />
+    </View>
+  );
+});
 
 export default function TutorialScreen() {
   const router = useRouter();
@@ -134,7 +306,11 @@ export default function TutorialScreen() {
       let payload = await fetchFromWebAPI();
       if (!payload) payload = await fetchFromSupabaseFallback();
       setAllCompetitions(payload.flatCompetitions || []);
-      setAllSeasons(payload.seasons || []);
+      const cleanedSeasonsFromWeb = (payload.seasons || [])
+        .map(String)
+        .filter((s) => s && s !== "null" && /^\d{4}$/.test(s));
+      setAllSeasons(cleanedSeasonsFromWeb);
+
 
       setSlidesReady(true);
     })();
@@ -197,7 +373,8 @@ export default function TutorialScreen() {
     });
 
     const seasons = Array.from(set)
-      .filter(Boolean)
+      .map(String)
+      .filter((s) => s && s !== "null" && /^\d{4}$/.test(s))
       .sort((a, b) => Number(b) - Number(a));
 
     return {
@@ -494,111 +671,6 @@ export default function TutorialScreen() {
     persistNotifs(next);
   };
 
-  // HEADER — Skip removed
-  const Header = () => (
-    <View
-      style={{
-        width: "100%",
-        paddingHorizontal: 16,
-        paddingTop: 12,
-        paddingBottom: 2,
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-      }}
-    >
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-        <Image
-          source={require("../assets/images/footytrail_logo.png")}
-          style={{ width: 36, height: 36, borderRadius: 8 }}
-          resizeMode="contain"
-        />
-        <Text style={{ fontSize: 18, fontWeight: "700", color: "#065f46" }}>FootyTrail</Text>
-      </View>
-
-      {/* spacer keeps layout even without Skip */}
-      <View style={{ width: 48 }} />
-    </View>
-  );
-
-  const Footer = () => (
-    <View style={{ width: "100%", padding: 16, gap: 10 }}>
-      <View style={{ flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 8 }}>
-        {new Array(9).fill(0).map((_, i) => ( // ⬅️ updated to 9 slides
-          <View
-            key={i}
-            style={{
-              width: index === i ? 18 : 8,
-              height: 8,
-              borderRadius: 8,
-              backgroundColor: index === i ? "#10B981" : "#A7F3D0",
-            }}
-          />
-        ))}
-      </View>
-
-      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-        <TouchableOpacity
-          onPress={() => goTo(Math.max(index - 1, 0))}
-          disabled={index === 0}
-          style={{
-            opacity: index === 0 ? 0.4 : 1,
-            backgroundColor: "white",
-            borderWidth: 1,
-            borderColor: "#D1FAE5",
-            paddingVertical: 12,
-            paddingHorizontal: 18,
-            borderRadius: 12,
-          }}
-        >
-          <Text style={{ color: "#064E3B", fontWeight: "700" }}>Back</Text>
-        </TouchableOpacity>
-
-        {index < 8 ? ( // ⬅️ last slide index = 8
-          <TouchableOpacity
-            onPress={() => goTo(index + 1)}
-            style={{
-              backgroundColor: "#059669",
-              paddingVertical: 12,
-              paddingHorizontal: 20,
-              borderRadius: 12,
-            }}
-          >
-            <Text style={{ color: "white", fontWeight: "800" }}>Continue</Text>
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            onPress={finish}
-            style={{
-              backgroundColor: "#2563EB",
-              paddingVertical: 12,
-              paddingHorizontal: 20,
-              borderRadius: 12,
-            }}
-          >
-            <Text style={{ color: "white", fontWeight: "800" }}>Finish</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-    </View>
-  );
-
-  const SlideContainer = ({ children }) => (
-    <View style={{ width: SLIDE_WIDTH, paddingHorizontal: 18, paddingTop: 6 }}>
-      <View
-        style={{
-          backgroundColor: "white",
-          borderRadius: 16,
-          padding: 16,
-          borderWidth: 1,
-          borderColor: "#DEF7EC",
-        }}
-      >
-        {children}
-      </View>
-    </View>
-  );
-
   if (!slidesReady) {
     return (
       <SafeAreaView
@@ -625,7 +697,7 @@ export default function TutorialScreen() {
         contentContainerStyle={{ alignItems: "flex-start" }}
       >
         {/* 1) Welcome */}
-        <SlideContainer>
+        <SlideContainer width={SLIDE_WIDTH}>
           <Text style={styles.h1}>Welcome! 🌟</Text>
           <Text style={styles.p}>
             FootyTrail is your daily football guessing adventure. Earn points by identifying players
@@ -642,7 +714,7 @@ export default function TutorialScreen() {
         </SlideContainer>
 
         {/* 2) Live Game */}
-        <SlideContainer>
+        <SlideContainer width={SLIDE_WIDTH}>
           <Text style={styles.h1}>Live Game ⚡</Text>
           <Text style={styles.p}>
             Guess the player by his transfer history. Fewer hints used = more points. Tap hints
@@ -672,7 +744,7 @@ export default function TutorialScreen() {
         </SlideContainer>
 
         {/* 3) Daily Progress */}
-        <SlideContainer>
+        <SlideContainer width={SLIDE_WIDTH}>
           <Text style={styles.h1}>Daily Progress 📆</Text>
           <Text style={styles.p}>
             Your main screen shows how many games you’ve played today, and how many points you’ve
@@ -696,7 +768,7 @@ export default function TutorialScreen() {
         </SlideContainer>
 
         {/* 4) Daily Challenge */}
-        <SlideContainer>
+        <SlideContainer width={SLIDE_WIDTH}>
           <Text style={styles.h1}>Daily Challenge 🔥</Text>
           <Text style={styles.p}>
             One special puzzle per day. Same high caliber player from the top 10 leagues for all
@@ -713,7 +785,8 @@ export default function TutorialScreen() {
         </SlideContainer>
 
         {/* 5) Elimination Challenges */}
-        <SlideContainer>
+        <SlideContainer width={SLIDE_WIDTH}>
+          <ScrollView>
           <Text style={styles.h1}>Elimination Challenges 🪓</Text>
           <Text style={styles.p}>
             Stake points, survive round by round, and avoid being the lowest scorer when elimination
@@ -725,13 +798,14 @@ export default function TutorialScreen() {
             resizeMode="cover"
             style={{ width: "100%", height: 380, borderRadius: 12, marginTop: 12 }}
           />
+          </ScrollView>
         </SlideContainer>
 
         {/* 6) Leagues */}
-        <SlideContainer>
+        <SlideContainer width={SLIDE_WIDTH}>
           <Text style={styles.h1}>Leagues 🏆</Text>
           <Text style={styles.p}>
-            Create or join leagues with friends and track head-to-head results. Your daily points are your match days scores! 
+            Create or join leagues with friends and track head-to-head results. Your daily points are your match days scores!
             Your avatar = your identity, bragging rights = priceless.
           </Text>
 
@@ -743,123 +817,128 @@ export default function TutorialScreen() {
         </SlideContainer>
 
         {/* 7) User Details (username + avatar) */}
-        <SlideContainer>
-          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
-            <Text style={styles.h1}>Set Your Details 👤</Text>
+        <SlideContainer width={SLIDE_WIDTH}>
+          <ScrollView>
+            <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
+              <Text style={styles.h1}>Set Your Profile 👤</Text>
 
-            <Text style={[styles.p, { fontSize: 12, marginBottom: 10 }]}>
-              Pick a display name and avatar. You can always change these later in Settings.
+              <Text style={[styles.p, { fontSize: 12, marginBottom: 10 }]}>
+                Pick a display name and avatar. You can always change these later in Settings.
+              </Text>
+
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 14 }}>
+                <View
+                  style={{
+                    width: 64,
+                    height: 64,
+                    borderRadius: 32,
+                    overflow: "hidden",
+                    backgroundColor: "#ECFDF5",
+                    borderWidth: 1,
+                    borderColor: "#D1FAE5",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  {avatarUrl ? (
+                    <Image source={{ uri: avatarUrl }} style={{ width: "100%", height: "100%" }} />
+                  ) : (
+                    <Text style={{ color: "#34D399", fontWeight: "700" }}>🙂</Text>
+                  )}
+                </View>
+                <TouchableOpacity
+                  onPress={uploadAvatarFromLibrary}
+                  disabled={uploading}
+                  style={{
+                    backgroundColor: "white",
+                    borderWidth: 1,
+                    borderColor: "#D1FAE5",
+                    paddingVertical: 10,
+                    paddingHorizontal: 14,
+                    borderRadius: 12,
+                    opacity: uploading ? 0.6 : 1,
+                  }}
+                >
+                  <Text style={{ color: "#065F46", fontWeight: "700" }}>
+                    {uploading ? "Uploading…" : "Choose Avatar"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <Text style={{ fontSize: 12, color: "#065f46", marginBottom: 6 }}>Display Name</Text>
+              <TextInput
+                value={displayName}
+                onChangeText={setDisplayName}
+                placeholder="Your name"
+                autoCapitalize="words"
+                style={styles.input}
+                onBlur={async () => {
+                  try {
+                    await saveProfileSilent();
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+              />
+            </KeyboardAvoidingView>
+
+            {/* Notifications (merged into Set Your Details) */}
+            <View style={{ height: 12 }} />
+            <Text style={styles.h1}>Notifications 🔔</Text>
+            <Text style={[styles.p, { marginBottom: 10 }]}>
+              Gentle nudges to keep your streaks alive and heads-up when you’re invited to elimination challenges. 
+              You can tweak these anytime in Settings.
             </Text>
 
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 14 }}>
-              <View
-                style={{
-                  width: 64,
-                  height: 64,
-                  borderRadius: 32,
-                  overflow: "hidden",
-                  backgroundColor: "#ECFDF5",
-                  borderWidth: 1,
-                  borderColor: "#D1FAE5",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                {avatarUrl ? (
-                  <Image source={{ uri: avatarUrl }} style={{ width: "100%", height: "100%" }} />
-                ) : (
-                  <Text style={{ color: "#34D399", fontWeight: "700" }}>🙂</Text>
-                )}
-              </View>
-              <TouchableOpacity
-                onPress={uploadAvatarFromLibrary}
-                disabled={uploading}
-                style={{
-                  backgroundColor: "white",
-                  borderWidth: 1,
-                  borderColor: "#D1FAE5",
-                  paddingVertical: 10,
-                  paddingHorizontal: 14,
-                  borderRadius: 12,
-                  opacity: uploading ? 0.6 : 1,
-                }}
-              >
-                <Text style={{ color: "#065F46", fontWeight: "700" }}>
-                  {uploading ? "Uploading…" : "Choose Avatar"}
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Notification Preferences</Text>
+
+              <NotifRow
+                title="All notifications"
+                value={notifs.notifications_all}
+                onValueChange={onToggleAll}
+              />
+
+              <View style={styles.divider} />
+
+              <NotifRow
+                title="Daily challenge reminders"
+                value={notifs.notify_daily_challenge}
+                onValueChange={(v) => onToggleOne("notify_daily_challenge", v)}
+              />
+              <NotifRow
+                title="Daily games reminders"
+                value={notifs.notify_daily_games}
+                onValueChange={(v) => onToggleOne("notify_daily_games", v)}
+              />
+              <NotifRow
+                title="Private elimination challenges"
+                value={notifs.notify_private_elims}
+                onValueChange={(v) => onToggleOne("notify_private_elims", v)}
+              />
+              <NotifRow
+                title="Public elimination challenges"
+                value={notifs.notify_public_elims}
+                onValueChange={(v) => onToggleOne("notify_public_elims", v)}
+              />
+
+              {!allIndividualsOn && notifs.notifications_all ? (
+                <Text style={styles.hintText}>
+                  Tip: “All notifications” turns off automatically if you disable a specific type.
                 </Text>
-              </TouchableOpacity>
+              ) : null}
             </View>
-
-            <Text style={{ fontSize: 12, color: "#065f46", marginBottom: 6 }}>Display Name</Text>
-            <TextInput
-              value={displayName}
-              onChangeText={setDisplayName}
-              placeholder="Your name"
-              autoCapitalize="words"
-              style={styles.input}
-              onBlur={async () => {
-                try {
-                  await saveProfileSilent();
-                } catch {
-                  /* ignore */
-                }
-              }}
-            />
-          </KeyboardAvoidingView>
-        </SlideContainer>
-
-        {/* 8) Notifications — NEW (matches profile-info look & logic) */}
-        <SlideContainer>
-          <Text style={styles.h1}>Notifications 🔔</Text>
-          <Text style={[styles.p, { marginBottom: 10 }]}>
-            Stay in the loop: reminders for the Daily Challenge, gentle nudges to keep your streak,
-            and heads-up when you’re invited to Elimination challenges. You can tweak these anytime
-            in Settings.
-          </Text>
-
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Notification Preferences</Text>
-
-            <NotifRow
-              title="All notifications"
-              value={notifs.notifications_all}
-              onValueChange={onToggleAll}
-            />
-
-            <View style={styles.divider} />
-
-            <NotifRow
-              title="Daily challenge reminders"
-              value={notifs.notify_daily_challenge}
-              onValueChange={(v) => onToggleOne("notify_daily_challenge", v)}
-            />
-            <NotifRow
-              title="Daily games reminders"
-              value={notifs.notify_daily_games}
-              onValueChange={(v) => onToggleOne("notify_daily_games", v)}
-            />
-            <NotifRow
-              title="Private elimination challenges"
-              value={notifs.notify_private_elims}
-              onValueChange={(v) => onToggleOne("notify_private_elims", v)}
-            />
-            <NotifRow
-              title="Public elimination challenges"
-              value={notifs.notify_public_elims}
-              onValueChange={(v) => onToggleOne("notify_public_elims", v)}
-            />
-
-            {!allIndividualsOn && notifs.notifications_all ? (
-              <Text style={styles.hintText}>
-                Tip: “All notifications” turns off automatically if you disable a specific type.
-              </Text>
-            ) : null}
-          </View>
+          </ScrollView>
         </SlideContainer>
 
         {/* 9) Default Filters — competitions, seasons, min market value, min appearances + counts */}
-        <SlideContainer>
-          <ScrollView>
+        <SlideContainer width={SLIDE_WIDTH}>
+          <ScrollView
+            keyboardShouldPersistTaps="always"
+            keyboardDismissMode="none"
+            nestedScrollEnabled
+          >
+
             <Text style={styles.h1}>Default Filters 🎛️</Text>
             <Text style={[styles.p, { fontSize: 12, marginBottom: 12 }]}>
               Choose your go-to pool. You can change these anytime in your profile.
@@ -915,7 +994,12 @@ export default function TutorialScreen() {
                   </View>
 
                   <View style={{ maxHeight: 320 }}>
-                    <ScrollView>
+                    <ScrollView
+                      keyboardShouldPersistTaps="always"
+                      keyboardDismissMode="none"
+                      nestedScrollEnabled
+                    >
+
                       {compsOrderedForDropdown.map((c) => {
                         const id = String(c.competition_id);
                         const selected = defaultCompetitionIds.includes(id);
@@ -998,7 +1082,12 @@ export default function TutorialScreen() {
                   </View>
 
                   <View style={{ maxHeight: 280 }}>
-                    <ScrollView>
+                    <ScrollView
+                      keyboardShouldPersistTaps="always"
+                      keyboardDismissMode="none"
+                      nestedScrollEnabled
+                    >
+
                       {seasonsOrderedForDropdown.map((s) => {
                         const selected = defaultSeasons.includes(s);
                         return (
@@ -1091,7 +1180,8 @@ export default function TutorialScreen() {
         </SlideContainer>
       </ScrollView>
 
-      <Footer />
+      <Footer index={index} goTo={goTo} finish={finish} />
+
     </SafeAreaView>
   );
 }
@@ -1103,67 +1193,6 @@ function compactMoney(n) {
   if (num >= 1_000_000) return `${Math.round(num / 1_000_000)}M`;
   if (num >= 1_000) return `${Math.round(num / 1_000)}K`;
   return `${num}`;
-}
-
-function Chip({ children, onPress, selected = false, variant = "solid", style }) {
-  const solid = variant === "solid";
-  return (
-    <Pressable
-      onPress={onPress}
-      style={[
-        styles.chip,
-        selected
-          ? { backgroundColor: "#14532d", borderColor: "#14532d" }
-          : solid
-          ? { backgroundColor: "#fff", borderColor: "#d1d5db" }
-          : { backgroundColor: "transparent", borderColor: "#d1d5db" },
-        style,
-      ]}
-    >
-      <Text style={{ color: selected ? "#fff" : "#111827", fontSize: 12, fontWeight: "700" }}>
-        {children}
-      </Text>
-    </Pressable>
-  );
-}
-
-function CompetitionRow({ comp, selected, onToggle }) {
-  return (
-    <Pressable onPress={() => onToggle(String(comp.competition_id))} style={styles.compRow}>
-      {comp.flag_url ? (
-        <Image source={{ uri: comp.flag_url }} style={styles.flag} />
-      ) : (
-        <View style={[styles.flag, { backgroundColor: "#e5e7eb" }]} />
-      )}
-      {comp.logo_url ? (
-        <Image source={{ uri: comp.logo_url }} style={styles.logo} />
-      ) : (
-        <View style={[styles.logo, { backgroundColor: "#eef2f7" }]} />
-      )}
-      <View style={{ flex: 1 }}>
-        <Text style={{ fontWeight: "700", color: "#0b3d24" }} numberOfLines={1}>
-          {comp.competition_name}
-        </Text>
-        <Text style={{ fontSize: 12, color: "#6b7280" }} numberOfLines={1}>
-          {comp.country}
-        </Text>
-      </View>
-      <Ionicons
-        name={selected ? "checkbox" : "square-outline"}
-        size={20}
-        color={selected ? "#14532d" : "#9ca3af"}
-      />
-    </Pressable>
-  );
-}
-
-function NotifRow({ title, value, onValueChange }) {
-  return (
-    <View style={styles.notifRow}>
-      <Text style={styles.notifLabel}>{title}</Text>
-      <Switch value={value} onValueChange={onValueChange} />
-    </View>
-  );
 }
 
 /* --------------------------------- Styles -------------------------------- */
@@ -1180,6 +1209,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 12,
     fontSize: 16,
+
   },
 
   rowWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },

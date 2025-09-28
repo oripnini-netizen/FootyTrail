@@ -40,7 +40,7 @@ export default function EliminationCreateScreen() {
   const [isPublic, setIsPublic] = useState(true);
   const [stake, setStake] = useState("0");
   const [minPlayers, setMinPlayers] = useState("2");
-  const [roundLimitMin, setRoundLimitMin] = useState("10"); // minutes per round
+  const [roundLimitMin, setRoundLimitMin] = useState("5"); // minutes per round
   const [elimEvery, setElimEvery] = useState("1"); // rounds_to_elimination
   const [joinDeadlineMins, setJoinDeadlineMins] = useState("60"); // default: 60 minutes
 
@@ -451,16 +451,57 @@ export default function EliminationCreateScreen() {
       Alert.alert("Name required", "Give your challenge a name.");
       return;
     }
-    const stake_points = Math.max(0, Number(stake) || 0);
-    const min_participants = Math.max(2, Number(minPlayers) || 2);
-    const round_time_limit_seconds = Math.max(
-      60,
-      (Number(roundLimitMin) || 10) * 60
-    );
-    const rounds_to_elimination = Math.max(
-      1,
-      Math.min(5, Number(elimEvery) || 1)
-    );
+    // --- Validate numeric inputs (show an error instead of silently clamping) ---
+const stake_points_raw = Number(stake);
+const min_participants_raw = Number(minPlayers);
+const round_minutes_raw = Number(roundLimitMin);
+const elim_every_raw = Number(elimEvery);
+const join_deadline_minutes_raw = Number(joinDeadlineMins);
+
+// Stake: >= 0 (integers are fine; we’ll floor to int)
+if (!Number.isFinite(stake_points_raw) || stake_points_raw < 0) {
+  Alert.alert("Invalid stake", "Stake (points) must be 0 or more.");
+  return;
+}
+const stake_points = Math.floor(stake_points_raw);
+
+// Min participants: >= 2
+if (!Number.isFinite(min_participants_raw) || Math.floor(min_participants_raw) < 2) {
+  Alert.alert("Invalid minimum participants", "Minimum participants must be at least 2.");
+  return;
+}
+const min_participants = Math.floor(min_participants_raw);
+
+// Round time: >= 1 minute
+if (!Number.isFinite(round_minutes_raw) || Math.floor(round_minutes_raw) < 1) {
+  Alert.alert("Invalid round time", "Round time must be at least 1 minute.");
+  return;
+}
+const round_time_limit_seconds = Math.floor(round_minutes_raw) * 60;
+
+// Eliminate every (rounds): 1–5
+if (
+  !Number.isFinite(elim_every_raw) ||
+  Math.floor(elim_every_raw) < 1 ||
+  Math.floor(elim_every_raw) > 5
+) {
+  Alert.alert(
+    "Invalid elimination cadence",
+    "Eliminate every (rounds) must be between 1 and 5."
+  );
+  return;
+}
+const rounds_to_elimination = Math.floor(elim_every_raw);
+
+// Join deadline: >= 1 minute (no empty/default fallback; must be valid)
+if (
+  !Number.isFinite(join_deadline_minutes_raw) ||
+  Math.floor(join_deadline_minutes_raw) < 1
+) {
+  Alert.alert("Invalid join deadline", "Join deadline must be at least 1 minute.");
+  return;
+}
+const p_join_window_minutes = Math.floor(join_deadline_minutes_raw);
 
     // Base filters
     const filters = {
@@ -514,11 +555,6 @@ export default function EliminationCreateScreen() {
       if (Number(minMarketValue) > 0)
         filters.minMarketValue = Number(minMarketValue);
     }
-
-    // Join deadline input is minutes from now (RPC arg name: p_join_window_minutes)
-    const minsRaw = (joinDeadlineMins || "").trim();
-    const p_join_window_minutes =
-      minsRaw === "" ? 60 : Math.max(0, Number(minsRaw) || 60);
 
     setSubmitting(true);
     try {

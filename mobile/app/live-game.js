@@ -15,9 +15,11 @@ import {
   Keyboard,
   Vibration,
   Dimensions,
-  Animated, // ← for shake & emoji rain
-  ActivityIndicator, // ← ADDED: spinner
+  Animated,
+  ActivityIndicator,
   Modal,
+  TouchableWithoutFeedback,
+  PanResponder,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -110,6 +112,33 @@ export default function LiveGameMobile() {
 
   const headerTitle = elimination ? 'Elimination' : (isDaily ? 'Daily Challenge' : 'Regular Daily');
 
+  // If this is an elimination game and the round already started earlier,
+  // start with the remaining round time (clamped to the default 2 minutes).
+  const DEFAULT_START_SEC = 120; // keep as the general cap
+  const endsAtMs = (() => {
+    try { return elimination?.endsAt ? new Date(elimination.endsAt).getTime() : null; }
+    catch { return null; }
+  })();
+
+  const initialStartSeconds = (() => {
+    const roundLimit = Number(elimination?.timeLimitSeconds || DEFAULT_START_SEC);
+    let base = Math.max(1, Math.min(roundLimit, DEFAULT_START_SEC)); // final cap
+    if (endsAtMs && Number.isFinite(endsAtMs)) {
+      const rem = Math.floor((endsAtMs - Date.now()) / 1000);
+      if (Number.isFinite(rem) && rem > 0) {
+        // take the smaller of “remaining in round” and “default/cap”
+        base = Math.min(base, rem);
+      } else {
+        // If the round already ended, give a 1-second grace so the page can lose gracefully
+        base = 1;
+      }
+    }
+    return base;
+  })();
+
+  // Stable reference to the starting total used for elapsed/decay math
+  const START_TIME = useRef(initialStartSeconds).current;
+
   // -------------------------
   // State
   // -------------------------
@@ -130,7 +159,7 @@ export default function LiveGameMobile() {
   // Avatar (same as postgame)
   const [avatarUrl, setAvatarUrl] = useState(null);
 
-  const [timeSec, setTimeSec] = useState(INITIAL_TIME);
+  const [timeSec, setTimeSec] = useState(initialStartSeconds);
   const timerRef = useRef(null);
   const endedRef = useRef(false);
 
@@ -154,7 +183,45 @@ export default function LiveGameMobile() {
 
   // Hints modal
   const [hintsVisible, setHintsVisible] = useState(false);
+  // --- Sheet drag state for the Hints modal
+  const sheetY = useRef(new Animated.Value(0)).current;
 
+  useEffect(() => {
+    if (hintsVisible) sheetY.setValue(0); // reset on open
+  }, [hintsVisible]);
+
+  // Pan anywhere on the sheet (header included) to drag down and dismiss
+  const sheetPan = useRef(
+    PanResponder.create({
+      // Don’t steal taps immediately; wait for a vertical move intent
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponderCapture: (_, g) =>
+        Math.abs(g.dy) > 8 && Math.abs(g.dy) > Math.abs(g.dx),
+
+      onPanResponderMove: (_, g) => {
+        // drag down only
+        if (g.dy > 0) sheetY.setValue(g.dy);
+      },
+
+      onPanResponderRelease: (_, g) => {
+        const shouldClose = g.dy > 80 || g.vy > 0.8;
+        if (shouldClose) {
+          Animated.timing(sheetY, {
+            toValue: 480,
+            duration: 180,
+            useNativeDriver: true,
+          }).start(() => setHintsVisible(false));
+        } else {
+          Animated.spring(sheetY, {
+            toValue: 0,
+            useNativeDriver: true,
+            bounciness: 0,
+          }).start();
+        }
+      },
+    })
+  ).current;
 
   // Sticky thresholds
   const [showStickyTimer, setShowStickyTimer] = useState(false);
@@ -162,10 +229,24 @@ export default function LiveGameMobile() {
   const timerYRef = useRef(0);
   const inputYRef = useRef(0);
 
+  // NEW: "Hints" floating button (appears after you’ve scrolled past the Hints card)
+  const [showHintDock, setShowHintDock] = useState(false);
+
+  // NEW: track Hints button
+  const hintsYRef = useRef(0);
+
   // Header + sticky math
   const headerHeight = 56;
   const stickyTop = insets.top + headerHeight; // overlays anchor here
   const stickyOffset = headerHeight + 8;
+  const TIMER_H = 84;      // exact height of the sticky timer row on your device
+  const INPUT_MB = 6;      // marginBottom you set on the sticky input
+
+  // --- measurements for precise auto-scroll when sticky hints shows
+  const transfersYRef = useRef(0);
+  const stickyInputHRef = useRef(0);
+  const lastYRef = useRef(0);
+
 
   // Scroll ref (to scroll to top before FX)
   const scrollRef = useRef(null);
@@ -278,11 +359,11 @@ export default function LiveGameMobile() {
             setTimeout(async () => {
               await saveGameRecord(false);
               await writeElimEntryAndAdvance(false, 0);
-              const outroLine = await generateOutro(false, 0, 3, INITIAL_TIME);
+              const outroLine = await generateOutro(false, 0, 3, START_TIME);
               goPostgame({
                 didWin: false,
                 pointsEarned: 0,
-                elapsed: INITIAL_TIME,
+                elapsed: START_TIME,
                 guessesUsed: 3,
                 outroLine,
               });
@@ -419,7 +500,7 @@ export default function LiveGameMobile() {
     });
 
     // Time decay begins only once countdown actually runs (we don't decrement before transfers load)
-    const timeElapsed = INITIAL_TIME - timeSec;
+    const timeElapsed = START_TIME - timeSec;
     const timeDecay = Math.pow(0.99, timeElapsed);
     p = Math.floor(p * timeDecay);
 
@@ -473,7 +554,7 @@ export default function LiveGameMobile() {
       setTimeout(async () => {
         await saveGameRecord(true);
         await writeElimEntryAndAdvance(true, points);
-        const elapsed = INITIAL_TIME - timeSec;
+        const elapsed = START_TIME - timeSec;
         const guessesUsed = 3 - guessesLeft + 1;
         const outroLine = await generateOutro(true, points, guessesUsed, elapsed);
         goPostgame({
@@ -507,7 +588,7 @@ export default function LiveGameMobile() {
       setTimeout(async () => {
         await saveGameRecord(false);
         await writeElimEntryAndAdvance(false, 0);
-        const elapsed = INITIAL_TIME - timeSec;
+        const elapsed = START_TIME - timeSec;
         const outroLine = await generateOutro(false, 0, 3, elapsed);
         goPostgame({
           didWin: false,
@@ -541,11 +622,11 @@ export default function LiveGameMobile() {
     setTimeout(async () => {
       await saveGameRecord(false);
       await writeElimEntryAndAdvance(false, 0);
-      const outroLine = await generateOutro(false, 0, 3, INITIAL_TIME - timeSec);
+      const outroLine = await generateOutro(false, 0, 3, START_TIME - timeSec);
       goPostgame({
         didWin: false,
         pointsEarned: 0,
-        elapsed: INITIAL_TIME - timeSec,
+        elapsed: START_TIME - timeSec,
         guessesUsed: 3,
         outroLine,
       });
@@ -570,7 +651,7 @@ export default function LiveGameMobile() {
         won,
         points: won ? points : 0,
         potentialPoints: potentialPointsSource,
-        timeTaken: INITIAL_TIME - timeSec,
+        timeTaken: START_TIME - timeSec,
         guessesAttempted: 3 - guessesLeft + (won ? 1 : 0),
         hintsUsed: Object.values(usedHints).filter(Boolean).length,
         isDaily: !!isDaily,
@@ -765,7 +846,7 @@ export default function LiveGameMobile() {
   const disabledUI = loadingTransfers; // disable interactions + dim until transfers are loaded
 
   return (
-    <Animated.View style={{ flex: 1, backgroundColor: '#f6f7fb', transform: [{ translateX: shakeX }] }}>
+    <Animated.View style={{ flex: 1, backgroundColor: '#F0FDF4', transform: [{ translateX: shakeX }] }}>
       {/* Safe area background + absolute header */}
       <SafeAreaView edges={['top']} style={styles.safeArea} />
       <View style={[styles.header, { top: insets.top }]}>
@@ -796,29 +877,57 @@ export default function LiveGameMobile() {
         </View>
       )}
 
+      {/* Sticky Stack: below the timer row */}
       {showStickyInput && (
         <View style={[styles.stickyInput, { top: stickyTop + 84 /* under timer row */ }]}>
-          <View style={[styles.card, { padding: 10, opacity: disabledUI ? 0.5 : 1 }]} pointerEvents={disabledUI ? 'none' : 'auto'}>
-            <View style={styles.inputRow}>
-              <TextInput
-                value={guess}
-                onChangeText={(t) => setGuess(String(t))}
-                placeholder="Type a player's name"
-                autoFocus={false}
-                style={styles.input}
-                autoCapitalize="none"
-                autoCorrect={false}
-                editable={!isFinishing && !endedRef.current && !disabledUI}
-              />
-              <TouchableOpacity onPress={loseNow} style={styles.giveUpBtn} activeOpacity={0.8} disabled={isFinishing || disabledUI}>
-                <Text style={styles.giveUpText}>Give up</Text>
-              </TouchableOpacity>
-            </View>
+          {/* Sticky Input (unchanged content) */}
+          {showStickyInput && (
+            <View
+              style={[styles.card, { padding: 10, opacity: disabledUI ? 0.5 : 1, marginBottom: 6 /* tighter gap */ }]}
+              pointerEvents={disabledUI ? 'none' : 'auto'}
+              onLayout={(e) => { stickyInputHRef.current = e.nativeEvent.layout.height; }}
+            >
+              <View style={styles.inputRow}>
+                <TextInput
+                  value={guess}
+                  onChangeText={(t) => setGuess(String(t))}
+                  placeholder="Type a player's name"
+                  autoFocus={false}
+                  style={styles.input}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  editable={!isFinishing && !endedRef.current && !disabledUI}
+                />
+                <TouchableOpacity onPress={loseNow} style={styles.giveUpBtn} activeOpacity={0.8} disabled={isFinishing || disabledUI}>
+                  <Text style={styles.giveUpText}>Give up</Text>
+                </TouchableOpacity>
+              </View>
 
-            {/* Suggestions shown inside sticky card */}
-            {renderSuggestions()}
-          </View>
+              {/* Suggestions shown inside sticky card */}
+              {renderSuggestions()}
+            </View>
+          )}
         </View>
+      )}
+
+      {/* Floating “Hints” dock button */}
+      {showHintDock && (
+        <TouchableOpacity
+          onPress={() => setHintsVisible(true)}
+          activeOpacity={0.9}
+          style={[
+            styles.hintsDockBtn,
+            {
+              top:
+                stickyTop +
+                (showStickyTimer ? TIMER_H : 0) +
+                (showStickyInput ? (stickyInputHRef.current || 0) + INPUT_MB : 0) +
+                12,
+            },
+          ]}
+        >
+          <Text style={styles.hintsDockIcon}>👁️</Text>
+        </TouchableOpacity>
       )}
 
       {/* Content */}
@@ -837,8 +946,32 @@ export default function LiveGameMobile() {
             keyboardDismissMode="on-drag"
             onScroll={(e) => {
               const y = e.nativeEvent.contentOffset.y;
-              setShowStickyTimer(y >= (timerYRef.current ?? 0) - stickyOffset);
-              setShowStickyInput(y >= (inputYRef.current ?? 0) - stickyOffset);
+              lastYRef.current = y;
+
+              // Base offset = header overlap
+              const base = headerHeight + 8;
+
+              // 1) TIMER: becomes sticky when its top hits under the header
+              const timerThresh = (timerYRef.current ?? 0) - base;
+              const nextShowTimer = y >= timerThresh;
+              setShowStickyTimer(nextShowTimer);
+
+              // 2) INPUT: becomes sticky when its top reaches just under the header + (timer if already sticky)
+              const inputThresh = (inputYRef.current ?? 0) - base - (nextShowTimer ? TIMER_H : 0);
+              const nextShowInput = y >= inputThresh;
+              setShowStickyInput(nextShowInput);
+
+
+              // 3) HINTS DOCK: show the floating button once we scrolled past the Hints card
+              const stackAbove =
+                (nextShowTimer ? TIMER_H : 0) +
+                (nextShowInput ? (stickyInputHRef.current || 0) + INPUT_MB : 0);
+
+              const hintsTopInViewport = (hintsYRef.current ?? 0) - base - stackAbove;
+              // When the Hints card top is above the visible area by ~12px, show the dock button.
+              const shouldShowDock = y >= hintsTopInViewport + 12;
+              setShowHintDock(shouldShowDock);
+
             }}
             scrollEventThrottle={16}
           >
@@ -901,7 +1034,10 @@ export default function LiveGameMobile() {
             </View>
 
             {/* Hints opener (between input and transfers) */}
-            <View style={styles.card}>
+            <View
+              style={styles.card}
+              onLayout={(e) => { hintsYRef.current = e.nativeEvent.layout.y; }}
+            >
               <TouchableOpacity
                 onPress={() => setHintsVisible(true)}
                 activeOpacity={0.9}
@@ -909,40 +1045,41 @@ export default function LiveGameMobile() {
                 disabled={isFinishing || disabledUI}
               >
                 <Text style={styles.hintsOpenText}>🧐 Need a hint? 👁️</Text>
-              
 
-              {/* Hints status chips (now on the button card) */}
-              <View style={[styles.hintsChipRow, { justifyContent: 'center', paddingVertical: 8 }]}>
-                {[
-                  { key: 'age', label: 'Age' },
-                  { key: 'nationality', label: 'Nat' },
-                  { key: 'position', label: 'Pos' },
-                  { key: 'partialImage', label: 'Img' },
-                  { key: 'firstLetter', label: '1st L' },
-                ].map((h) => {
-                  const used = !!usedHints?.[h.key];
-                  return (
-                    <View
-                      key={h.key}
-                      style={[
-                        styles.hintChip,
-                        used ? styles.hintChipUsed : styles.hintChipAvail,
-                      ]}
-                    >
-                      <Text style={used ? styles.hintChipTextUsed : styles.hintChipTextAvail}>
-                        {h.label}
-                      </Text>
-                    </View>
-                  );
-                })}
-              </View>
+
+                {/* Hints status chips (now on the button card) */}
+                <View style={[styles.hintsChipRow, { justifyContent: 'center', paddingVertical: 8 }]}>
+                  {[
+                    { key: 'age', label: 'Age' },
+                    { key: 'nationality', label: 'Nat' },
+                    { key: 'position', label: 'Pos' },
+                    { key: 'partialImage', label: 'Img' },
+                    { key: 'firstLetter', label: '1st L' },
+                  ].map((h) => {
+                    const used = !!usedHints?.[h.key];
+                    return (
+                      <View
+                        key={h.key}
+                        style={[
+                          styles.hintChip,
+                          used ? styles.hintChipUsed : styles.hintChipAvail,
+                        ]}
+                      >
+                        <Text style={used ? styles.hintChipTextUsed : styles.hintChipTextAvail}>
+                          {h.label}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
               </TouchableOpacity>
             </View>
-        
-
 
             {/* Transfer History — LIST (no swipe) */}
-            <View style={styles.card}>
+            <View
+              style={styles.card}
+              onLayout={(e) => { transfersYRef.current = e.nativeEvent.layout.y; }}
+            >
               <Text style={styles.sectionTitle}>Transfer History</Text>
               {loadingTransfers ? (
                 <View style={styles.loadingRow}>
@@ -972,12 +1109,23 @@ export default function LiveGameMobile() {
         animationType="slide"
         transparent
         onRequestClose={() => setHintsVisible(false)}
+        onDismiss={() => setHintsVisible(false)} // handle swipe dismiss
       >
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
+          {/* BACKDROP: full-screen layer that closes on tap */}
+          <TouchableWithoutFeedback onPress={() => setHintsVisible(false)}>
+            <View style={StyleSheet.absoluteFill} />
+          </TouchableWithoutFeedback>
+
+          {/* SHEET: centered; header swipe-down drags & dismisses */}
+          <Animated.View style={[styles.modalCard, { transform: [{ translateY: sheetY }] }]}>
+            <View style={styles.modalHeader} {...sheetPan.panHandlers /* or header pan if you named it so */}>
               <Text style={styles.modalTitle}>Hints</Text>
-              <TouchableOpacity onPress={() => setHintsVisible(false)} style={styles.modalCloseBtn} activeOpacity={0.8}>
+              <TouchableOpacity
+                onPress={() => setHintsVisible(false)}
+                style={styles.modalCloseBtn}
+                activeOpacity={0.8}
+              >
                 <Text style={styles.modalCloseText}>Close</Text>
               </TouchableOpacity>
             </View>
@@ -1011,13 +1159,11 @@ export default function LiveGameMobile() {
                   disabled={usedHints.partialImage || !gameData?.photo || disabledUI}
                   onPress={() => !disabledUI && !usedHints.partialImage && reveal('partialImage')}
                   valueShown={
-                    usedHints.partialImage
-                      ? (
-                        <View style={styles.hintCropBox}>
-                          <Image source={{ uri: gameData?.photo }} style={styles.hintCroppedImage} />
-                        </View>
-                      )
-                      : null
+                    usedHints.partialImage ? (
+                      <View style={styles.hintCropBox}>
+                        <Image source={{ uri: gameData?.photo }} style={styles.hintCroppedImage} />
+                      </View>
+                    ) : null
                   }
                 />
                 <HintButton
@@ -1029,9 +1175,11 @@ export default function LiveGameMobile() {
                 />
               </View>
             </ScrollView>
-          </View>
+          </Animated.View>
         </View>
+
       </Modal>
+
 
 
       {/* Confetti (win) */}
@@ -1247,7 +1395,7 @@ const styles = StyleSheet.create({
   timeYellow: { color: '#ca8a04' },
   timeNormal: { color: '#111827' },
 
-  subtle: { color: '#6b7280', marginTop: 4, fontFamily: 'Tektur_400Regular' },
+  subtle: { color: '#6b7280', fontFamily: 'Tektur_400Regular' },
 
   bigNumber: { fontSize: 28, fontWeight: '800', color: '#111827', fontFamily: 'Tektur_700Bold' },
   pointsNow: { fontSize: 28, fontWeight: '800', color: '#b45309', marginTop: 2, fontFamily: 'Tektur_700Bold' },
@@ -1320,7 +1468,7 @@ const styles = StyleSheet.create({
   fxOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 9999, elevation: 9999 },
 
   // Hints opener
-  hintsOpenBtn: { alignItems: 'center'},
+  hintsOpenBtn: { alignItems: 'center' },
   hintsOpenText: { fontSize: 16, fontWeight: '800', color: '#111827', fontFamily: 'Tektur_700Bold' },
   hintsOpenSub: { marginTop: 4, fontSize: 12, color: '#6b7280', fontFamily: 'Tektur_400Regular' },
 
@@ -1328,25 +1476,56 @@ const styles = StyleSheet.create({
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.35)',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
   },
   modalCard: {
     backgroundColor: 'white',
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
+    borderRadius: 16,           // all corners (was top-only)
     padding: 16,
+    width: '92%',               // nice centered width
+    maxWidth: 520,              // optional cap for tablets
     maxHeight: '80%',
     shadowColor: '#000',
     shadowOpacity: 0.15,
     shadowRadius: 12,
-    shadowOffset: { width: 0, height: -4 },
-    borderTopWidth: 1,
+    shadowOffset: { width: 0, height: 6 },
+    borderWidth: 1,
     borderColor: '#eef1f6',
   },
+
   modalHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   modalTitle: { flex: 1, fontSize: 18, fontWeight: '800', color: '#111827', fontFamily: 'Tektur_700Bold' },
   modalCloseBtn: { paddingHorizontal: 10, paddingVertical: 6, backgroundColor: '#111827', borderRadius: 8 },
   modalCloseText: { color: 'white', fontWeight: '700', fontFamily: 'Tektur_700Bold' },
+
+  hintsDockBtn: {
+    position: 'absolute',
+    right: -2,              // slightly off the edge, “attached” feel
+    width: 46,
+    height: 46,
+    borderTopLeftRadius: 23,
+    borderBottomLeftRadius: 23,
+    borderTopRightRadius: 23,
+    borderBottomRightRadius: 23,
+    backgroundColor: 'white',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 60,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  hintsDockIcon: {
+    fontSize: 20,
+    fontWeight: '800',
+  },
+
+
 
   // Hints chips
   hintsChipRow: {

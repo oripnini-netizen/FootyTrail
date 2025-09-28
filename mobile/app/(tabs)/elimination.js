@@ -13,6 +13,7 @@ import {
   Animated,
   Easing,
   Dimensions,
+  Alert,
 } from "react-native";
 import { supabase } from "../../lib/supabase";
 import { useRouter } from "expo-router";
@@ -21,6 +22,7 @@ import { useCallback as useCB } from "react";
 import * as Notifications from "expo-notifications";
 import ReverseTimerBar from "../../components/ReverseTimerBar";
 import { useAudioPlayer } from "expo-audio";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 /* ------------------------------- Small utils ------------------------------ */
 function fmtDuration(ms) {
@@ -82,6 +84,26 @@ function strHash(s) {
   return h >>> 0;
 }
 
+/* -------------------- One-time “finished” alert persistence ------------------- */
+const finishAlertKey = (tournamentId, userId) =>
+  `ft:finishAlert:${String(tournamentId)}:${String(userId)}`;
+
+async function hasSeenFinishAlert(tournamentId, userId) {
+  try {
+    const v = await AsyncStorage.getItem(finishAlertKey(tournamentId, userId));
+    return v === "1";
+  } catch {
+    return false;
+  }
+}
+async function markSeenFinishAlert(tournamentId, userId) {
+  try {
+    await AsyncStorage.setItem(finishAlertKey(tournamentId, userId), "1");
+  } catch { }
+}
+
+
+
 /* ---------------------- Per-card realtime (minimal & fast) ---------------------- */
 /**
  * Subscribes to realtime changes for a single tournament card.
@@ -91,7 +113,7 @@ function strHash(s) {
  *   - elimination_round_entries (started/game_record_id/points)
  *   - elimination_tournaments   (status/name/filters/etc.)
  */
-function useRealtimeTournament({ tournamentId, roundIds, onChange }) {
+function useRealtimeTournament({ tournamentId, roundIds, onChange, enabled = true }) {
   const debouncedRefetchTimer = useRef(null);
 
   const refetchSoon = useCallback(() => {
@@ -104,7 +126,7 @@ function useRealtimeTournament({ tournamentId, roundIds, onChange }) {
   const roundIdSet = useMemo(() => new Set((roundIds || []).filter(Boolean)), [roundIds]);
 
   useEffect(() => {
-    if (!tournamentId) return;
+    if (!enabled || !tournamentId) return;
 
     const channel = supabase.channel(`rt:tournament:${tournamentId}`);
 
@@ -162,372 +184,10 @@ function useRealtimeTournament({ tournamentId, roundIds, onChange }) {
 const TITLE_BLOCK_MIN_H = 40;
 const BOTTOM_BLOCK_MIN_H = 40;
 
-/* ---------------------------------- Page ---------------------------------- */
-export default function EliminationScreen() {
-  const router = useRouter();
-  const [userId, setUserId] = useState(null);
-
-  const [upcoming, setUpcoming] = useState([]); // lobby
-  const [live, setLive] = useState([]);
-  const [finished, setFinished] = useState([]);
-
-  // Loading + error per section
-  const [loading, setLoading] = useState({ upcoming: true, live: true, finished: true });
-  const [error, setError] = useState({ upcoming: "", live: "", finished: "" });
-
-  // Pull-to-refresh
-  const [refreshing, setRefreshing] = useState(false);
-
-  // For child cards to force reloads
-  const [refreshToken, setRefreshToken] = useState(0);
-  const [hardRefreshToken, setHardRefreshToken] = useState(0);
-  const [showAllFinished, setShowAllFinished] = useState(false);
-
-  // Expanded card: always expand the top card after each lists reload
-  const [expandedIds, setExpandedIds] = useState(new Set());
-
-  // Fade-in animation for the list container
-  const fadeAnim = useRef(new Animated.Value(0)).current; // 0 → 1
-  const slideAnim = useRef(new Animated.Value(8)).current; // 8px down → 0
-
-  // --- Get current user id once ---
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      const { data, error } = await supabase.auth.getUser();
-      if (!alive) return;
-      if (error) {
-        setUserId(null);
-        return;
-      }
-      setUserId(data?.user?.id || null);
-    })();
-    return () => { alive = false; };
-  }, []);
-
-  // --- Loader: fetch three lists
-  const reloadLists = useCallback(async () => {
-    if (!userId) {
-      setUpcoming([]); setLive([]); setFinished([]);
-      setLoading({ upcoming: false, live: false, finished: false });
-      setError({ upcoming: "", live: "", finished: "" });
-      return;
-    }
-
-    // upcoming (lobby)
-    setLoading((s) => ({ ...s, upcoming: true }));
-    setError((e) => ({ ...e, upcoming: "" }));
-    try {
-      const { data, error: err } = await supabase
-        .from("elimination_tournaments")
-        .select("id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id")
-        .eq("status", "lobby")
-        .order("created_at", { ascending: false });
-
-      if (err) throw err;
-      setUpcoming(Array.isArray(data) ? data : []);
-    } catch (e) {
-      setError((x) => ({ ...x, upcoming: e?.message || "Failed to load." }));
-      setUpcoming([]);
-    } finally {
-      setLoading((s) => ({ ...s, upcoming: false }));
-    }
-
-    // live
-    setLoading((s) => ({ ...s, live: true }));
-    setError((e) => ({ ...e, live: "" }));
-    try {
-      const { data, error: err } = await supabase
-        .from("elimination_tournaments")
-        .select("id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id")
-        .eq("status", "live")
-        .order("created_at", { ascending: false });
-
-      if (err) throw err;
-      setLive(Array.isArray(data) ? data : []);
-    } catch (e) {
-      setError((x) => ({ ...x, live: e?.message || "Failed to load." }));
-      setLive([]);
-    } finally {
-      setLoading((s) => ({ ...s, live: false }));
-    }
-
-    // finished
-    setLoading((s) => ({ ...s, finished: true }));
-    setError((e) => ({ ...e, finished: "" }));
-    try {
-      const { data, error: err } = await supabase
-        .from("elimination_tournaments")
-        .select("id, name, status, created_at, round_time_limit_seconds, filters, winner_user_id, rounds_to_elimination, stake_points, min_participants, join_deadline, owner_id")
-        .eq("status", "finished")
-        .order("created_at", { ascending: false });
-
-      if (err) throw err;
-      setFinished(Array.isArray(data) ? data : []);
-    } catch (e) {
-      setError((x) => ({ ...x, finished: e?.message || "Failed to load." }));
-      setFinished([]);
-    } finally {
-      setLoading((s) => ({ ...s, finished: false }));
-      setRefreshToken((t) => t + 1);
-    }
-  }, [userId]);
-
-  // initial + on user change
-  useEffect(() => { reloadLists(); }, [reloadLists]);
-
-  // Also reload every time the Elimination tab/screen regains focus
-  useFocusEffect(
-    useCallback(() => {
-      reloadLists();  // refetch lobby/live/finished and re-expand top card
-      return () => { };
-    }, [reloadLists])
-  );
-
-  // --- Refresh when the user taps a push notification about an elimination challenge
-  useEffect(() => {
-    // Decide whether the tapped notification is about an elimination challenge
-    const isEliminationNotification = (data) => {
-      const k = data?.kind;
-      return (
-        k === "round_started" ||
-        k === "tournament_new_accept" ||
-        k === "private_elim_invited"
-      );
-    };
-
-    const handleTap = (response) => {
-      const data = response?.notification?.request?.content?.data ?? {};
-      if (isEliminationNotification(data)) {
-        // User is on the Elimination screen already; just refresh the lists
-        reloadLists?.();
-      }
-    };
-
-    // 1) Handle taps while app is foreground/background
-    const sub = Notifications.addNotificationResponseReceivedListener(handleTap);
-
-    // 2) Handle the case where the app was launched/opened from a tap
-    (async () => {
-      try {
-        const last = await Notifications.getLastNotificationResponseAsync();
-        if (last) handleTap(last);
-      } catch { }
-    })();
-
-    return () => {
-      sub?.remove?.();
-    };
-  }, [reloadLists]);
-
-
-  // Scroll-to-refresh
-  const onRefresh = useCallback(() => {
-    setRefreshing(true);
-    reloadLists().finally(() => setRefreshing(false));
-  }, [reloadLists]);
-
-  // simple “any” flags / lists
-  const anyError = error.upcoming || error.live || error.finished;
-  // Only live + upcoming + the *last* finished
-  const lastFinished = finished && finished.length ? finished[0] : null;
-  const combinedList = [
-    ...(upcoming || []),
-    ...(live || []),
-    ...(lastFinished ? [lastFinished] : []),
-  ];
-
-  // How many finished are *not* shown yet (for the button label)
-  const remainingFinishedCount = Math.max(0, (finished?.length || 0) - (lastFinished ? 1 : 0));
-
-  // Fade in on mount / reloads
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 60, useNativeDriver: true }),
-      Animated.timing(slideAnim, { toValue: 0, duration: 60, useNativeDriver: true }),
-    ]).start();
-  }, [refreshToken]);
-
-  // Always expand the first visible card (live/upcoming + last finished) after each reload
-  useEffect(() => {
-    // combinedList is defined above; it reflects the currently displayed order
-    const first = combinedList.length ? combinedList[0].id : null;
-    setExpandedIds(first ? new Set([first]) : new Set());
-    // Runs after each reloadLists() completion and realtime-triggered hard refresh
-  }, [refreshToken, hardRefreshToken, combinedList.length]);
-
-  // Realtime: reload lists when tournaments/rounds change; per-card hard refresh for other tables
-  useEffect(() => {
-    const ch = supabase
-      .channel("elim-mobile-realtime")
-
-      // 👉 Any change to tournaments should re-query the three lists
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "elimination_tournaments" },
-        () => {
-          // Light page reload: refetch lobby/live/finished + re-expand top card
-          reloadLists();
-        }
-      )
-
-      // 👉 Any change to rounds should also re-query the three lists
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "elimination_rounds" },
-        () => {
-          reloadLists();
-        }
-      )
-
-      // For these, keep the heavier per-card refresh only
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "elimination_rounds" },
-        () => setHardRefreshToken((t) => t + 1)
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "elimination_round_entries" },
-        () => setHardRefreshToken((t) => t + 1)
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "elimination_participants" },
-        () => setHardRefreshToken((t) => t + 1)
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "point_transactions" },
-        () => setHardRefreshToken((t) => t + 1)
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(ch);
-    };
-  }, [reloadLists]);
-
-  return (
-    <View style={{ flex: 1, backgroundColor: "#F0FDF4", justifyContent: "center" }}>
-      <Animated.ScrollView
-        contentContainerStyle={{ padding: 12, paddingBottom: 32 }}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        // Fade + slight up-slide to avoid any flash on mount/reloads
-        style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}
-      >
-        {/* Top CTA */}
-        <View style={{ marginBottom: 12, justifyContent: "center" }}>
-          <TouchableOpacity
-            style={[styles.primaryBtn, { alignSelf: "center", paddingHorizontal: 14 }]}
-            onPress={() => router.push("/elimination-create")}
-          >
-            <Text style={styles.primaryBtnText}>+ Create New Challenge</Text>
-          </TouchableOpacity>
-        </View>
-
-        {userId && <UserElimStatsKPI userId={userId} />}
-
-        {anyError ? (
-          <ErrorBox message={anyError} />
-        ) : combinedList.length === 0 ? (
-          <EmptyText text="No challenges yet." />
-        ) : (
-          <View style={{ gap: 12 }}>
-            {/* live + upcoming + the last finished */}
-            {combinedList.map((t, idx) => (
-              <TournamentCardMobileBR
-                key={t.id}
-                tournament={t}
-                userId={userId}
-                refreshToken={refreshToken}
-                hardRefreshToken={hardRefreshToken}
-                onChanged={reloadLists}
-                isExpanded={expandedIds.has(t.id)}
-                onToggle={() => {
-                  setExpandedIds((prev) => {
-                    const n = new Set(prev);
-                    if (n.has(t.id)) n.delete(t.id); else n.add(t.id);
-                    return n;
-                  });
-                }}
-              />
-            ))}
-
-            {/* Toggle goes RIGHT AFTER the always-shown last finished */}
-            {remainingFinishedCount > 0 && (
-              <View style={{ alignItems: "center", marginTop: 4 }}>
-                <TouchableOpacity
-                  onPress={() => setShowAllFinished((v) => !v)}
-                  activeOpacity={0.85}
-                  style={[styles.secondaryBtn, { paddingHorizontal: 16, paddingVertical: 10 }]}
-                >
-                  <Text style={styles.secondaryBtnText}>
-                    {showAllFinished
-                      ? "Hide previous finished challenges"
-                      : `Show previous finished challenges (${remainingFinishedCount})`}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {/* The rest of the finished go AFTER the button (collapsed by default) */}
-            {showAllFinished &&
-              (finished?.slice(1) || []).map((t) => (
-                <TournamentCardMobileBR
-                  key={t.id}
-                  tournament={t}
-                  userId={userId}
-                  refreshToken={refreshToken}
-                  hardRefreshToken={hardRefreshToken}
-                  onChanged={reloadLists}
-                  isExpanded={expandedIds.has(t.id)}  // collapsed unless user opens
-                  onToggle={() => {
-                    setExpandedIds((prev) => {
-                      const n = new Set(prev);
-                      if (n.has(t.id)) n.delete(t.id); else n.add(t.id);
-                      return n;
-                    });
-                  }}
-                />
-              ))}
-          </View>
-
-
-
-        )}
-      </Animated.ScrollView>
-    </View>
-  );
-
-  /* ------------------- Small inner components for this screen ------------------- */
-  function EmptyText({ text }) {
-    return (
-      <View style={{ paddingVertical: 40, alignItems: "center" }}>
-        <Text style={{ color: "#6B7280" }}>{text}</Text>
-      </View>
-    );
-  }
-  function ErrorBox({ message }) {
-    return (
-      <View style={styles.errorBox}>
-        <Text style={styles.errorTitle}>Couldn’t load</Text>
-        <Text style={styles.errorText}>{String(message)}</Text>
-      </View>
-    );
-  }
-  function Skeleton() {
-    return (
-      <View style={{ gap: 12 }}>
-        {[0, 1].map((i) => (
-          <View key={i} style={styles.skeleton} />
-        ))}
-      </View>
-    );
-  }
-
-  /* ------------------------ User KPI stats (mobile) ------------------------ */
-  function UserElimStatsKPI({ userId }) {
+/* ------------------------ User KPI stats (mobile) ------------------------ */
+// Re-render only when userId OR refreshKey changes (not on expand/collapse noise)
+const UserElimStatsKPI = React.memo(
+  function UserElimStatsKPI({ userId, refreshKey }) {
     const [stats, setStats] = useState({
       created: 0,
       participated: 0,
@@ -585,7 +245,7 @@ export default function EliminationScreen() {
         } catch { }
       })();
       return () => { cancelled = true; };
-    }, [userId]);
+    }, [userId, refreshKey]);
 
     const netPositive = stats.pointsNet > 0;
     const netNegative = stats.pointsNet < 0;
@@ -616,25 +276,445 @@ export default function EliminationScreen() {
         </View>
       </View>
     );
-
   }
+  , (prev, next) => (
+    prev.userId === next.userId &&
+    prev.refreshKey === next.refreshKey
+  )
+);
 
-  function StatCardKPI({ label, value, valueStyle }) {
-    return (
-      <View
-        style={{
-          flex: 1,
-          backgroundColor: "white",
-          borderColor: "#E5E7EB",
-          borderWidth: 1,
-          borderRadius: 10,
-          paddingVertical: 8,
-          paddingHorizontal: 6,
-          alignItems: "center",
-        }}
+function StatCardKPI({ label, value, valueStyle }) {
+  return (
+    <View
+      style={{
+        flex: 1,
+        backgroundColor: "white",
+        borderColor: "#E5E7EB",
+        borderWidth: 1,
+        borderRadius: 10,
+        paddingVertical: 8,
+        paddingHorizontal: 6,
+        alignItems: "center",
+      }}
+    >
+      <Text style={{ fontSize: 11, color: "#6B7280" }}>{label}</Text>
+      <Text style={[{ fontSize: 18, fontWeight: "700", color: "#111827" }, valueStyle]}>{value}</Text>
+    </View>
+  );
+}
+
+
+/* ---------------------------------- Page ---------------------------------- */
+export default function EliminationScreen() {
+  const router = useRouter();
+  const [userId, setUserId] = useState(null);
+
+  const [upcoming, setUpcoming] = useState([]); // lobby
+  const [live, setLive] = useState([]);
+  const [finished, setFinished] = useState([]);
+
+  // Loading + error per section
+  const [loading, setLoading] = useState({ upcoming: true, live: true, finished: true });
+  const [error, setError] = useState({ upcoming: "", live: "", finished: "" });
+
+  // Pull-to-refresh
+  const [refreshing, setRefreshing] = useState(false);
+
+  // For child cards to force reloads
+  const [refreshToken, setRefreshToken] = useState(0);
+  const [hardRefreshToken, setHardRefreshToken] = useState(0);
+
+  // Per-tournament realtime ticks (so we can nudge only the changed card)
+const [rtTicksByTournament, setRtTicksByTournament] = useState({});
+const bumpRtTick = useCallback((tid) => {
+  if (!tid) return;
+  setRtTicksByTournament((prev) => ({ ...prev, [tid]: (prev[tid] || 0) + 1 }));
+}, []);
+
+  const [liveAutoTick, setLiveAutoTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setLiveAutoTick((t) => t + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const [showAllFinished, setShowAllFinished] = useState(false);
+
+  // Expanded card: always expand the top card after each lists reload
+  const [expandedIds, setExpandedIds] = useState(new Set());
+
+  // Fade-in animation for the list container
+  const fadeAnim = useRef(new Animated.Value(0)).current; // 0 → 1
+  const slideAnim = useRef(new Animated.Value(8)).current; // 8px down → 0
+
+  // --- Get current user id once ---
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const { data, error } = await supabase.auth.getUser();
+      if (!alive) return;
+      if (error) {
+        setUserId(null);
+        return;
+      }
+      setUserId(data?.user?.id || null);
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // --- Loader: fetch three lists
+  const reloadLists = useCallback(async () => {
+    if (!userId) {
+      setUpcoming([]); setLive([]); setFinished([]);
+      setLoading({ upcoming: false, live: false, finished: false });
+      setError({ upcoming: "", live: "", finished: "" });
+      return;
+    }
+    try {
+      // --- 1) LOBBY: all, except those I explicitly declined ---
+      const { data: lobbyAll, error: lobbyErr } = await supabase
+        .from("elimination_tournaments")
+        .select("*")
+        .eq("status", "lobby")
+        .order("created_at", { ascending: false });
+
+      if (lobbyErr) throw lobbyErr;
+
+      const lobbyIds = (lobbyAll || []).map((t) => t.id);
+      let declinedSet = new Set();
+
+      if (lobbyIds.length > 0) {
+        const { data: myDeclines, error: declinesErr } = await supabase
+          .from("elimination_participants")
+          .select("tournament_id")
+          .eq("user_id", userId)
+          .eq("invite_status", "declined")
+          .in("tournament_id", lobbyIds);
+
+        if (declinesErr) throw declinesErr;
+        declinedSet = new Set((myDeclines || []).map((r) => r.tournament_id));
+      }
+
+      const lobbyFiltered = (lobbyAll || []).filter((t) => !declinedSet.has(t.id));
+
+      // --- 2) Get my ACCEPTED tournament IDs once (for live & finished) ---
+      const { data: myAccepted, error: accErr } = await supabase
+        .from("elimination_participants")
+        .select("tournament_id")
+        .eq("user_id", userId)
+        .eq("invite_status", "accepted");
+
+      if (accErr) throw accErr;
+
+      const acceptedIds = Array.from(new Set((myAccepted || []).map((r) => r.tournament_id)));
+
+      // --- 3) LIVE: only tournaments I accepted ---
+      let liveData = [];
+      if (acceptedIds.length > 0) {
+        const { data, error } = await supabase
+          .from("elimination_tournaments")
+          .select("*")
+          .eq("status", "live")
+          .in("id", acceptedIds)
+          .order("updated_at", { ascending: false });
+        if (error) throw error;
+        liveData = data || [];
+      }
+
+      // --- 4) FINISHED: only tournaments I accepted ---
+      let finishedData = [];
+      if (acceptedIds.length > 0) {
+        const { data, error } = await supabase
+          .from("elimination_tournaments")
+          .select("*")
+          .eq("status", "finished")
+          .in("id", acceptedIds)
+          .order("finished_at", { ascending: false });
+        if (error) throw error;
+        finishedData = data || [];
+      }
+
+      // --- 5) Commit to state ---
+      setUpcoming(lobbyFiltered);
+      setLive(liveData);
+      setFinished(finishedData);
+      setRefreshToken((t) => t + 1);  // let light reloads trigger dependents like the KPI/animations
+    } catch (e) {
+      console.warn("reloadLists failed:", e);
+    }
+  }, [supabase, userId]);
+
+
+  // initial + on user change
+  useEffect(() => { reloadLists(); }, [reloadLists]);
+
+  // Also reload every time the Elimination tab/screen regains focus
+  useFocusEffect(
+    useCallback(() => {
+      reloadLists();  // refetch lobby/live/finished and re-expand top card
+      return () => { };
+    }, [reloadLists])
+  );
+
+  // --- Refresh when the user taps a push notification about an elimination challenge
+  useEffect(() => {
+    // Decide whether the tapped notification is about an elimination challenge
+    const isEliminationNotification = (data) => {
+      const k = data?.kind;
+      return (
+        k === "round_started" ||
+        k === "tournament_new_accept" ||
+        k === "private_elim_invited"
+      );
+    };
+
+    const handleTap = (response) => {
+      const data = response?.notification?.request?.content?.data ?? {};
+      if (isEliminationNotification(data)) {
+        // User is on the Elimination screen already; just refresh the lists
+        reloadLists?.();
+      }
+    };
+
+    // 1) Handle taps while app is foreground/background
+    const sub = Notifications.addNotificationResponseReceivedListener(handleTap);
+
+    // 2) Handle the case where the app was launched/opened from a tap
+    (async () => {
+      try {
+        const last = await Notifications.getLastNotificationResponseAsync();
+        if (last) handleTap(last);
+      } catch { }
+    })();
+
+    return () => {
+      sub?.remove?.();
+    };
+  }, [reloadLists]);
+
+
+  // Scroll-to-refresh
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    // Bump hard refresh first (cards will decide whether to react)
+    setHardRefreshToken((t) => t + 1);
+    reloadLists()
+      .finally(() => setRefreshing(false));
+  }, [reloadLists]);
+
+
+  // simple “any” flags / lists
+  const anyError = error.upcoming || error.live || error.finished;
+  // Only live + upcoming + the *last* finished
+  const lastFinished = finished && finished.length ? finished[0] : null;
+  const combinedList = [
+    ...(live || []),
+    ...(upcoming || []),
+    ...(lastFinished ? [lastFinished] : []),
+  ];
+
+  // How many finished are *not* shown yet (for the button label)
+  const remainingFinishedCount = Math.max(0, (finished?.length || 0) - (lastFinished ? 1 : 0));
+
+  // Fade in on mount / reloads
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 60, useNativeDriver: true }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 60, useNativeDriver: true }),
+    ]).start();
+  }, [refreshToken]);
+
+  // Always expand the first visible card (live/upcoming + last finished) after each reload
+  useEffect(() => {
+    // combinedList is defined above; it reflects the currently displayed order
+    const first = combinedList.length ? combinedList[0].id : null;
+    setExpandedIds(first ? new Set([first]) : new Set());
+    // Runs after each reloadLists() completion and realtime-triggered hard refresh
+  }, [refreshToken, hardRefreshToken, combinedList.length]);
+
+  // Realtime: keep tournaments → reload lists, everything else → tick only the affected card.
+useEffect(() => {
+  const ch = supabase
+    .channel("elim-mobile-realtime")
+
+    // Any change to tournaments should re-query the three lists
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "elimination_tournaments" },
+      () => reloadLists()
+    )
+
+    // Rounds → bump that tournament's card only
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "elimination_rounds" },
+      (payload) => {
+        const tid = payload?.new?.tournament_id ?? payload?.old?.tournament_id ?? null;
+        if (tid) bumpRtTick(tid);
+      }
+    )
+
+    // Participants → bump that tournament's card only
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "elimination_participants" },
+      (payload) => {
+        const tid = payload?.new?.tournament_id ?? payload?.old?.tournament_id ?? null;
+        if (tid) bumpRtTick(tid);
+      }
+    )
+
+    // Entries → find the tournament via the round_id and bump only that card
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "elimination_round_entries" },
+      async (payload) => {
+        const rid = payload?.new?.round_id ?? payload?.old?.round_id ?? null;
+        if (!rid) return;
+        // Lightweight lookup of the tournament for this round
+        const { data } = await supabase
+          .from("elimination_rounds")
+          .select("tournament_id")
+          .eq("id", rid)
+          .single();
+        const tid = data?.tournament_id ?? null;
+        if (tid) bumpRtTick(tid);
+      }
+    )
+
+    // point_transactions: noisy → IGNORE at page level. Cards recompute when opened.
+
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(ch);
+  };
+}, [reloadLists, bumpRtTick]);
+
+
+  return (
+    <View style={{ flex: 1, backgroundColor: "#F0FDF4", justifyContent: "center" }}>
+      <Animated.ScrollView
+        contentContainerStyle={{ padding: 12, paddingBottom: 32 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        // Fade + slight up-slide to avoid any flash on mount/reloads
+        style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}
       >
-        <Text style={{ fontSize: 11, color: "#6B7280" }}>{label}</Text>
-        <Text style={[{ fontSize: 18, fontWeight: "700", color: "#111827" }, valueStyle]}>{value}</Text>
+        {/* Top CTA */}
+        <View style={{ marginBottom: 12, justifyContent: "center" }}>
+          <TouchableOpacity
+            style={[styles.primaryBtn, { alignSelf: "center", paddingHorizontal: 14 }]}
+            onPress={() => router.push("/elimination-create")}
+          >
+            <Text style={styles.primaryBtnText}>+ Create New Challenge</Text>
+          </TouchableOpacity>
+        </View>
+
+        {userId && <UserElimStatsKPI userId={userId} refreshKey={`${refreshToken}:${hardRefreshToken}`} />}
+
+        {anyError ? (
+          <ErrorBox message={anyError} />
+        ) : combinedList.length === 0 ? (
+          <EmptyText text="" />
+        ) : (
+          <View style={{ gap: 12 }}>
+            {/* live + upcoming + the last finished */}
+            {combinedList.map((t, idx) => (
+              <TournamentCardMobileBR
+                key={t.id}
+                tournament={t}
+                userId={userId}
+                refreshToken={refreshToken}
+                hardRefreshToken={
+                  (t.status === "live" || t.status === "lobby")
+                    ? (hardRefreshToken + liveAutoTick)  // refresh every 30s + realtime
+                    : 0                                  // finished: no auto refresh
+                }
+                    perCardTick={rtTicksByTournament[t.id] || 0}   
+                onChanged={reloadLists}
+                isExpanded={expandedIds.has(t.id)}
+                onToggle={() => {
+                  setExpandedIds((prev) => {
+                    const n = new Set(prev);
+                    if (n.has(t.id)) n.delete(t.id); else n.add(t.id);
+                    return n;
+                  });
+                }}
+              />
+            ))}
+
+            {/* Toggle goes RIGHT AFTER the always-shown last finished */}
+            {remainingFinishedCount > 0 && (
+              <View style={{ alignItems: "center", marginTop: 4 }}>
+                <TouchableOpacity
+                  onPress={() => setShowAllFinished((v) => !v)}
+                  activeOpacity={0.85}
+                  style={[styles.secondaryBtn, { paddingHorizontal: 16, paddingVertical: 10 }]}
+                >
+                  <Text style={styles.secondaryBtnText}>
+                    {showAllFinished
+                      ? "Hide previous finished challenges"
+                      : `Show previous finished challenges (${remainingFinishedCount})`}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* The rest of the finished go AFTER the button (collapsed by default) */}
+            {showAllFinished &&
+              (finished?.slice(1) || []).map((t) => (
+                <TournamentCardMobileBR
+                  key={t.id}
+                  tournament={t}
+                  userId={userId}
+                  refreshToken={refreshToken}
+                  hardRefreshToken={
+                    (t.status === "live" || t.status === "lobby")
+                      ? (hardRefreshToken + liveAutoTick)  // refresh every 30s + realtime
+                      : 0                                  // finished: no auto refresh
+                  }
+                  perCardTick={rtTicksByTournament[t.id] || 0}
+                  onChanged={reloadLists}
+                  isExpanded={expandedIds.has(t.id)}  // collapsed unless user opens
+                  onToggle={() => {
+                    setExpandedIds((prev) => {
+                      const n = new Set(prev);
+                      if (n.has(t.id)) n.delete(t.id); else n.add(t.id);
+                      return n;
+                    });
+                  }}
+                />
+              ))}
+          </View>
+
+
+
+        )}
+      </Animated.ScrollView>
+    </View>
+  );
+
+  /* ------------------- Small inner components for this screen ------------------- */
+  function EmptyText({ text }) {
+    return (
+      <View style={{ paddingVertical: 40, alignItems: "center" }}>
+        <Text style={{ color: "#6B7280" }}>{text}</Text>
+      </View>
+    );
+  }
+  function ErrorBox({ message }) {
+    return (
+      <View style={styles.errorBox}>
+        <Text style={styles.errorTitle}>Couldn’t load</Text>
+        <Text style={styles.errorText}>{String(message)}</Text>
+      </View>
+    );
+  }
+  function Skeleton() {
+    return (
+      <View style={{ gap: 12 }}>
+        {[0, 1].map((i) => (
+          <View key={i} style={styles.skeleton} />
+        ))}
       </View>
     );
   }
@@ -648,9 +728,10 @@ function TournamentCardMobileBR({
   refreshToken,
   hardRefreshToken,
   onChanged,
-  isExpanded,          // NEW
-  onToggle,            // NEW
-  onFirstDataLoaded,          // NEW
+  isExpanded,         
+  onToggle,           
+  onFirstDataLoaded,       
+  perCardTick = 0,
 }) {
   const router = useRouter();
   const isUpcoming = tournament.status === "lobby";
@@ -733,31 +814,43 @@ function TournamentCardMobileBR({
     (async () => {
       setLoading(true);
       try {
-        const { data: partRows } = await supabase
-          .from("elimination_participants")
-          .select("user_id, state, invite_status, eliminated_at_round")
-          .eq("tournament_id", tournament.id);
+        const [{ data: partRows }, { data: roundRows }] = await Promise.all([
+          supabase
+            .from("elimination_participants")
+            .select("user_id, state, invite_status, eliminated_at_round")
+            .eq("tournament_id", tournament.id),
+
+          supabase
+            .from("elimination_rounds")
+            .select("id, round_number, started_at, ends_at, closed_at, player_id, is_elimination, users_participated")
+            .eq("tournament_id", tournament.id)
+            .order("round_number", { ascending: true }),
+        ]);
 
         const participantIds = (partRows || []).map((r) => r.user_id);
 
-        const { data: roundRows } = await supabase
-          .from("elimination_rounds")
-          .select("id, round_number, started_at, ends_at, closed_at, player_id, is_elimination, users_participated")
-          .eq("tournament_id", tournament.id)
-          .order("round_number", { ascending: true });
 
-        // entries per round
-        const entriesMap = {};
+        // entries per round — BULK query in one go (removes N+1 round-trips)
+        const roundIds = (roundRows || []).map((r) => r.id);
+        let entriesMap = {};
         let entryUserIds = new Set();
-        for (const r of roundRows || []) {
-          const { data: ent } = await supabase
+
+        if (roundIds.length) {
+          const { data: entAll } = await supabase
             .from("elimination_round_entries")
-            .select("user_id, points_earned, started, game_record_id")
-            .eq("round_id", r.id);
-          const arr = Array.isArray(ent) ? ent : [];
-          entriesMap[r.id] = arr;
-          arr.forEach((e) => entryUserIds.add(e.user_id));
+            .select("round_id, user_id, points_earned, started, game_record_id")
+            .in("round_id", roundIds);
+
+          const arrAll = Array.isArray(entAll) ? entAll : [];
+          for (const e of arrAll) {
+            if (!entriesMap[e.round_id]) entriesMap[e.round_id] = [];
+            entriesMap[e.round_id].push(e);
+            entryUserIds.add(e.user_id);
+          }
+        } else {
+          entriesMap = {};
         }
+
 
         // round player info — include nationality & position so LiveGame hints work
         const roundPlayerIds = Array.from(
@@ -824,66 +917,64 @@ function TournamentCardMobileBR({
           const me = withMeta.find((u) => u.id === userId);
           setYouEliminatedRound(me?.eliminated_at_round ?? null);
 
-          // --- Pre-check: calculate today's available points and compare to stake ---
-          (async () => {
-            try {
-              setPrecheckMsg("");
-              const stakePts = Number(tournament.stake_points || 0);
-              // If no stake, always allow
-              if (!stakePts) {
+          // --- Pre-check: only when lobby, not owner, not already joined, and stake > 0
+          const stakePts = Number(tournament.stake_points || 0);
+          const youAccepted = (partRows || []).some(
+            (p) => p.user_id === userId && (p.invite_status || "").toLowerCase() === "accepted"
+          );
+          const canRunPrecheck = isUpcoming && !isOwner && !youAccepted && stakePts > 0;
+
+          if (!canRunPrecheck) {
+            setCanAffordStakeToday(true);
+            setPrecheckMsg("");
+          } else {
+            (async () => {
+              try {
+                setPrecheckMsg("");
+                const { start, end } = getTodayUtcRange();
+
+                // 1) Sum regular-games points today
+                let sumGames = 0;
+                {
+                  const { data: grRows } = await supabase
+                    .from("games_records")
+                    .select("points_earned")
+                    .eq("user_id", userId)
+                    .eq("is_elimination_game", false)
+                    .gte("created_at", start)
+                    .lt("created_at", end);
+                  if (Array.isArray(grRows)) {
+                    for (const r of grRows) sumGames += Number(r.points_earned) || 0;
+                  }
+                }
+
+                // 2) Sum point_transactions today
+                let sumTx = 0;
+                {
+                  const { data: txRows } = await supabase
+                    .from("point_transactions")
+                    .select("amount")
+                    .eq("user_id", userId)
+                    .gte("created_at", start)
+                    .lt("created_at", end);
+                  if (Array.isArray(txRows)) {
+                    for (const r of txRows) sumTx += Number(r.amount) || 0;
+                  }
+                }
+
+                const availableToday = (sumGames || 0) + (sumTx || 0);
+                const ok = availableToday >= stakePts;
+
+                setCanAffordStakeToday(ok);
+                if (!ok) {
+                  setPrecheckMsg(`Stake is ${stakePts} pts. Your available today is ${availableToday} pts.`);
+                }
+              } catch (e) {
+                console.warn("join precheck failed:", e?.message);
                 setCanAffordStakeToday(true);
-                return;
               }
-
-              const { start, end } = getTodayUtcRange();
-
-              // 1) Sum games_records.points_earned where is_elimination_game = FALSE for me, today(UTC)
-              let sumGames = 0;
-              {
-                const { data: grRows, error: grErr } = await supabase
-                  .from("games_records")
-                  .select("points_earned")
-                  .eq("user_id", userId)
-                  .eq("is_elimination_game", false)
-                  .gte("created_at", start)
-                  .lt("created_at", end);
-
-                if (!grErr && Array.isArray(grRows)) {
-                  for (const r of grRows) sumGames += Number(r.points_earned) || 0;
-                }
-              }
-
-              // 2) Sum point_transactions.amount for me, today(UTC)
-              let sumTx = 0;
-              {
-                const { data: txRows, error: txErr } = await supabase
-                  .from("point_transactions")
-                  .select("amount")
-                  .eq("user_id", userId)
-                  .gte("created_at", start)
-                  .lt("created_at", end);
-
-                if (!txErr && Array.isArray(txRows)) {
-                  for (const r of txRows) sumTx += Number(r.amount) || 0;
-                }
-              }
-
-              const availableToday = (sumGames || 0) + (sumTx || 0);
-              const ok = availableToday >= stakePts;
-
-              setCanAffordStakeToday(ok);
-              if (!ok) {
-                setPrecheckMsg(
-                  `Stake is ${stakePts} pts. Your available today is ${availableToday} pts.`
-                );
-              }
-            } catch (e) {
-              // On any error, don't block; let them try to join (server will still enforce)
-              console.warn("join precheck failed:", e?.message);
-              setCanAffordStakeToday(true);
-            }
-          })();
-
+            })();
+          }
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -892,7 +983,7 @@ function TournamentCardMobileBR({
     return () => {
       cancelled = true;
     };
-  }, [tournament.id, refreshToken, hardRefreshToken, userId, rtTick]); // ← include rtTick so realtime nudges refetch
+  }, [tournament.id, refreshToken, hardRefreshToken, userId, rtTick, perCardTick]); // ← include rtTick so realtime nudges refetch
 
 
   // NEW: Let the parent know this card finished its FIRST internal fetch
@@ -910,6 +1001,7 @@ function TournamentCardMobileBR({
     tournamentId: tournament.id,
     roundIds: rounds.map((r) => r.id),
     onChange: () => setRtTick((t) => t + 1),
+      enabled: !!isExpanded, // realtime channel only when open
   });
 
   const acceptedParticipants = useMemo(
@@ -1015,10 +1107,6 @@ function TournamentCardMobileBR({
 
   const canStart = isOwner && isUpcoming && acceptedCount >= Number(tournament.min_participants || 0);
 
-  // If my invite_status is 'declined', I shouldn't see this card at all
-  const myInviteStatus = (participants.find((p) => p.id === userId)?.invite_status || "").toLowerCase();
-  const shouldHideThisCard = myInviteStatus === "declined";
-
   // Treat lobby as open purely by status
   const isLobbyOpen = String(tournament.status || "").toLowerCase() === "lobby";
 
@@ -1026,11 +1114,6 @@ function TournamentCardMobileBR({
   const isInvitedOnly = participants.some(
     (p) => p.id === userId && String(p.invite_status || "").toLowerCase() !== "accepted"
   );
-
-  // Hide the entire card if I declined the invite
-  if (shouldHideThisCard) {
-    return null;
-  }
 
   return (
     <View style={styles.card}>
@@ -1221,6 +1304,8 @@ function TournamentCardMobileBR({
                       elimination: JSON.stringify({
                         tournamentId: tournament.id,
                         roundId: latest.id,
+                        endsAt: latest.ends_at,                           // ISO from DB
+                        timeLimitSeconds: tournament.round_time_limit_seconds || 120
                       }),
                     },
                   });
@@ -1489,6 +1574,56 @@ function SwipeableArena({
   const screenW = Dimensions.get("window").width;
 
   const winnerUserId = tournament?.winner_user_id || null;
+
+  // 🔔 Show final result alert ONCE per user per tournament
+  const alertShownRef = React.useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      if (
+        tournament.status === "finished" &&
+        winnerUserId &&
+        userId &&
+        !alertShownRef.current
+      ) {
+        const already = await hasSeenFinishAlert(tournament.id, userId);
+        if (cancelled || already) return;
+
+        // Build message
+        const winner = usersById[winnerUserId] || {};
+        const winnerName = winner.full_name || winner.email || "Winner";
+        const challengeName = tournament.name || "Challenge";
+        const stake = Number(tournament.stake_points || 0);
+        const acceptedCount = participants.filter(
+          (p) => (p.invite_status || "").toLowerCase() === "accepted"
+        ).length;
+        const pot = stake * acceptedCount;
+
+        let message = "";
+        if (userId === winnerUserId) {
+          message = `Congratulations ${winnerName}! You conquered "${challengeName}" and managed to survive until the end. Bragging rights are yours! 🌟`;
+          if (stake > 0) message += ` 💰 You take a pot of ${pot} points. 💰`;
+        } else {
+          message = `Shamefully defeated in "${challengeName}" 😔 Bow before ${winnerName}. Train harder and return stronger.`;
+          if (stake > 0) message += ` 💸 You lost ${stake} points. 💸`;
+        }
+
+        // Mark as seen immediately (prevents re-entrancy if user navigates fast)
+        alertShownRef.current = true;
+        await markSeenFinishAlert(tournament.id, userId);
+
+        // Show the required “OK”-only alert
+        const title = userId === winnerUserId ? "🏆 Victory!" : "💀 Defeat";
+        Alert.alert(title, message, [{ text: "OK" }]);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [tournament.status, winnerUserId, userId, participants, usersById, tournament.id, tournament.stake_points]);
+
+
+
   const acceptedCount = participants.filter(
     (p) => (p.invite_status || "").toLowerCase() === "accepted"
   ).length;
@@ -1657,6 +1792,7 @@ function RoundSlide({
   onForceRefresh,
 }) {
   const r = round;
+  const isLiveTournament = tournament?.status === "live";
 
   // participants for this round from users_participated (fallback to entries if null)
   const roundUserIds = Array.isArray(r.users_participated) && r.users_participated.length
@@ -1817,34 +1953,35 @@ function RoundSlide({
   const endedRef = useRef(false);
 
   // Consider the round "ended" if (a) DB marked it closed, (b) everyone who should play has played, or (c) timer hit zero.
-const allPlayed =
-  Array.isArray(roundUserIds) &&
-  roundUserIds.length > 0 &&
-  roundUserIds.every((uid) => playedThisRound.has(uid));
+  const allPlayed =
+    Array.isArray(roundUserIds) &&
+    roundUserIds.length > 0 &&
+    roundUserIds.every((uid) => playedThisRound.has(uid));
 
-const roundEndedNow = !!r.closed_at || allPlayed || countdownEnded;
+  const roundEndedNow = !!r.closed_at || allPlayed || countdownEnded;
+  const isLatestRound = roundsAsc[roundsAsc.length - 1]?.id === r.id;
 
-// Fire once when a round ends (any reason): show overlay, whistle, and refresh
-useEffect(() => {
-  if (roundEndedNow && !endedRef.current) {
-    endedRef.current = true;
+  // Fire once when a round ends (any reason): show overlay, whistle, and refresh
+  useEffect(() => {
+    if (isLiveTournament && isLatestRound && roundEndedNow && !endedRef.current) {
+      endedRef.current = true;
 
-    // Overlay for ~2.5s
-    setShowEndedBanner(true);
-    const hideT = setTimeout(() => setShowEndedBanner(false), 2500);
+      // Overlay for ~2.5s
+      setShowEndedBanner(true);
+      const hideT = setTimeout(() => setShowEndedBanner(false), 2500);
 
-    // Whistle
-    try {
-      whistle.seekTo(0);
-      whistle.play();
-    } catch {}
+      // Whistle
+      try {
+        whistle.seekTo(0);
+        whistle.play();
+      } catch { }
 
-    // Let parent refresh so the next round appears
-    onForceRefresh && onForceRefresh();
+      // Let parent refresh so the next round appears
+      onForceRefresh && onForceRefresh();
 
-    return () => clearTimeout(hideT);
-  }
-}, [roundEndedNow, onForceRefresh]);
+      return () => clearTimeout(hideT);
+    }
+  }, [roundEndedNow, onForceRefresh, isLiveTournament]);
 
   return (
     <View style={containerStyle}>
@@ -1861,10 +1998,10 @@ useEffect(() => {
         </Text>
 
         <ReverseTimerBar
-  endAt={r.ends_at}
-  totalSeconds={tournament.round_time_limit_seconds}
-  forceEnded={roundEndedNow}           // <= NEW: makes the bar show "Round Ended" immediately
-/>
+          endAt={r.ends_at}
+          totalSeconds={tournament.round_time_limit_seconds}
+          forceEnded={roundEndedNow}           // <= NEW: makes the bar show "Round Ended" immediately
+        />
 
       </View>
 

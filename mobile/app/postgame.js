@@ -11,13 +11,13 @@ import {
   Pressable,
   Platform,
   Share as RNShare,
+  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { getRandomPlayer } from '../lib/api';
 import Logo from '../assets/images/footytrail_logo.png';
-
 /* icons */
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
@@ -161,6 +161,35 @@ export default function PostgameMobile() {
     })();
   }, []);
 
+  // After finishing a game, check if we hit a 7x streak and show a one-time modal
+  useEffect(() => {
+    (async () => {
+      try {
+        // Only for daily or regular (ignore elimination screens)
+        if (elimination) return;
+
+        const { data: authData } = await supabase.auth.getUser();
+        const userId = authData?.user?.id;
+        if (!userId) return;
+
+        // Build day map
+        const rows = await fetchRecentNonElimRows(userId);
+        const dayMap = buildDayMap(rows);
+
+        const kind = isDaily ? "daily" : "regular";
+        const value = isDaily ? computeDailyStreak(dayMap) : computeRegularStreak(dayMap);
+
+        if (value > 0 && value % 7 === 0 && !didShowStreakRef.current) {
+  didShowStreakRef.current = true;
+  setStreakModal({ visible: true, kind, value });
+}
+
+      } catch {
+        // ignore failures – never block postgame
+      }
+    })();
+  }, [elimination, isDaily]);
+
   // ---------- Share (capture the card as image) ----------
   const shareText = useMemo(() => {
     const outcome = didWin ? 'succeeded phenomenally' : 'failed miserably';
@@ -170,6 +199,14 @@ export default function PostgameMobile() {
 
   const cardShotRef = useRef(null);
   const [shareBusy, setShareBusy] = useState(false);
+  const didShowStreakRef = useRef(false);
+
+  // Streak modal state
+  const [streakModal, setStreakModal] = useState({
+    visible: false,
+    kind: "daily", // "daily" | "regular"
+    value: 0,
+  });
 
   const onShare = async () => {
     if (shareBusy) return;
@@ -367,9 +404,9 @@ export default function PostgameMobile() {
             <TouchableOpacity
               onPress={() => router.replace('/(tabs)/game')}
               activeOpacity={0.85}
-              style={[styles.btn, styles.btnSecondary]}
+              style={[styles.btn, styles.btnPrimary]}
             >
-              <Text style={[styles.btnTxt, styles.btnTxtDark]}>Back to Game</Text>
+              <Text style={[styles.btnTxt]}>Back to Game</Text>
             </TouchableOpacity>
           </View>
         ) : elimination ? (
@@ -423,9 +460,142 @@ export default function PostgameMobile() {
           </View>
         )}
       </View>
+      <Modal transparent visible={streakModal.visible} animationType="fade" onRequestClose={() => setStreakModal(s => ({ ...s, visible: false }))}>
+  <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+    <View style={{ width: '100%', maxWidth: 380, backgroundColor: '#fff', borderRadius: 20, paddingVertical: 24, paddingHorizontal: 20, alignItems: 'center', borderWidth: 1, borderColor: '#e5e7eb' }}>
+      <Text style={{ fontSize: 22, fontWeight: '800', color: '#111827', marginBottom: 6, textAlign: 'center' }}>
+  {`${streakModal.value}-Day ${streakModal.kind === 'daily' ? 'Daily Challenge' : 'Daily Progress'} Streak!`}
+</Text>
+
+
+      {/* flame + number */}
+      <View style={{ width: 88, height: 88, alignItems: "center", justifyContent: "center", marginVertical: 8 }}>
+  <MaterialCommunityIcons name="fire" size={88} color="#f97316" />
+  <Text
+    style={{
+      position: "absolute",
+      top: "54%",                             // sit a touch below center
+      transform: [{ translateY: 2 }],         // nudge down ~2px
+      fontSize: 34,
+      fontWeight: "900",
+      color: "#111827",                       // black
+      fontFamily: "Tektur_700Bold",
+      textShadowColor: "#ffffff",             // white “border”
+      textShadowOffset: { width: 0, height: 0 },
+      textShadowRadius: 5,
+    }}
+  >
+    {streakModal.value}
+  </Text>
+</View>
+
+
+      <Text style={{ fontSize: 18, fontWeight: '800', color: '#111827', marginTop: 4 }}>
+        {streakModal.kind === 'daily' ? 'Day Streak' : 'Daily Progress Streak'}
+      </Text>
+
+      <View style={{ width: '100%', height: 8, borderRadius: 999, backgroundColor: '#fed7aa', marginTop: 14, overflow: 'hidden' }}>
+        <View style={{ width: '100%', height: '100%', backgroundColor: '#fb923c' }} />
+      </View>
+
+      <Text style={{ textAlign: 'center', fontSize: 14, color: '#4b5563', marginTop: 14, paddingHorizontal: 8 }}>
+  {streakModal.kind === 'daily'
+    ? `You've played the Daily Challenge ${streakModal.value} days in a row.`
+    : `You've completed all your regular games ${streakModal.value} days in a row.`}
+</Text>
+
+
+      <TouchableOpacity
+        onPress={() => setStreakModal(s => ({ ...s, visible: false }))}
+        activeOpacity={0.9}
+        style={{ width: '100%', marginTop: 18, backgroundColor: '#f97316', borderRadius: 12, paddingVertical: 12, alignItems: 'center' }}
+      >
+<Text style={{ color: '#fff', fontSize: 16, fontWeight: '800' }}>Nice job!</Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+</Modal>
+
     </ScrollView>
   );
 }
+
+// ---- Streak helpers (UTC) ----
+function getUtcDayKey(d = new Date()) {
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+
+async function fetchRecentNonElimRows(userId, daysBack = 60) {
+  // fetch recent non-elimination rows for the user
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - daysBack));
+  const { data, error } = await supabase
+    .from("games_records")
+    .select("created_at, is_daily_challenge, won, is_elimination_game")
+    .eq("user_id", userId)
+    .eq("is_elimination_game", false)
+    .gte("created_at", start.toISOString())
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return Array.isArray(data) ? data : [];
+}
+
+function buildDayMap(rows) {
+  const map = new Map();
+  rows.forEach((r) => {
+    const dt = new Date(r.created_at);
+    const key = getUtcDayKey(dt);
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(r);
+  });
+  return map;
+}
+
+// Daily streak: include today only if a daily was played today; otherwise start at yesterday
+function computeDailyStreak(dayMap) {
+  const hasDaily = (key) => (dayMap.get(key) || []).some((r) => r.is_daily_challenge === true);
+
+  let cursor = new Date();
+  if (!hasDaily(getUtcDayKey(cursor))) {
+    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() - 1));
+  }
+
+  let streak = 0;
+  while (true) {
+    const key = getUtcDayKey(cursor);
+    if (!hasDaily(key)) break;
+    streak += 1;
+    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() - 1));
+  }
+  return streak;
+}
+
+// Regular streak: include today only if ALL regulars completed today
+// (10 if daily not won that day, 11 if daily WAS won that day)
+function computeRegularStreak(dayMap) {
+  const qualifies = (key) => {
+    const rows = dayMap.get(key) || [];
+    const dailyWon = rows.some((r) => r.is_daily_challenge === true && r.won === true);
+    const required = dailyWon ? 11 : 10;
+    const regularCount = rows.filter((r) => r.is_daily_challenge !== true).length;
+    return regularCount >= required;
+  };
+
+  let cursor = new Date();
+  if (!qualifies(getUtcDayKey(cursor))) {
+    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() - 1));
+  }
+
+  let streak = 0;
+  while (true) {
+    const key = getUtcDayKey(cursor);
+    if (!qualifies(key)) break;
+    streak += 1;
+    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() - 1));
+  }
+  return streak;
+}
+
 
 /* =========================
    Helpers
@@ -542,7 +712,7 @@ const styles = StyleSheet.create({
     height: 56,
     backgroundColor: 'white',
     borderBottomWidth: Platform.OS === 'ios' ? 0.5 : 0.7,
-    borderBottomColor: '#e5e7eb',
+    borderBottomColor: '#F0FDF4',
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
@@ -558,8 +728,8 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
     borderColor: '#eef1f6',
-    borderWidth: 1,
-    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 4 },
+    borderWidth: 2,
+    shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 4 },
   },
 
   banner: { borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 12, borderWidth: 1 },
