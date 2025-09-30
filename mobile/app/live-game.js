@@ -106,6 +106,55 @@ export default function LiveGameMobile() {
     potentialPoints: parsed.potentialPoints,
   };
 
+  // ---- DOB source for hints/postgame ----
+  const [dobAgeStr, setDobAgeStr] = useState(parsed.dobAge || '');
+
+  // If parsed had it, keep in sync
+  useEffect(() => {
+    if (parsed.dobAge && parsed.dobAge !== dobAgeStr) setDobAgeStr(parsed.dobAge);
+  }, [parsed.dobAge]);
+
+  // If missing, fetch once from players_in_seasons by player_id
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (dobAgeStr || !gameData?.id) return;
+      try {
+        const { data, error } = await supabase
+          .from('players_in_seasons')
+          .select('player_dob_age')
+          .eq('player_id', gameData.id)
+          .not('player_dob_age', 'is', null)
+          .limit(1)
+          .maybeSingle();
+
+        if (!cancelled && !error && data?.player_dob_age) {
+          setDobAgeStr(String(data.player_dob_age));
+        }
+      } catch { }
+    })();
+    return () => { cancelled = true; };
+  }, [dobAgeStr, gameData?.id]);
+
+  const currentAge = useMemo(() => {
+    const dob = parseBirthDate(dobAgeStr);
+    if (!(dob instanceof Date) || Number.isNaN(dob.valueOf())) return null;
+    const a = computeAgeFromDate(dob);
+    return Number.isFinite(a) && a > 0 ? a : null;
+  }, [dobAgeStr]);
+
+  useEffect(() => {
+    console.log('[AGE DEBUG]', {
+      params_player_dob_age: params?.player_dob_age,
+      parsed_dobAge: parsed?.dobAge,
+      fetched_dobAgeStr: dobAgeStr,
+      currentAge,
+      loadingTransfers,
+      disabledUI,
+    });
+  }, [params?.player_dob_age, parsed?.dobAge, dobAgeStr, currentAge, loadingTransfers, disabledUI]);
+
+
   const isDaily = !!parsed.isDaily;
   const filters = parsed.filters || { potentialPoints: 0 };
   const elimination = parsed.elimination;
@@ -357,17 +406,19 @@ export default function LiveGameMobile() {
             try { scrollRef.current?.scrollTo({ y: 0, animated: true }); } catch { }
             setTimeout(() => setShowEmojiRain(true), 180);
             setTimeout(async () => {
-              await saveGameRecord(false);
-              await writeElimEntryAndAdvance(false, 0);
-              const outroLine = await generateOutro(false, 0, 3, START_TIME);
-              goPostgame({
-                didWin: false,
-                pointsEarned: 0,
-                elapsed: START_TIME,
-                guessesUsed: 3,
-                outroLine,
-              });
-            }, 1200);
+  const attempts = Math.max(0, 3 - guessesLeft);
+  await saveGameRecord(false, attempts);
+  await writeElimEntryAndAdvance(false, 0);
+  const outroLine = await generateOutro(false, 0, attempts, START_TIME);
+  goPostgame({
+    didWin: false,
+    pointsEarned: 0,
+    elapsed: START_TIME,
+    guessesUsed: attempts,
+    outroLine,
+  });
+}, 1200);
+
           }
         }
         return t - 1;
@@ -453,34 +504,34 @@ export default function LiveGameMobile() {
           r.photo || r.player_photo || r.player_photo_url || r.photo_url || r.avatar || r.image || r.img || null;
 
         // Group by normalized name, collect up to 3 photos for each group
-const groups = new Map();
-for (const r of rows) {
-  const display = String(r.player_name ?? r.name ?? r.display ?? r.player_norm_name ?? r.norm ?? '').trim();
-  if (!display) continue;
-  const key = normalize(display);
+        const groups = new Map();
+        for (const r of rows) {
+          const display = String(r.player_name ?? r.name ?? r.display ?? r.player_norm_name ?? r.norm ?? '').trim();
+          if (!display) continue;
+          const key = normalize(display);
 
-  const pickPhoto = (row) =>
-    row.photo ||
-    row.player_photo ||
-    row.player_photo_url ||
-    row.photo_url ||
-    row.avatar ||
-    row.image ||
-    row.img ||
-    null;
+          const pickPhoto = (row) =>
+            row.photo ||
+            row.player_photo ||
+            row.player_photo_url ||
+            row.photo_url ||
+            row.avatar ||
+            row.image ||
+            row.img ||
+            null;
 
-  const g = groups.get(key) || { id: key, display, photos: [], total: 0 };
-  g.total += 1;
+          const g = groups.get(key) || { id: key, display, photos: [], total: 0 };
+          g.total += 1;
 
-  const p = pickPhoto(r);
-  if (p && !g.photos.includes(p) && g.photos.length < 3) {
-    g.photos.push(p);
-  }
+          const p = pickPhoto(r);
+          if (p && !g.photos.includes(p) && g.photos.length < 3) {
+            g.photos.push(p);
+          }
 
-  groups.set(key, g);
-}
+          groups.set(key, g);
+        }
 
-if (active) setSuggestions(Array.from(groups.values()));
+        if (active) setSuggestions(Array.from(groups.values()));
 
       } catch {
         if (active) setSuggestions([]);
@@ -571,10 +622,11 @@ if (active) setSuggestions(Array.from(groups.values()));
       setTimeout(() => setShowConfetti(true), 180);
 
       setTimeout(async () => {
-        await saveGameRecord(true);
+        const guessesUsed = Math.min(3, Math.max(0, (3 - guessesLeft) + 1));
+await saveGameRecord(true, guessesUsed);
+
         await writeElimEntryAndAdvance(true, points);
         const elapsed = START_TIME - timeSec;
-        const guessesUsed = 3 - guessesLeft + 1;
         const outroLine = await generateOutro(true, points, guessesUsed, elapsed);
         goPostgame({
           didWin: true,
@@ -605,18 +657,23 @@ if (active) setSuggestions(Array.from(groups.values()));
       setTimeout(() => setShowEmojiRain(true), 180);
 
       setTimeout(async () => {
-        await saveGameRecord(false);
-        await writeElimEntryAndAdvance(false, 0);
-        const elapsed = START_TIME - timeSec;
-        const outroLine = await generateOutro(false, 0, 3, elapsed);
-        goPostgame({
-          didWin: false,
-          pointsEarned: 0,
-          elapsed,
-          guessesUsed: 3,
-          outroLine,
-        });
-      }, 1200);
+  // We just made a wrong guess that ended the game.
+  // Since guessesLeft hasn't been decremented in this branch,
+  // the actual attempts = (3 - guessesLeft) + 1
+  const attempts = Math.min(3, Math.max(0, (3 - guessesLeft) + 1));
+  await saveGameRecord(false, attempts);
+  await writeElimEntryAndAdvance(false, 0);
+  const elapsed = START_TIME - timeSec;
+  const outroLine = await generateOutro(false, 0, attempts, elapsed);
+  goPostgame({
+    didWin: false,
+    pointsEarned: 0,
+    elapsed,
+    guessesUsed: attempts,
+    outroLine,
+  });
+}, 1200);
+
     } else {
       setGuessesLeft((g) => g - 1);
     }
@@ -639,20 +696,23 @@ if (active) setSuggestions(Array.from(groups.values()));
     setTimeout(() => setShowEmojiRain(true), 180);
 
     setTimeout(async () => {
-      await saveGameRecord(false);
-      await writeElimEntryAndAdvance(false, 0);
-      const outroLine = await generateOutro(false, 0, 3, START_TIME - timeSec);
-      goPostgame({
-        didWin: false,
-        pointsEarned: 0,
-        elapsed: START_TIME - timeSec,
-        guessesUsed: 3,
-        outroLine,
-      });
-    }, 1200);
+  const attempts = Math.max(0, 3 - guessesLeft); // typically 0 on immediate give-up
+  await saveGameRecord(false, attempts);
+  await writeElimEntryAndAdvance(false, 0);
+  const elapsed = START_TIME - timeSec;
+  const outroLine = await generateOutro(false, 0, attempts, elapsed);
+  goPostgame({
+    didWin: false,
+    pointsEarned: 0,
+    elapsed,
+    guessesUsed: attempts,
+    outroLine,
+  });
+}, 1200);
+
   };
 
-  const saveGameRecord = async (won) => {
+const saveGameRecord = async (won, attemptsOverride) => {
     try {
       const playerIdNumeric = Number(gameData?.id);
       if (!playerIdNumeric || Number.isNaN(playerIdNumeric)) throw new Error('Missing playerData.id');
@@ -666,16 +726,21 @@ if (active) setSuggestions(Array.from(groups.values()));
         photo: gameData.photo,
       };
 
-      const gameStats = {
-        won,
-        points: won ? points : 0,
-        potentialPoints: potentialPointsSource,
-        timeTaken: START_TIME - timeSec,
-        guessesAttempted: 3 - guessesLeft + (won ? 1 : 0),
-        hintsUsed: Object.values(usedHints).filter(Boolean).length,
-        isDaily: !!isDaily,
-        is_elimination_game: !!elimination,
-      };
+      const attempts =
+    Number.isFinite(attemptsOverride)
+      ? Math.max(0, Math.min(3, attemptsOverride))
+      : Math.max(0, Math.min(3, 3 - guessesLeft + (won ? 1 : 0)));
+
+  const gameStats = {
+    won,
+    points: won ? points : 0,
+    potentialPoints: potentialPointsSource,
+    timeTaken: START_TIME - timeSec,
+    guessesAttempted: attempts,
+    hintsUsed: Object.values(usedHints).filter(Boolean).length,
+    isDaily: !!isDaily,
+    is_elimination_game: !!elimination,
+  };
 
       if (elimination?.roundId && elimination?.tournamentId) {
         const { data: userInfo } = await supabase.auth.getUser();
@@ -774,7 +839,7 @@ if (active) setSuggestions(Array.from(groups.values()));
           id: gameData.id,
           name: gameData.name,
           photo: gameData.photo,
-          age: gameData.age,
+          dob_age: dobAgeStr,
           nationality: gameData.nationality,
           position: gameData.position,
           funFact: gameData.funFact,
@@ -839,14 +904,14 @@ if (active) setSuggestions(Array.from(groups.values()));
             }}
           >
             {item.photos?.length ? (
-  <AvatarStack photos={item.photos} total={item.total} />
-) : (
-  <View style={styles.sugAvatarFallback}>
-    <Text style={styles.sugAvatarFallbackText}>
-      {(item.display?.[0] || '?').toUpperCase()}
-    </Text>
-  </View>
-)}
+              <AvatarStack photos={item.photos} total={item.total} />
+            ) : (
+              <View style={styles.sugAvatarFallback}>
+                <Text style={styles.sugAvatarFallbackText}>
+                  {(item.display?.[0] || '?').toUpperCase()}
+                </Text>
+              </View>
+            )}
             <View style={{ flex: 1 }}>
               <Text numberOfLines={1} style={styles.sugName}>{item.display}</Text>
             </View>
@@ -1156,10 +1221,11 @@ if (active) setSuggestions(Array.from(groups.values()));
                 <HintButton
                   label={"Player's Age"}
                   multiplier="×0.90"
-                  disabled={usedHints.age || !gameData?.age || disabledUI}
+                  disabled={usedHints.age || currentAge == null || disabledUI}
                   onPress={() => !disabledUI && !usedHints.age && reveal('age')}
-                  valueShown={usedHints.age ? String(gameData?.age) : null}
+                  valueShown={usedHints.age && currentAge != null ? String(currentAge) : null}
                 />
+
                 <HintButton
                   label="Nationality"
                   multiplier="×0.90"
@@ -1606,38 +1672,38 @@ const styles = StyleSheet.create({
   },
 
   stackWrap: {
-  width: 90,              // enough room for overlap + "+N"
-  height: 32,
-  marginRight: 8,
-  alignItems: 'center',
-  justifyContent: 'flex-start',
-},
-stackAvatar: {
-  position: 'absolute',
-  width: 32,
-  height: 32,
-  borderRadius: 16,
-  borderWidth: 2,         // white ring so overlaps look clean
-  borderColor: '#fff',
-},
-stackMore: {
-  position: 'absolute',
-  width: 32,
-  height: 32,
-  borderRadius: 16,
-  backgroundColor: '#e5e7eb',
-  alignItems: 'center',
-  justifyContent: 'center',
-  borderWidth: 2,
-  borderColor: '#fff',
-  zIndex: 100,
-},
-stackMoreText: {
-  fontSize: 12,
-  fontWeight: '700',
-  color: '#111827',
-  fontFamily: 'Tektur_700Bold',
-},
+    width: 90,              // enough room for overlap + "+N"
+    height: 32,
+    marginRight: 8,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
+  stackAvatar: {
+    position: 'absolute',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 2,         // white ring so overlaps look clean
+    borderColor: '#fff',
+  },
+  stackMore: {
+    position: 'absolute',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#e5e7eb',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+    zIndex: 100,
+  },
+  stackMoreText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#111827',
+    fontFamily: 'Tektur_700Bold',
+  },
 
 });
 
@@ -1652,4 +1718,55 @@ function formatFee(raw) {
   s = s.replace(/^\s*(Loan\s*fee:|Fee:)\s*/i, '');
   s = s.replace(/^\$/, '€').replace(/\$/g, '€').trim();
   return s || '—';
+}
+
+// Accepts "30.04.1992 (29)", "dd/mm/yyyy", "dd-mm-yyyy", "yyyy-mm-dd"
+function parseBirthDate(str) {
+  if (!str) return null;
+  // Strip "(xx)" season-age suffix if present
+  const s = String(str).replace(/\(\d+\)/, '').trim();
+
+  let m = s.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+  if (m) {
+    const d = parseInt(m[1], 10);
+    const mo = parseInt(m[2], 10);
+    const y = parseInt(m[3], 10);
+    if (validYMD(y, mo, d)) return new Date(Date.UTC(y, mo - 1, d));
+  }
+
+  m = s.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (m) {
+    const d = parseInt(m[1], 10);
+    const mo = parseInt(m[2], 10);
+    const y = parseInt(m[3], 10);
+    if (validYMD(y, mo, d)) return new Date(Date.UTC(y, mo - 1, d));
+  }
+
+  m = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) {
+    const y = parseInt(m[1], 10);
+    const mo = parseInt(m[2], 10);
+    const d = parseInt(m[3], 10);
+    if (validYMD(y, mo, d)) return new Date(Date.UTC(y, mo - 1, d));
+  }
+
+  return null;
+}
+
+function validYMD(y, m, d) {
+  if (y < 1900 || y > 2100) return false;
+  if (m < 1 || m > 12) return false;
+  if (d < 1 || d > 31) return false;
+  return true;
+}
+
+function computeAgeFromDate(birthDate) {
+  if (!(birthDate instanceof Date)) return null;
+  const now = new Date();
+  let age = now.getUTCFullYear() - birthDate.getUTCFullYear();
+  const mo = now.getUTCMonth() - birthDate.getUTCMonth();
+  if (mo < 0 || (mo === 0 && now.getUTCDate() < birthDate.getUTCDate())) {
+    age--;
+  }
+  return Math.max(0, age);
 }

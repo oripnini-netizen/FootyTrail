@@ -832,7 +832,7 @@ const styles = StyleSheet.create({
 
   dailyWrap: { alignItems: 'center', marginTop: 4 },
   dailyTitle: { fontSize: 18, fontWeight: '800', color: '#713f12', marginBottom: 4, textAlign: 'center', fontFamily: 'Tektur_700Bold' },
-  dailyText: { fontSize: 15, color: '#374151', textAlign: 'center', fontFamily: 'Tektur_400Regular' },
-  dailyCountdown: { marginTop: 6, fontSize: 13, color: '#6b7280', fontFamily: 'Tektur_400Regular' },
-  dailyCountdownStrong: { fontWeight: '700', color: '#111827', fontFamily: 'Tektur_700Bold' },
+  dailyText: { fontSize: 15, color: '#374151', textAlign: 'center' },
+  dailyCountdown: { marginTop: 6, fontSize: 13, color: '#6b7280' },
+  dailyCountdownStrong: { fontWeight: '700', color: '#111827' },
 });
