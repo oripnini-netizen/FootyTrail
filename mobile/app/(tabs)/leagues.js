@@ -22,6 +22,7 @@ import {
 import { supabase } from "../../lib/supabase";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { KeyboardAwareScrollView } from "react-native-keyboard-aware-scroll-view";
+import { useFonts, Tektur_400Regular, Tektur_700Bold } from "@expo-google-fonts/tektur";
 
 /* =========================
    Shared time/date helpers
@@ -227,7 +228,7 @@ function Section({ title, right, children, style }) {
           marginBottom: 8,
         }}
       >
-        <Text style={{ fontSize: 16, fontWeight: "700" }}>{title}</Text>
+        <Text style={{ fontSize: 16, fontWeight: "700", fontFamily: "Tektur_700Bold" }}>{title}</Text>
         {right}
       </View>
       {children}
@@ -242,6 +243,7 @@ function StatusPill({ status }) {
     borderRadius: 999,
     fontSize: 12,
     fontWeight: "700",
+    fontFamily: "Tektur_700Bold",
   };
   if (status === "Live")
     return (
@@ -286,7 +288,7 @@ function Avatar({ participant, size = 28, onPress }) {
         justifyContent: "center",
       }}
     >
-      <Text style={{ fontSize: Math.max(10, size * 0.32), color: "#111827" }}>
+      <Text style={{ fontFamily: "Tektur_400Regular", fontSize: Math.max(10, size * 0.32), color: "#111827" }}>
         BOT
       </Text>
     </View>
@@ -514,10 +516,10 @@ function UserRecentGamesModal({ visible, onClose, userRow }) {
                   borderColor: "#e5e7eb",
                 }}
               />
-              <Text style={{ fontWeight: "800", fontSize: 16 }}>{display}</Text>
+              <Text style={{ fontWeight: "800", fontSize: 16, fontFamily: "Tektur_700Bold" }}>{display}</Text>
             </View>
             <TouchableOpacity onPress={onClose} hitSlop={12}>
-              <Text style={{ fontWeight: "800", fontSize: 18 }}>✕</Text>
+              <Text style={{ fontWeight: "800", fontSize: 18, fontFamily: "Tektur_700Bold" }}>✕</Text>
             </TouchableOpacity>
           </View>
 
@@ -549,8 +551,8 @@ function UserRecentGamesModal({ visible, onClose, userRow }) {
                   paddingHorizontal: 10,
                 }}
               >
-                <Text style={{ fontSize: 12, color: "#6b7280", textAlign: "center" }}>{s.label}</Text>
-                <Text style={{ fontSize: 18, fontWeight: "800", color: "#065f46", textAlign: "center" }}>{s.value}</Text>
+                <Text style={{ fontFamily: "Tektur_400Regular", fontSize: 12, color: "#6b7280", textAlign: "center" }}>{s.label}</Text>
+                <Text style={{ fontSize: 18, fontWeight: "800", color: "#065f46", textAlign: "center", fontFamily: "Tektur_700Bold" }}>{s.value}</Text>
               </View>
             ))}
           </View>
@@ -562,7 +564,7 @@ function UserRecentGamesModal({ visible, onClose, userRow }) {
                 <ActivityIndicator />
               </View>
             ) : games.length === 0 ? (
-              <Text style={{ color: "#6b7280" }}>No games yet.</Text>
+              <Text style={{ fontFamily: "Tektur_400Regular", color: "#6b7280" }}>No games yet.</Text>
             ) : (
               games.map((g) => {
                 const maskedName =
@@ -571,7 +573,7 @@ function UserRecentGamesModal({ visible, onClose, userRow }) {
                     : g.player_name || "Unknown Player";
 
                 const titleStyle = [
-                  { fontWeight: "700" },
+                  { fontWeight: "700", fontFamily: "Tektur_700Bold" },
                   g.is_daily_challenge
                     ? { color: "#a16207" } // gold
                     : g.is_elimination_game
@@ -597,7 +599,7 @@ function UserRecentGamesModal({ visible, onClose, userRow }) {
                       <Text style={titleStyle} numberOfLines={1} ellipsizeMode="tail">
                         {maskedName}
                       </Text>
-                      <Text style={{ color: "#6b7280", fontSize: 12 }}>
+                      <Text style={{ fontFamily: "Tektur_400Regular", color: "#6b7280", fontSize: 12 }}>
                         {formatUtcDateTime(g.created_at)}
                       </Text>
                     </View>
@@ -605,19 +607,20 @@ function UserRecentGamesModal({ visible, onClose, userRow }) {
                     <View style={{ alignItems: "flex-end" }}>
                       <Text
                         style={{
+                          fontFamily: "Tektur_700Bold",
                           fontWeight: "900",
                           color: g.won ? "#16a34a" : "#dc2626",
                         }}
                       >
                         {g.won ? `+${g.points_earned}` : "0"} pts
                       </Text>
-                      <Text style={{ color: "#6b7280", fontSize: 12 }}>
+                      <Text style={{ fontFamily: "Tektur_400Regular", color: "#6b7280", fontSize: 12 }}>
                         {g.guesses_attempted} {g.guesses_attempted === 1 ? "guess" : "guesses"}
                         {g.is_daily_challenge ? " • Daily" : ""}
                         {g.is_elimination_game ? (
                           <>
                             {" "}
-                            • <Text style={{ color: "#7c3aed" }}>Elimination</Text>
+                            • <Text style={{ fontFamily: "Tektur_400Regular", color: "#7c3aed" }}>Elimination</Text>
                           </>
                         ) : (
                           ""
@@ -687,9 +690,9 @@ function CreateLeagueModal({
                 justifyContent: "space-between",
               }}
             >
-              <Text style={{ fontWeight: "800", fontSize: 16 }}>Create a League</Text>
+              <Text style={{ fontWeight: "800", fontFamily: "Tektur_700Bold", fontSize: 16 }}>Create a League</Text>
               <TouchableOpacity onPress={onClose} hitSlop={12}>
-                <Text style={{ fontWeight: "800", fontSize: 18 }}>✕</Text>
+                <Text style={{ fontWeight: "800", fontFamily: "Tektur_700Bold", fontSize: 18 }}>✕</Text>
               </TouchableOpacity>
             </View>
 
@@ -721,6 +724,11 @@ function CreateLeagueModal({
    MAIN SCREEN
    ======================= */
 export default function LeaguesScreen() {
+  const [fontsLoaded] = useFonts({
+    Tektur_400Regular,
+    Tektur_700Bold,
+  });
+
   const [me, setMe] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -775,7 +783,7 @@ export default function LeaguesScreen() {
 
   // Load leagues where I participate (mirror web page shape)
   const load = useCallback(async (showSpinner = true) => {
-      if (showSpinner) setLoading(true);
+    if (showSpinner) setLoading(true);
     try {
       const {
         data: { user },
@@ -1016,147 +1024,156 @@ export default function LeaguesScreen() {
   ];
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#F0FDF4" }}>
-      {/* Header row: tabs with counts */}
-      <View
-        style={{
-          flexDirection: "row",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 10,
-          paddingTop: 12,
-        }}
-      >
-        {MAIN_TABS.map((t) => (
-          <Pressable
-            key={t.key}
-            onPress={() => setTab(t.key)}
-            style={{
-              paddingHorizontal: 12,
-              paddingVertical: 6,
-              borderRadius: 999,
-              backgroundColor: tab === t.key ? "#065f46" : "#ffffff",
-              borderWidth: tab === t.key ? 0 : 1,
-              borderColor: "#e5e7eb",
-            }}
-          >
-            <Text
-              style={{
-                color: tab === t.key ? "#ffffff" : "#374151",
-                fontWeight: "700",
-              }}
-            >
-              {t.label}
-            </Text>
-          </Pressable>
-        ))}
+    !fontsLoaded ? (
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#F0FDF4" }}>
+        <ActivityIndicator size="large" color="#065f46" />
       </View>
+    ) : (
 
-      {/* Centered "+ Create New League" button */}
-      <View style={{ alignItems: "center", marginTop: 10, marginBottom: 6 }}>
-        <TouchableOpacity
-          onPress={() => setCreateOpen(true)}
+      <View style={{ flex: 1, backgroundColor: "#F0FDF4" }}>
+        {/* Header row: tabs with counts */}
+        <View
           style={{
-            paddingHorizontal: 14,
-            paddingVertical: 10,
-            borderRadius: 10,
-            backgroundColor: "#065f46",
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 10,
+            paddingTop: 12,
           }}
-          activeOpacity={0.85}
         >
-          <Text style={{ color: "white", fontWeight: "800" }}>
-            + Create New League
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* MAIN LIST */}
-      <ScrollView
-        contentContainerStyle={{ padding: 12, paddingBottom: 28 }}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor="#065f46"         // spinner color iOS
-            colors={["#065f46"]}        // spinner color Android
-          />
-        }
-      >
-        {loading ? (
-          <View style={{ paddingTop: 48, alignItems: "center" }}>
-            <ActivityIndicator size="large" color="#065f46" />
-          </View>
-        ) : currentList.length === 0 ? (
-          <View style={{ marginTop: 32, alignItems: "center" }}>
-            <View
+          {MAIN_TABS.map((t) => (
+            <Pressable
+              key={t.key}
+              onPress={() => setTab(t.key)}
               style={{
-                height: 64,
-                width: 64,
-                borderRadius: 32,
-                backgroundColor: "#dcfce7",
-                alignItems: "center",
-                justifyContent: "center",
+                paddingHorizontal: 12,
+                paddingVertical: 6,
+                borderRadius: 999,
+                backgroundColor: tab === t.key ? "#065f46" : "#ffffff",
+                borderWidth: tab === t.key ? 0 : 1,
+                borderColor: "#e5e7eb",
               }}
             >
-              <Text style={{ fontSize: 20 }}>📅</Text>
+              <Text
+                style={{
+                  color: tab === t.key ? "#ffffff" : "#374151",
+                  fontWeight: "700",
+                  fontFamily: "Tektur_700Bold",
+                }}
+              >
+                {t.label}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+
+        {/* Centered "+ Create New League" button */}
+        <View style={{ alignItems: "center", marginTop: 10, marginBottom: 6 }}>
+          <TouchableOpacity
+            onPress={() => setCreateOpen(true)}
+            style={{
+              paddingHorizontal: 14,
+              paddingVertical: 10,
+              borderRadius: 10,
+              backgroundColor: "#065f46",
+            }}
+            activeOpacity={0.85}
+          >
+            <Text style={{ color: "white", fontFamily: "Tektur_700Bold", fontWeight: "800" }}>
+              + Create New League
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* MAIN LIST */}
+        <ScrollView
+          contentContainerStyle={{ padding: 12, paddingBottom: 28 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor="#065f46"         // spinner color iOS
+              colors={["#065f46"]}        // spinner color Android
+            />
+          }
+        >
+          {loading ? (
+            <View style={{ paddingTop: 48, alignItems: "center" }}>
+              <ActivityIndicator size="large" color="#065f46" />
             </View>
-            <Text
-              style={{
-                marginTop: 10,
-                fontSize: 16,
-                fontWeight: "700",
-                color: "#065f46",
-              }}
-            >
-              No leagues found
-            </Text>
-            <Text style={{ color: "#6b7280" }}>
-              Create your first league or wait to be invited!
-            </Text>
-          </View>
-        ) : (
-          <View style={{ gap: 12 }}>
-            {currentList.map((L) => (
-              <LeagueCard
-                key={L.league.id}
-                L={L}
-                dayPoints={dayPoints}
-                expanded={expandedIds.has(L.league.id)}
-                onToggle={() => toggleCard(L.league.id)}
-                onAvatarPress={openUserModal}
-              />
-            ))}
-          </View>
-        )}
-      </ScrollView>
+          ) : currentList.length === 0 ? (
+            <View style={{ marginTop: 32, alignItems: "center" }}>
+              <View
+                style={{
+                  height: 64,
+                  width: 64,
+                  borderRadius: 32,
+                  backgroundColor: "#dcfce7",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Text style={{ fontFamily: "Tektur_400Regular", fontSize: 20 }}>📅</Text>
+              </View>
+              <Text
+                style={{
+                  marginTop: 10,
+                  fontSize: 16,
+                  fontWeight: "700",
+                  color: "#065f46",
+                  fontFamily: "Tektur_700Bold",
+                }}
+              >
+                No leagues found
+              </Text>
+              <Text style={{ fontFamily: "Tektur_400Regular", color: "#6b7280" }}>
+                Create your first league or wait to be invited!
+              </Text>
+            </View>
+          ) : (
+            <View style={{ gap: 12 }}>
+              {currentList.map((L) => (
+                <LeagueCard
+                  key={L.league.id}
+                  L={L}
+                  dayPoints={dayPoints}
+                  expanded={expandedIds.has(L.league.id)}
+                  onToggle={() => toggleCard(L.league.id)}
+                  onAvatarPress={openUserModal}
+                />
+              ))}
+            </View>
+          )}
+        </ScrollView>
 
-      {/* Create League MODAL */}
-      <CreateLeagueModal
-        visible={createOpen}
-        onClose={() => setCreateOpen(false)}
-        canCreateDeps={{ me, name, desc, startDate, invites }}
-        ui={{ creating }}
-        setters={{
-          setCreating,
-          setCreateOpen,
-          setName,
-          setDesc,
-          setStartDate,
-          setInvites,
-          setSearchEmail,
-          setEmailResults,
-        }}
-        search={{ searchEmail, emailResults }}
-        actions={{ load }}
-      />
+        {/* Create League MODAL */}
+        <CreateLeagueModal
+          visible={createOpen}
+          onClose={() => setCreateOpen(false)}
+          canCreateDeps={{ me, name, desc, startDate, invites }}
+          ui={{ creating }}
+          setters={{
+            setCreating,
+            setCreateOpen,
+            setName,
+            setDesc,
+            setStartDate,
+            setInvites,
+            setSearchEmail,
+            setEmailResults,
+          }}
+          search={{ searchEmail, emailResults }}
+          actions={{ load }}
+        />
 
-      {/* User modal (fixed-size card) */}
-      <UserRecentGamesModal
-        visible={modalOpen}
-        onClose={closeUserModal}
-        userRow={modalUserRow}
-      />
-    </View>
+        {/* User modal (fixed-size card) */}
+        <UserRecentGamesModal
+          visible={modalOpen}
+          onClose={closeUserModal}
+          userRow={modalUserRow}
+        />
+      </View>
+    )
   );
 }
 
@@ -1318,7 +1335,7 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
     >
       {/* Name */}
       <View style={{ marginBottom: 8 }}>
-        <Text style={{ fontWeight: "600", marginBottom: 4 }}>League Name</Text>
+        <Text style={{ fontFamily: "Tektur_400Regular", fontWeight: "600", marginBottom: 4 }}>League Name</Text>
         <TextInput
           value={name}
           onChangeText={setName}
@@ -1335,7 +1352,7 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
             paddingVertical: 8,
           }}
         />
-        <Text style={{ color: "#6b7280", fontSize: 12, marginTop: 4 }}>
+        <Text style={{ fontFamily: "Tektur_400Regular", color: "#6b7280", fontSize: 12, marginTop: 4 }}>
           Max 40 characters.
         </Text>
 
@@ -1344,7 +1361,7 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
 
       {/* Description */}
       <View style={{ marginBottom: 8 }}>
-        <Text style={{ fontWeight: "600", marginBottom: 4 }}>
+        <Text style={{ fontFamily: "Tektur_400Regular", fontWeight: "600", marginBottom: 4 }}>
           Description (optional)
         </Text>
         <TextInput
@@ -1363,7 +1380,7 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
             paddingVertical: 8,
           }}
         />
-        <Text style={{ color: "#6b7280", fontSize: 12, marginTop: 4 }}>
+        <Text style={{ fontFamily: "Tektur_400Regular", color: "#6b7280", fontSize: 12, marginTop: 4 }}>
           Max 140 characters.
         </Text>
 
@@ -1372,7 +1389,7 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
 
       {/* Start date */}
       <View style={{ marginBottom: 8 }}>
-        <Text style={{ fontWeight: "600", marginBottom: 4 }}>Start Date</Text>
+        <Text style={{ fontFamily: "Tektur_400Regular", fontWeight: "600", marginBottom: 4 }}>Start Date</Text>
 
         {/* Button-looking field that opens the native date picker */}
         <Pressable
@@ -1386,8 +1403,8 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
             backgroundColor: "#fff",
           }}
         >
-          <Text style={{ fontWeight: "700" }}>{startDate}</Text>
-          <Text style={{ color: "#6b7280", fontSize: 12 }}>Tap to choose a date</Text>
+          <Text style={{ fontWeight: "700", fontFamily: "Tektur_700Bold" }}>{startDate}</Text>
+          <Text style={{ fontFamily: "Tektur_400Regular", color: "#6b7280", fontSize: 12 }}>Tap to choose a date</Text>
         </Pressable>
 
         {showDatePicker ? (
@@ -1427,7 +1444,7 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
           </View>
         ) : null}
 
-        <Text style={{ color: "#6b7280", fontSize: 12, marginTop: 4 }}>
+        <Text style={{ fontFamily: "Tektur_400Regular", color: "#6b7280", fontSize: 12, marginTop: 4 }}>
           Leagues can only start from tomorrow (UTC) onwards.
         </Text>
       </View>
@@ -1435,7 +1452,7 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
 
       {/* Invite by email */}
       <View style={{ marginBottom: 8 }}>
-        <Text style={{ fontWeight: "600", marginBottom: 4 }}>
+        <Text style={{ fontFamily: "Tektur_400Regular", fontWeight: "600", marginBottom: 4 }}>
           Invite Players (search email)
         </Text>
         <TextInput
@@ -1506,7 +1523,7 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
               >
                 <Text>{u.full_name || u.email}</Text>
                 <Pressable onPress={() => removeInvite(u.id)}>
-                  <Text style={{ fontWeight: "900" }}>×</Text>
+                  <Text style={{ fontFamily: "Tektur_700Bold", fontWeight: "900" }}>×</Text>
                 </Pressable>
               </View>
             ))}
@@ -1514,7 +1531,7 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
         )}
         {/* Participants count (includes creator) */}
         <View style={{ marginTop: 8 }}>
-          <Text style={{ fontSize: 12, color: "#374151" }}>
+          <Text style={{ fontFamily: "Tektur_400Regular", fontSize: 12, color: "#374151" }}>
             Total participants (including you): {1 + invites.length}
             {((1 + invites.length) % 2 === 1) ? " — odd number: a bot will be added automatically." : ""}
           </Text>
@@ -1543,7 +1560,7 @@ function CreateLeaguePanel({ canCreateDeps, ui, setters, search, actions }) {
             borderRadius: 10,
           }}
         >
-          <Text style={{ color: "white", fontWeight: "800" }}>
+          <Text style={{ color: "white", fontWeight: "800", fontFamily: "Tektur_700Bold" }}>
             {creating ? "Creating..." : "Create League"}
           </Text>
         </Pressable>
@@ -1673,16 +1690,16 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
       >
         <View style={{ flex: 1, paddingRight: 8, gap: 2 }}>
           <Text
-            style={{ fontWeight: "900", fontSize: 16, color: "#065f46" }}
+            style={{ fontFamily: "Tektur_700Bold", fontSize: 16, color: "#065f46" }}
           >
             {league.name}
           </Text>
           {!!league.description && (
-            <Text style={{ color: "#065f46", opacity: 0.8 }} >
+            <Text style={{ fontFamily: "Tektur_400Regular", color: "#065f46", opacity: 0.8 }} >
               {league.description}
             </Text>
           )}
-          <Text style={{ color: "#065f46", opacity: 0.8, fontSize: 12 }}>
+          <Text style={{ fontFamily: "Tektur_400Regular", color: "#065f46", opacity: 0.8, fontSize: 12 }}>
             Starts {league.start_date} • {participants.length} participants
           </Text>
         </View>
@@ -1702,7 +1719,7 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                 : null;
             return nextInfo ? (
               <View style={{ marginTop: 6, alignItems: "flex-end", gap: 6 }}>
-                <Text style={{ color: "#065f46", fontSize: 12 }}>
+                <Text style={{ fontFamily: "Tektur_400Regular", color: "#065f46", fontSize: 12 }}>
                   Next: Day {nextInfo.match_day} • {fmtShort(nextInfo.match_date)}
                 </Text>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
@@ -1711,7 +1728,7 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                     size={20}
                     onPress={() => onAvatarPress(nextInfo.home)}
                   />
-                  <Text style={{ color: "#065f46", opacity: 0.65, fontSize: 12 }}>
+                  <Text style={{ fontFamily: "Tektur_400Regular", color: "#065f46", opacity: 0.65, fontSize: 12 }}>
                     vs
                   </Text>
                   <Avatar
@@ -1757,6 +1774,7 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                       style={{
                         color: subTab === idx ? "#fff" : "#111827",
                         fontWeight: "700",
+                        fontFamily: "Tektur_700Bold",
                         fontSize: 12,
                       }}
                     >
@@ -1765,7 +1783,7 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                   </Pressable>
                 ))}
               </View>
-              <Text style={{ color: "#6b7280", fontSize: 12 }}>↔</Text>
+              <Text style={{ fontFamily: "Tektur_400Regular", color: "#6b7280", fontSize: 12 }}>↔</Text>
             </View>
           </View>
 
@@ -1804,7 +1822,7 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                           alignItems: "center",
                         }}
                       >
-                        <Text style={{ fontWeight: "700", color: "#6b7280" }}>POS</Text>
+                        <Text style={{ fontWeight: "700", color: "#6b7280", fontFamily: "Tektur_700Bold" }}>POS</Text>
                       </View>
 
                       {/* POS rows */}
@@ -1820,7 +1838,7 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                             justifyContent: "center",
                           }}
                         >
-                          <Text style={{ fontVariant: ["tabular-nums"] }}>{i + 1}</Text>
+                          <Text style={{ fontFamily: "Tektur_400Regular", fontVariant: ["tabular-nums"] }}>{i + 1}</Text>
                         </View>
                       ))}
                     </View>
@@ -1844,7 +1862,7 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                           borderBottomColor: "#e5e7eb",
                         }}
                       >
-                        <Text style={{ fontWeight: "700", color: "#6b7280" }}>PLAYER</Text>
+                        <Text style={{ fontWeight: "700", color: "#6b7280", fontFamily: "Tektur_700Bold" }}>PLAYER</Text>
                       </View>
 
                       {/* Player rows (avatar + FULL name, no ellipsis) */}
@@ -1863,7 +1881,7 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                           >
                             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                               <Avatar participant={rowP} size={26} onPress={() => onAvatarPress(rowP)} />
-                              <Text style={{ flexShrink: 1, flexGrow: 1, flexWrap: "wrap" }}>
+                              <Text style={{ fontFamily: "Tektur_400Regular", flexShrink: 1, flexGrow: 1, flexWrap: "wrap" }}>
                                 {rowP?.user?.full_name || rowP?.display_name || "—"}
                               </Text>
                             </View>
@@ -1902,7 +1920,7 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                         >
                           <Text
                             onLayout={(e) => updateCol("p", e.nativeEvent.layout.width)}
-                            style={{ fontWeight: "700", color: "#6b7280" }}
+                            style={{ fontWeight: "700", color: "#6b7280", fontFamily: "Tektur_700Bold" }}
                           >
                             P
                           </Text>
@@ -1918,7 +1936,7 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                         >
                           <Text
                             onLayout={(e) => updateCol("pts", e.nativeEvent.layout.width)}
-                            style={{ fontWeight: "700", color: "#6b7280" }}
+                            style={{ fontWeight: "700", color: "#6b7280", fontFamily: "Tektur_700Bold" }}
                           >
                             PTS
                           </Text>
@@ -1934,7 +1952,7 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                         >
                           <Text
                             onLayout={(e) => updateCol("gd", e.nativeEvent.layout.width)}
-                            style={{ fontWeight: "700", color: "#6b7280" }}
+                            style={{ fontWeight: "700", color: "#6b7280", fontFamily: "Tektur_700Bold" }}
                           >
                             GD
                           </Text>
@@ -1963,7 +1981,7 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                           >
                             <Text
                               onLayout={(e) => updateCol("p", e.nativeEvent.layout.width)}
-                              style={{ fontVariant: ["tabular-nums"] }}
+                              style={{ fontFamily: "Tektur_400Regular", fontVariant: ["tabular-nums"] }}
                             >
                               {s.P}
                             </Text>
@@ -1979,7 +1997,7 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                           >
                             <Text
                               onLayout={(e) => updateCol("pts", e.nativeEvent.layout.width)}
-                              style={{ fontWeight: "800", fontVariant: ["tabular-nums"] }}
+                              style={{ fontWeight: "800", fontVariant: ["tabular-nums"], fontFamily: "Tektur_700Bold" }}
                             >
                               {s.PTS}
                             </Text>
@@ -1995,7 +2013,7 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                           >
                             <Text
                               onLayout={(e) => updateCol("gd", e.nativeEvent.layout.width)}
-                              style={{ fontVariant: ["tabular-nums"] }}
+                              style={{ fontFamily: "Tektur_400Regular", fontVariant: ["tabular-nums"] }}
                             >
                               {s.GD.toLocaleString()}
                             </Text>
@@ -2033,8 +2051,8 @@ function LeagueCard({ L, dayPoints, expanded, onToggle, onAvatarPress }) {
                       justifyContent: "space-between",
                     }}
                   >
-                    <Text style={{ fontWeight: "800" }}>Match Day {group.match_day}</Text>
-                    <Text style={{ color: "#6b7280", fontSize: 12 }}>
+                    <Text style={{ fontWeight: "800", fontFamily: "Tektur_700Bold" }}>Match Day {group.match_day}</Text>
+                    <Text style={{ fontFamily: "Tektur_400Regular", color: "#6b7280", fontSize: 12 }}>
                       {fmtShort(group.date)}
                     </Text>
                   </View>
@@ -2102,7 +2120,7 @@ function ResultRow({
         {/* left: avatars vs */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
           <Avatar participant={home} size={24} onPress={() => onAvatarPress(home)} />
-          <Text style={{ color: "#9ca3af" }}>vs</Text>
+          <Text style={{ fontFamily: "Tektur_400Regular", color: "#9ca3af" }}>vs</Text>
           <Avatar participant={away} size={24} onPress={() => onAvatarPress(away)} />
         </View>
 
@@ -2110,12 +2128,12 @@ function ResultRow({
         {/* right: score (without day/date subline) */}
         <View style={{ minWidth: 110, alignItems: "flex-end" }}>
           {isFuture ? (
-            <Text style={{ color: "#6b7280", fontWeight: "600" }}>Scheduled</Text>
+            <Text style={{ color: "#6b7280", fontFamily: "Tektur_400Regular", fontWeight: "600" }}>Scheduled</Text>
           ) : (
-            <Text style={{ fontWeight: "900" }}>
-              <Text style={{ color: scoreColor(true, H, A) }}>{H}</Text>
-              <Text style={{ color: "#9ca3af" }}> — </Text>
-              <Text style={{ color: scoreColor(false, H, A) }}>{A}</Text>
+            <Text style={{ fontFamily: "Tektur_700Bold", fontWeight: "900" }}>
+              <Text style={{ fontFamily: "Tektur_400Regular", color: scoreColor(true, H, A) }}>{H}</Text>
+              <Text style={{ fontFamily: "Tektur_400Regular", color: "#9ca3af" }}> — </Text>
+              <Text style={{ fontFamily: "Tektur_400Regular", color: scoreColor(false, H, A) }}>{A}</Text>
             </Text>
           )}
         </View>
@@ -2164,8 +2182,9 @@ function PlayersBreakdownRN({ label, participant, date }) {
           .eq("user_id", participant.user_id)
           .gte("created_at", start)
           .lt("created_at", end)
+          .or("is_elimination_game.is.null,is_elimination_game.eq.false") // exclude elimination
           .order("points_earned", { ascending: false })
-          .limit(10);
+          .limit(11);
         if (!cancelled) setRows(data || []);
       } finally {
         if (!cancelled) setLoading(false);
@@ -2196,13 +2215,13 @@ function PlayersBreakdownRN({ label, participant, date }) {
           borderBottomColor: "#e5e7eb",
         }}
       >
-        <Text style={{ fontWeight: "700" }}>{label}</Text>
+        <Text style={{ fontFamily: "Tektur_700Bold" }}>{label}</Text>
       </View>
       <View style={{ paddingHorizontal: 10, paddingVertical: 8 }}>
         {loading ? (
-          <Text style={{ color: "#6b7280" }}>Loading…</Text>
+          <Text style={{ fontFamily: "Tektur_400Regular", color: "#6b7280" }}>Loading…</Text>
         ) : rows.length === 0 ? (
-          <Text style={{ color: "#6b7280" }}>No players recorded for this day.</Text>
+          <Text style={{ fontFamily: "Tektur_400Regular", color: "#6b7280" }}>No players recorded for this day.</Text>
         ) : (
           rows.map((r, idx) => (
             <View
@@ -2214,10 +2233,10 @@ function PlayersBreakdownRN({ label, participant, date }) {
                 paddingVertical: 4,
               }}
             >
-              <Text numberOfLines={1} style={{ flex: 1, paddingRight: 10 }}>
+              <Text numberOfLines={1} style={{ fontFamily: "Tektur_400Regular", flex: 1, paddingRight: 10 }}>
                 {r.player_name || "—"}
               </Text>
-              <Text style={{ fontWeight: "800" }}>
+              <Text style={{ fontWeight: "800", fontFamily: "Tektur_700Bold" }}>
                 {(r.points_earned ?? 0).toLocaleString()} pts
               </Text>
             </View>

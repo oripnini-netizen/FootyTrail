@@ -189,62 +189,62 @@ export default function GameScreen() {
   }
 
   function computeDailyStreak(dayMap) {
-  // helper: did the user play the daily on a given UTC day?
-  const hasDaily = (key) => {
-    const rows = dayMap.get(key) || [];
-    return rows.some((r) => r.is_daily_challenge === true);
-  };
+    // helper: did the user play the daily on a given UTC day?
+    const hasDaily = (key) => {
+      const rows = dayMap.get(key) || [];
+      return rows.some((r) => r.is_daily_challenge === true);
+    };
 
-  let cursor = utcNow();
-  // if today doesn't qualify, start counting from yesterday
-  if (!hasDaily(getUtcDayKey(cursor))) {
-    cursor = new Date(
-      Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() - 1)
-    );
+    let cursor = utcNow();
+    // if today doesn't qualify, start counting from yesterday
+    if (!hasDaily(getUtcDayKey(cursor))) {
+      cursor = new Date(
+        Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() - 1)
+      );
+    }
+
+    let streak = 0;
+    while (true) {
+      const key = getUtcDayKey(cursor);
+      if (!hasDaily(key)) break;
+      streak += 1;
+      cursor = new Date(
+        Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() - 1)
+      );
+    }
+    return streak;
   }
 
-  let streak = 0;
-  while (true) {
-    const key = getUtcDayKey(cursor);
-    if (!hasDaily(key)) break;
-    streak += 1;
-    cursor = new Date(
-      Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() - 1)
-    );
-  }
-  return streak;
-}
+  function computeRegularStreak(dayMap) {
+    // helper: did the user complete ALL regular games on a given UTC day?
+    // (10 if daily not won that day, 11 if daily was won)
+    const completedRegulars = (key) => {
+      const rows = dayMap.get(key) || [];
+      const dailyWon = rows.some((r) => r.is_daily_challenge === true && r.won === true);
+      const required = dailyWon ? 11 : 10;
+      const regularCount = rows.filter((r) => r.is_daily_challenge !== true).length;
+      return regularCount >= required;
+    };
 
-function computeRegularStreak(dayMap) {
-  // helper: did the user complete ALL regular games on a given UTC day?
-  // (10 if daily not won that day, 11 if daily was won)
-  const completedRegulars = (key) => {
-    const rows = dayMap.get(key) || [];
-    const dailyWon = rows.some((r) => r.is_daily_challenge === true && r.won === true);
-    const required = dailyWon ? 11 : 10;
-    const regularCount = rows.filter((r) => r.is_daily_challenge !== true).length;
-    return regularCount >= required;
-  };
+    let cursor = utcNow();
+    // if today doesn't qualify, start counting from yesterday
+    if (!completedRegulars(getUtcDayKey(cursor))) {
+      cursor = new Date(
+        Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() - 1)
+      );
+    }
 
-  let cursor = utcNow();
-  // if today doesn't qualify, start counting from yesterday
-  if (!completedRegulars(getUtcDayKey(cursor))) {
-    cursor = new Date(
-      Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() - 1)
-    );
+    let streak = 0;
+    while (true) {
+      const key = getUtcDayKey(cursor);
+      if (!completedRegulars(key)) break;
+      streak += 1;
+      cursor = new Date(
+        Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() - 1)
+      );
+    }
+    return streak;
   }
-
-  let streak = 0;
-  while (true) {
-    const key = getUtcDayKey(cursor);
-    if (!completedRegulars(key)) break;
-    streak += 1;
-    cursor = new Date(
-      Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() - 1)
-    );
-  }
-  return streak;
-}
 
   async function refreshStreaks(userId) {
     const rows = await fetchRecentNonElimRows(userId);
@@ -1022,7 +1022,7 @@ function computeRegularStreak(dayMap) {
         </Pressable>
 
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 8, gap: 8 }}>
-                <Ionicons name="flame" size={20} color="#f97316" />
+          <Ionicons name="flame" size={20} color="#f97316" />
           <Text style={[styles.cardText, { marginRight: 6 }]}>Daily Challenge Streak: {dailyStreak}</Text>
         </View>
         {daily && limits.dailyPlayed && (
@@ -1101,7 +1101,7 @@ function computeRegularStreak(dayMap) {
               )}
             </Pressable>
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 8, gap: 8 }}>
-                              <Ionicons name="flame" size={20} color="#f97316" />
+              <Ionicons name="flame" size={20} color="#f97316" />
               <Text style={[styles.cardText, { textAlign: "center" }]}>Daily Progress Streak: {regularStreak}</Text>
             </View>
             {/* Potential points + Player Pool */}
@@ -1145,10 +1145,13 @@ function computeRegularStreak(dayMap) {
               You’ve finished your {maxGames} games for today. Come back when the new day starts.
             </Text>
             <View style={{ marginTop: 10, alignItems: "center" }}>
-              <Text style={[styles.cardText, { fontSize: 12 }]}>Time until reset</Text>
               <Text style={[styles.countdown, { fontSize: 24, letterSpacing: 2 }]}>
                 {countdown}
               </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 8, gap: 8 }}>
+                <Ionicons name="flame" size={20} color="#f97316" />
+                <Text style={[styles.cardText, { textAlign: "center" }]}>Daily Progress Streak: {regularStreak}</Text>
+              </View>
             </View>
           </View>
         )}

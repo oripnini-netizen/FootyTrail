@@ -20,7 +20,7 @@ import { getRandomPlayer } from '../lib/api';
 import Logo from '../assets/images/footytrail_logo.png';
 /* icons */
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-
+import { useFonts, Tektur_400Regular, Tektur_700Bold, Tektur_800ExtraBold } from "@expo-google-fonts/tektur";
 /* === Share whole card as image === */
 import ViewShot from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
@@ -41,6 +41,12 @@ import * as FileSystem from 'expo-file-system';
  */
 
 export default function PostgameMobile() {
+    const [fontsLoaded] = useFonts({
+  Tektur_400Regular,
+  Tektur_700Bold,
+  Tektur_800ExtraBold,
+});
+
   const router = useRouter();
   const params = useLocalSearchParams();
 
@@ -180,9 +186,9 @@ export default function PostgameMobile() {
         const value = isDaily ? computeDailyStreak(dayMap) : computeRegularStreak(dayMap);
 
         if (value > 0 && value % 7 === 0 && !didShowStreakRef.current) {
-  didShowStreakRef.current = true;
-  setStreakModal({ visible: true, kind, value });
-}
+          didShowStreakRef.current = true;
+          setStreakModal({ visible: true, kind, value });
+        }
 
       } catch {
         // ignore failures – never block postgame
@@ -267,20 +273,68 @@ export default function PostgameMobile() {
   // ---------- Play Again (non-daily, non-elimination) ----------
   const [playAgainBusy, setPlayAgainBusy] = useState(false);
 
-  // ✅ FIX: disable the button when gamesLeft is 0
   const canPlayAgain = useMemo(() => {
     if (isDaily || elimination || !filters) return false;
     if (!Number.isFinite(prevPotentialPoints) || prevPotentialPoints <= 5) return false;
-    // If we know the exact count and it's 0, block playing again.
-    if (gamesLeft !== null && gamesLeft <= 0) return false;
+
+    // ⛔️ Be conservative: if we DON'T know the count, don't allow starting.
+    if (gamesLeft == null) return false;
+
+    if (gamesLeft <= 0) return false;
     return true;
   }, [isDaily, elimination, filters, prevPotentialPoints, gamesLeft]);
+
 
   const onPlayAgain = async () => {
     // Hard guard in the handler as well to prevent any accidental starts.
     if (playAgainBusy || !canPlayAgain || (gamesLeft !== null && gamesLeft <= 0)) return;
 
     setPlayAgainBusy(true);
+
+    // 🔒 Final server-side count before starting a new game (race-proof with UI)
+    try {
+      const { start, end } = dayRangeUtc(new Date());
+      const { data: authData2 } = await supabase.auth.getUser();
+      const userId2 = authData2?.user?.id;
+
+      // Count regular games today (non-elim, non-daily)
+      const { data: regularNow, error: regErrNow } = await supabase
+        .from('games_records')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', userId2)
+        .eq('is_daily_challenge', false)
+        .eq('is_elimination_game', false)
+        .gte('created_at', start)
+        .lt('created_at', end);
+
+      if (regErrNow) throw regErrNow;
+      const playedNow = regularNow?.length ?? 0; // length is 0 in head mode; count comes via response header, but length=0 is fine for guard
+
+      // Did we win the daily today?
+      const { data: dailyRowsNow, error: dayErrNow } = await supabase
+        .from('games_records')
+        .select('won')
+        .eq('user_id', userId2)
+        .eq('is_daily_challenge', true)
+        .gte('created_at', start)
+        .lt('created_at', end)
+        .limit(1);
+
+      if (dayErrNow) throw dayErrNow;
+      const hasDailyWinNow = dailyRowsNow?.[0]?.won === true;
+
+      const capNow = hasDailyWinNow ? 11 : 10;
+      if (playedNow >= capNow) {
+        // Cap reached between mount and tap → abort safely
+        setPlayAgainBusy(false);
+        return;
+      }
+    } catch {
+      // If we can’t verify, fail closed (safer than allowing an extra game)
+      setPlayAgainBusy(false);
+      return;
+    }
+
     try {
       const { data: authData } = await supabase.auth.getUser();
       const userId = authData?.user?.id || null;
@@ -309,6 +363,14 @@ export default function PostgameMobile() {
   };
 
   // ---------- UI ----------
+    if (!fontsLoaded) {
+    return (
+      <SafeAreaView style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' }}>
+        <ActivityIndicator />
+      </SafeAreaView>
+    );
+  }
+
   return (
     <ScrollView style={{ flex: 1, backgroundColor: '#F0FDF4' }} contentContainerStyle={{ paddingBottom: 24 }}>
       {/* Header */}
@@ -320,7 +382,7 @@ export default function PostgameMobile() {
             </Pressable>
           </View>
 
-          <Text style={styles.headerTitle}>{headerTitle}</Text>
+          <Text style={[styles.headerTitle, { fontFamily: 'Tektur_700Bold' }]}>{headerTitle}</Text>
           <View style={[styles.headerSide, { alignItems: 'flex-end' }]}>
             <Pressable hitSlop={8}>
               {avatarUrl ? (
@@ -340,7 +402,7 @@ export default function PostgameMobile() {
           <View style={styles.container}>
             {/* Top banner */}
             <View style={[styles.banner, didWin ? styles.bannerWin : styles.bannerLose]}>
-              <Text style={[styles.bannerText, didWin ? styles.bannerTextWin : styles.bannerTextLose]}>
+              <Text style={[styles.bannerText, didWin ? styles.bannerTextWin : styles.bannerTextLose, { fontFamily: 'Tektur_700Bold' }]}>
                 {bannerText}
               </Text>
             </View>
@@ -351,23 +413,23 @@ export default function PostgameMobile() {
                 <Image source={{ uri: playerPhoto }} style={styles.playerPhoto} />
               ) : (
                 <View style={[styles.playerPhoto, styles.photoFallback]}>
-                  <Text style={{ color: '#9ca3af', fontSize: 28 }}>👤</Text>
+                  <Text style={{ color: '#9ca3af', fontSize: 28 , fontFamily: 'Tektur_400Regular'}}>👤</Text>
                 </View>
               )}
 
               <View style={{ flex: 1 }}>
-                <Text style={styles.playerName}>{player?.name || 'Unknown Player'}</Text>
-                <Text style={styles.playerMeta}>Age: {displayAge}</Text>
-                <Text style={styles.playerMeta}>Nationality: {player?.nationality || '—'}</Text>
-                <Text style={styles.playerMeta}>Position: {player?.position || '—'}</Text>
+                <Text style={[styles.playerName, { fontFamily: 'Tektur_400Regular' }]}>{player?.name || 'Unknown Player'}</Text>
+                <Text style={[styles.playerMeta, { fontFamily: 'Tektur_400Regular' }]}>Age: {displayAge}</Text>
+                <Text style={[styles.playerMeta, { fontFamily: 'Tektur_400Regular' }]}>Nationality: {player?.nationality || '—'}</Text>
+                <Text style={[styles.playerMeta, { fontFamily: 'Tektur_400Regular' }]}>Position: {player?.position || '—'}</Text>
               </View>
             </View>
 
             {/* Did you know? */}
             {!!aiFact && (
               <View style={styles.factBox}>
-                <Text style={styles.factText}>{aiFact}</Text>
-                <Text style={styles.factFootnote}>And now you'll have to google that to see if I made it all up...</Text>
+                <Text style={[styles.factText, { fontFamily: 'Tektur_400Regular' }]}>{aiFact}</Text>
+                <Text style={[styles.factFootnote, { fontFamily: 'Tektur_400Regular' }]}>And now you'll have to google that to see if I made it all up...</Text>
               </View>
             )}
 
@@ -382,13 +444,13 @@ export default function PostgameMobile() {
             {/* Daily body (texts only; actions live outside for sharing) */}
             {isDaily && (
               <View style={styles.dailyWrap}>
-                <Text style={styles.dailyTitle}>
+                <Text style={[styles.dailyTitle, { fontFamily: 'Tektur_700Bold' }]}>
                   {didWin
                     ? `Congratulations! You won today's daily challenge and earned ${Number(stats?.pointsEarned ?? 0)} points!`
                     : 'Better luck next time! Try the daily challenge again tomorrow for another chance at 10,000 points.'}
                 </Text>
-                <Text style={styles.dailyCountdown}>
-                  Next daily challenge in <Text style={styles.dailyCountdownStrong}>{countdown}</Text>
+                <Text style={[styles.dailyCountdown, { fontFamily: 'Tektur_400Regular' }]}>
+                  Next daily challenge in <Text style={[styles.dailyCountdownStrong, { fontFamily: 'Tektur_700Bold' }]}>{countdown}</Text>
                 </Text>
               </View>
             )}
@@ -461,60 +523,60 @@ export default function PostgameMobile() {
         )}
       </View>
       <Modal transparent visible={streakModal.visible} animationType="fade" onRequestClose={() => setStreakModal(s => ({ ...s, visible: false }))}>
-  <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-    <View style={{ width: '100%', maxWidth: 380, backgroundColor: '#fff', borderRadius: 20, paddingVertical: 24, paddingHorizontal: 20, alignItems: 'center', borderWidth: 1, borderColor: '#e5e7eb' }}>
-      <Text style={{ fontSize: 22, fontWeight: '800', color: '#111827', marginBottom: 6, textAlign: 'center' }}>
-  {`${streakModal.value}-Day ${streakModal.kind === 'daily' ? 'Daily Challenge' : 'Daily Progress'} Streak!`}
-</Text>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <View style={{ width: '100%', maxWidth: 380, backgroundColor: '#fff', borderRadius: 20, paddingVertical: 24, paddingHorizontal: 20, alignItems: 'center', borderWidth: 1, borderColor: '#e5e7eb' }}>
+            <Text style={{ fontSize: 22, fontWeight: '800', color: '#111827', marginBottom: 6, textAlign: 'center', fontFamily: 'Tektur_800ExtraBold' }}>
+              {`${streakModal.value}-Day ${streakModal.kind === 'daily' ? 'Daily Challenge' : 'Daily Progress'} Streak!`}
+            </Text>
 
 
-      {/* flame + number */}
-      <View style={{ width: 88, height: 88, alignItems: "center", justifyContent: "center", marginVertical: 8 }}>
-  <MaterialCommunityIcons name="fire" size={88} color="#f97316" />
-  <Text
-    style={{
-      position: "absolute",
-      top: "54%",                             // sit a touch below center
-      transform: [{ translateY: 2 }],         // nudge down ~2px
-      fontSize: 34,
-      fontWeight: "900",
-      color: "#111827",                       // black
-      fontFamily: "Tektur_700Bold",
-      textShadowColor: "#ffffff",             // white “border”
-      textShadowOffset: { width: 0, height: 0 },
-      textShadowRadius: 5,
-    }}
-  >
-    {streakModal.value}
-  </Text>
-</View>
+            {/* flame + number */}
+            <View style={{ width: 88, height: 88, alignItems: "center", justifyContent: "center", marginVertical: 8 }}>
+              <MaterialCommunityIcons name="fire" size={88} color="#f97316" />
+              <Text
+                style={{
+                  position: "absolute",
+                  top: "54%",                             // sit a touch below center
+                  transform: [{ translateY: 2 }],         // nudge down ~2px
+                  fontSize: 34,
+                  fontWeight: "900",
+                  color: "#111827",                       // black
+                  fontFamily: "Tektur_700Bold",
+                  textShadowColor: "#ffffff",             // white “border”
+                  textShadowOffset: { width: 0, height: 0 },
+                  textShadowRadius: 5,
+                }}
+              >
+                {streakModal.value}
+              </Text>
+            </View>
 
 
-      <Text style={{ fontSize: 18, fontWeight: '800', color: '#111827', marginTop: 4 }}>
-        {streakModal.kind === 'daily' ? 'Day Streak' : 'Daily Progress Streak'}
-      </Text>
+            <Text style={{ fontSize: 18, fontWeight: '800', color: '#111827', marginTop: 4, textAlign: 'center', fontFamily: 'Tektur_700Bold' }}>
+              {streakModal.kind === 'daily' ? 'Day Streak' : 'Daily Progress Streak'}
+            </Text>
 
-      <View style={{ width: '100%', height: 8, borderRadius: 999, backgroundColor: '#fed7aa', marginTop: 14, overflow: 'hidden' }}>
-        <View style={{ width: '100%', height: '100%', backgroundColor: '#fb923c' }} />
-      </View>
+            <View style={{ width: '100%', height: 8, borderRadius: 999, backgroundColor: '#fed7aa', marginTop: 14, overflow: 'hidden' }}>
+              <View style={{ width: '100%', height: '100%', backgroundColor: '#fb923c' }} />
+            </View>
 
-      <Text style={{ textAlign: 'center', fontSize: 14, color: '#4b5563', marginTop: 14, paddingHorizontal: 8 }}>
-  {streakModal.kind === 'daily'
-    ? `You've played the Daily Challenge ${streakModal.value} days in a row.`
-    : `You've completed all your regular games ${streakModal.value} days in a row.`}
-</Text>
+            <Text style={{ textAlign: 'center', fontSize: 14, color: '#4b5563', marginTop: 14, paddingHorizontal: 8, lineHeight: 20, fontFamily: 'Tektur_400Regular' }}>
+              {streakModal.kind === 'daily'
+                ? `You've played the Daily Challenge ${streakModal.value} days in a row.`
+                : `You've completed all your regular games ${streakModal.value} days in a row.`}
+            </Text>
 
 
-      <TouchableOpacity
-        onPress={() => setStreakModal(s => ({ ...s, visible: false }))}
-        activeOpacity={0.9}
-        style={{ width: '100%', marginTop: 18, backgroundColor: '#f97316', borderRadius: 12, paddingVertical: 12, alignItems: 'center' }}
-      >
-<Text style={{ color: '#fff', fontSize: 16, fontWeight: '800' }}>Nice job!</Text>
-      </TouchableOpacity>
-    </View>
-  </View>
-</Modal>
+            <TouchableOpacity
+              onPress={() => setStreakModal(s => ({ ...s, visible: false }))}
+              activeOpacity={0.9}
+              style={{ width: '100%', marginTop: 18, backgroundColor: '#f97316', borderRadius: 12, paddingVertical: 12, alignItems: 'center' }}
+            >
+              <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800', fontFamily: 'Tektur_700Bold' }}>Nice job!</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
     </ScrollView>
   );
@@ -696,8 +758,8 @@ function computeAgeFromDate(birthDate) {
 function Stat({ label, value }) {
   return (
     <View style={styles.statCard}>
-      <Text style={styles.statLabel}>{label}</Text>
-      <Text style={styles.statValue}>{value}</Text>
+      <Text style={[styles.statLabel, { fontFamily: 'Tektur_400Regular' }]}>{label}</Text>
+      <Text style={[styles.statValue, { fontFamily: 'Tektur_700Bold' }]}>{value}</Text>
     </View>
   );
 }
@@ -721,7 +783,7 @@ const styles = StyleSheet.create({
   headerSide: { width: 56, alignItems: 'flex-start', justifyContent: 'center' },
   headerLogo: { width: 40, height: 40, borderRadius: 6, resizeMode: 'contain' },
   headerAvatar: { width: 32, height: 32, borderRadius: 16 },
-  headerTitle: { flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '800', color: '#111827' },
+  headerTitle: { flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '800', color: '#111827', fontFamily: 'Tektur_700Bold' },
 
   container: {
     backgroundColor: 'white',
@@ -735,42 +797,42 @@ const styles = StyleSheet.create({
   banner: { borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 12, borderWidth: 1 },
   bannerWin: { backgroundColor: '#dcfce7', borderColor: '#bbf7d0' },
   bannerLose: { backgroundColor: '#fee2e2', borderColor: '#fecaca' },
-  bannerText: { textAlign: 'center', fontSize: 16, fontWeight: '800' },
-  bannerTextWin: { color: '#166534' },
-  bannerTextLose: { color: '#991b1b' },
+  bannerText: { textAlign: 'center', fontSize: 16, fontWeight: '800', fontFamily: 'Tektur_700Bold' },
+  bannerTextWin: { color: '#166534', fontFamily: 'Tektur_700Bold' },
+  bannerTextLose: { color: '#991b1b', fontFamily: 'Tektur_700Bold' },
 
   playerRow: { flexDirection: 'row', gap: 12, marginBottom: 12, alignItems: 'center' },
   playerPhoto: { width: 96, height: 96, borderRadius: 12, borderWidth: 1, borderColor: '#e5e7eb', objectFit: 'cover' },
   photoFallback: { backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center' },
-  playerName: { fontSize: 20, fontWeight: '800', marginBottom: 4, color: '#111827' },
-  playerMeta: { fontSize: 14, color: '#4b5563' },
+  playerName: { fontSize: 20, fontWeight: '800', marginBottom: 4, color: '#111827', fontFamily: 'Tektur_700Bold' },
+  playerMeta: { fontSize: 14, color: '#4b5563', fontFamily: 'Tektur_400Regular' },
 
   factBox: { backgroundColor: '#eff6ff', borderRadius: 12, padding: 12, marginBottom: 12 },
-  factText: { fontStyle: 'italic', color: '#111827' },
-  factFootnote: { marginTop: 4, fontSize: 11, color: '#6b7280' },
+  factText: { fontStyle: 'italic', color: '#111827', fontFamily: 'Tektur_400Regular' },
+  factFootnote: { marginTop: 4, fontSize: 11, color: '#6b7280', fontFamily: 'Tektur_400Regular' },
 
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
   statCard: { flexBasis: '48%', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12 },
-  statLabel: { color: '#6b7280', fontSize: 12, marginBottom: 4 },
-  statValue: { color: '#111827', fontSize: 18, fontWeight: '700' },
+  statLabel: { color: '#6b7280', fontSize: 12, marginBottom: 4, fontFamily: 'Tektur_400Regular' },
+  statValue: { color: '#111827', fontSize: 18, fontWeight: '700', fontFamily: 'Tektur_700Bold' },
 
   rowActions: { flexDirection: 'row', gap: 8, alignItems: 'center', marginTop: 8 },
   iconBtn: { width: 44, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f3f4f6' },
-  iconBtnTxt: { fontSize: 18, fontWeight: '800', color: '#374151' },
+  iconBtnTxt: { fontSize: 18, fontWeight: '800', color: '#374151', fontFamily: 'Tektur_700Bold' },
 
   btn: { flex: 1, borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
   btnPrimary: { backgroundColor: '#16a34a' },
   btnShare: { backgroundColor: '#4f46e5' }, // legacy (unused for icon-only)
   btnSecondary: { backgroundColor: '#eef2f7' },
-  btnTxt: { color: 'white', fontWeight: '700', fontSize: 16 },
-  btnTxtDark: { color: '#111827' },
+  btnTxt: { color: 'white', fontWeight: '700', fontSize: 16, fontFamily: 'Tektur_700Bold' },
+  btnTxtDark: { color: '#111827', fontFamily: 'Tektur_700Bold' },
 
   // compact icon-only Share button
   btnIconShare: { width: 44, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#4f46e5' },
 
   dailyWrap: { alignItems: 'center', marginTop: 4 },
-  dailyTitle: { fontSize: 18, fontWeight: '800', color: '#713f12', marginBottom: 4, textAlign: 'center' },
-  dailyText: { fontSize: 15, color: '#374151', textAlign: 'center' },
-  dailyCountdown: { marginTop: 6, fontSize: 13, color: '#6b7280' },
-  dailyCountdownStrong: { fontWeight: '700', color: '#111827' },
+  dailyTitle: { fontSize: 18, fontWeight: '800', color: '#713f12', marginBottom: 4, textAlign: 'center', fontFamily: 'Tektur_700Bold' },
+  dailyText: { fontSize: 15, color: '#374151', textAlign: 'center', fontFamily: 'Tektur_400Regular' },
+  dailyCountdown: { marginTop: 6, fontSize: 13, color: '#6b7280', fontFamily: 'Tektur_400Regular' },
+  dailyCountdownStrong: { fontWeight: '700', color: '#111827', fontFamily: 'Tektur_700Bold' },
 });

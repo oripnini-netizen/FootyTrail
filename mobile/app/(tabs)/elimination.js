@@ -23,6 +23,7 @@ import * as Notifications from "expo-notifications";
 import ReverseTimerBar from "../../components/ReverseTimerBar";
 import { useAudioPlayer } from "expo-audio";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useFonts, Tektur_400Regular, Tektur_700Bold, Tektur_800ExtraBold } from "@expo-google-fonts/tektur";
 
 /* ------------------------------- Small utils ------------------------------ */
 function fmtDuration(ms) {
@@ -61,8 +62,8 @@ function useCountdown(endIso) {
 function StatCard({ label, value, valueStyle }) {
   return (
     <View style={{ flex: 1, alignItems: "center", marginHorizontal: 4, padding: 8, borderWidth: 1, borderColor: "#ddd", borderRadius: 8, backgroundColor: "#fff" }}>
-      <Text style={{ fontSize: 12, color: "#666" }}>{label}</Text>
-      <Text style={[{ fontSize: 18, fontWeight: "bold" }, valueStyle ? { color: valueStyle.replace("text-", "").replace("-700", "") } : {}]}>{value}</Text>
+      <Text style={{ fontSize: 12, color: "#666", fontFamily: "Tektur_400Regular" }}>{label}</Text>
+      <Text style={[{ fontSize: 18, fontWeight: "bold", fontFamily: "Tektur_700Bold" }, valueStyle ? { color: valueStyle.replace("text-", "").replace("-700", "") } : {}]}>{value}</Text>
     </View>
   );
 }
@@ -101,8 +102,6 @@ async function markSeenFinishAlert(tournamentId, userId) {
     await AsyncStorage.setItem(finishAlertKey(tournamentId, userId), "1");
   } catch { }
 }
-
-
 
 /* ---------------------- Per-card realtime (minimal & fast) ---------------------- */
 /**
@@ -297,8 +296,8 @@ function StatCardKPI({ label, value, valueStyle }) {
         alignItems: "center",
       }}
     >
-      <Text style={{ fontSize: 11, color: "#6B7280" }}>{label}</Text>
-      <Text style={[{ fontSize: 18, fontWeight: "700", color: "#111827" }, valueStyle]}>{value}</Text>
+      <Text style={{ fontSize: 11, color: "#6B7280", fontFamily: "Tektur_400Regular" }}>{label}</Text>
+      <Text style={[{ fontSize: 18, fontWeight: "700", color: "#111827", fontFamily: "Tektur_700Bold" }, valueStyle]}>{value}</Text>
     </View>
   );
 }
@@ -325,11 +324,11 @@ export default function EliminationScreen() {
   const [hardRefreshToken, setHardRefreshToken] = useState(0);
 
   // Per-tournament realtime ticks (so we can nudge only the changed card)
-const [rtTicksByTournament, setRtTicksByTournament] = useState({});
-const bumpRtTick = useCallback((tid) => {
-  if (!tid) return;
-  setRtTicksByTournament((prev) => ({ ...prev, [tid]: (prev[tid] || 0) + 1 }));
-}, []);
+  const [rtTicksByTournament, setRtTicksByTournament] = useState({});
+  const bumpRtTick = useCallback((tid) => {
+    if (!tid) return;
+    setRtTicksByTournament((prev) => ({ ...prev, [tid]: (prev[tid] || 0) + 1 }));
+  }, []);
 
   const [liveAutoTick, setLiveAutoTick] = useState(0);
   useEffect(() => {
@@ -443,7 +442,6 @@ const bumpRtTick = useCallback((tid) => {
     }
   }, [supabase, userId]);
 
-
   // initial + on user change
   useEffect(() => { reloadLists(); }, [reloadLists]);
 
@@ -491,7 +489,6 @@ const bumpRtTick = useCallback((tid) => {
     };
   }, [reloadLists]);
 
-
   // Scroll-to-refresh
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -500,7 +497,6 @@ const bumpRtTick = useCallback((tid) => {
     reloadLists()
       .finally(() => setRefreshing(false));
   }, [reloadLists]);
-
 
   // simple “any” flags / lists
   const anyError = error.upcoming || error.live || error.finished;
@@ -532,64 +528,66 @@ const bumpRtTick = useCallback((tid) => {
   }, [refreshToken, hardRefreshToken, combinedList.length]);
 
   // Realtime: keep tournaments → reload lists, everything else → tick only the affected card.
-useEffect(() => {
-  const ch = supabase
-    .channel("elim-mobile-realtime")
+  useEffect(() => {
+    const ch = supabase
+      .channel("elim-mobile-realtime")
 
-    // Any change to tournaments should re-query the three lists
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "elimination_tournaments" },
-      () => reloadLists()
-    )
+      // Any change to tournaments should re-query the three lists
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "elimination_tournaments" },
+        () => reloadLists()
+      )
 
-    // Rounds → bump that tournament's card only
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "elimination_rounds" },
-      (payload) => {
-        const tid = payload?.new?.tournament_id ?? payload?.old?.tournament_id ?? null;
-        if (tid) bumpRtTick(tid);
-      }
-    )
+      // Rounds → bump that tournament's card only
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "elimination_rounds" },
+        (payload) => {
+          const tid = payload?.new?.tournament_id ?? payload?.old?.tournament_id ?? null;
+          if (tid) bumpRtTick(tid);
+        }
+      )
 
-    // Participants → bump that tournament's card only
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "elimination_participants" },
-      (payload) => {
-        const tid = payload?.new?.tournament_id ?? payload?.old?.tournament_id ?? null;
-        if (tid) bumpRtTick(tid);
-      }
-    )
+      // Participants → bump that tournament's card only
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "elimination_participants" },
+        (payload) => {
+          const tid = payload?.new?.tournament_id ?? payload?.old?.tournament_id ?? null;
+          if (tid) bumpRtTick(tid);
+        }
+      )
 
-    // Entries → find the tournament via the round_id and bump only that card
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "elimination_round_entries" },
-      async (payload) => {
-        const rid = payload?.new?.round_id ?? payload?.old?.round_id ?? null;
-        if (!rid) return;
-        // Lightweight lookup of the tournament for this round
-        const { data } = await supabase
-          .from("elimination_rounds")
-          .select("tournament_id")
-          .eq("id", rid)
-          .single();
-        const tid = data?.tournament_id ?? null;
-        if (tid) bumpRtTick(tid);
-      }
-    )
+      // Entries → find the tournament via the round_id and bump only that card
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "elimination_round_entries" },
+        async (payload) => {
+          const rid = payload?.new?.round_id ?? payload?.old?.round_id ?? null;
+          if (!rid) return;
+          // Lightweight lookup of the tournament for this round
+          const { data } = await supabase
+            .from("elimination_rounds")
+            .select("tournament_id")
+            .eq("id", rid)
+            .single();
+          const tid = data?.tournament_id ?? null;
+          if (tid) bumpRtTick(tid);
+        }
+      )
 
-    // point_transactions: noisy → IGNORE at page level. Cards recompute when opened.
+      // point_transactions: noisy → IGNORE at page level. Cards recompute when opened.
 
-    .subscribe();
+      .subscribe();
 
-  return () => {
-    supabase.removeChannel(ch);
-  };
-}, [reloadLists, bumpRtTick]);
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [reloadLists, bumpRtTick]);
 
+  let [fontsLoaded] = useFonts({ Tektur_400Regular, Tektur_700Bold, Tektur_800ExtraBold });
+  if (!fontsLoaded) return null;
 
   return (
     <View style={{ flex: 1, backgroundColor: "#F0FDF4", justifyContent: "center" }}>
@@ -605,7 +603,7 @@ useEffect(() => {
             style={[styles.primaryBtn, { alignSelf: "center", paddingHorizontal: 14 }]}
             onPress={() => router.push("/elimination-create")}
           >
-            <Text style={styles.primaryBtnText}>+ Create New Challenge</Text>
+            <Text style={[styles.primaryBtnText, { fontFamily: "Tektur_700Bold" }]}>+ Create New Challenge</Text>
           </TouchableOpacity>
         </View>
 
@@ -629,7 +627,7 @@ useEffect(() => {
                     ? (hardRefreshToken + liveAutoTick)  // refresh every 30s + realtime
                     : 0                                  // finished: no auto refresh
                 }
-                    perCardTick={rtTicksByTournament[t.id] || 0}   
+                perCardTick={rtTicksByTournament[t.id] || 0}
                 onChanged={reloadLists}
                 isExpanded={expandedIds.has(t.id)}
                 onToggle={() => {
@@ -650,7 +648,7 @@ useEffect(() => {
                   activeOpacity={0.85}
                   style={[styles.secondaryBtn, { paddingHorizontal: 16, paddingVertical: 10 }]}
                 >
-                  <Text style={styles.secondaryBtnText}>
+                  <Text style={[styles.secondaryBtnText, { fontFamily: "Tektur_700Bold" }]}>
                     {showAllFinished
                       ? "Hide previous finished challenges"
                       : `Show previous finished challenges (${remainingFinishedCount})`}
@@ -697,15 +695,15 @@ useEffect(() => {
   function EmptyText({ text }) {
     return (
       <View style={{ paddingVertical: 40, alignItems: "center" }}>
-        <Text style={{ color: "#6B7280" }}>{text}</Text>
+        <Text style={{ color: "#6B7280", fontFamily: "Tektur_400Regular" }}>{text}</Text>
       </View>
     );
   }
   function ErrorBox({ message }) {
     return (
       <View style={styles.errorBox}>
-        <Text style={styles.errorTitle}>Couldn’t load</Text>
-        <Text style={styles.errorText}>{String(message)}</Text>
+        <Text style={[styles.errorTitle, { fontFamily: "Tektur_700Bold" }]}>Couldn’t load</Text>
+        <Text style={[styles.errorText, { fontFamily: "Tektur_400Regular" }]}>{String(message)}</Text>
       </View>
     );
   }
@@ -728,9 +726,9 @@ function TournamentCardMobileBR({
   refreshToken,
   hardRefreshToken,
   onChanged,
-  isExpanded,         
-  onToggle,           
-  onFirstDataLoaded,       
+  isExpanded,
+  onToggle,
+  onFirstDataLoaded,
   perCardTick = 0,
 }) {
   const router = useRouter();
@@ -1001,7 +999,7 @@ function TournamentCardMobileBR({
     tournamentId: tournament.id,
     roundIds: rounds.map((r) => r.id),
     onChange: () => setRtTick((t) => t + 1),
-      enabled: !!isExpanded, // realtime channel only when open
+    enabled: !!isExpanded, // realtime channel only when open
   });
 
   const acceptedParticipants = useMemo(
@@ -1127,7 +1125,7 @@ function TournamentCardMobileBR({
         <Text
           style={[
             styles.cardTitle,
-            { textAlign: "center", width: "100%", marginBottom: 6 },
+            { textAlign: "center", width: "100%", marginBottom: 6, fontFamily: "Tektur_800ExtraBold" },
           ]}
         >
           {tournament.name || "Untitled"}
@@ -1144,14 +1142,14 @@ function TournamentCardMobileBR({
             flexWrap: "wrap",
           }}
         >
-          <Text style={styles.smallMuted}>
-            Participants: <Text style={styles.bold}>{acceptedCount}</Text>
+          <Text style={[styles.smallMuted, { fontFamily: "Tektur_400Regular" }]}>
+            Participants: <Text style={[styles.bold, { fontFamily: "Tektur_700Bold" }]}>{acceptedCount}</Text>
           </Text>
 
-          <Text style={styles.smallMuted}>•</Text>
+          <Text style={[styles.smallMuted, { fontFamily: "Tektur_400Regular" }]}>•</Text>
 
-          <Text style={styles.smallMuted}>
-            <Text style={styles.bold}>{fmtDateTime(tournament.created_at)}</Text>
+          <Text style={[styles.smallMuted, { fontFamily: "Tektur_400Regular" }]}>
+            <Text style={[styles.bold, { fontFamily: "Tektur_700Bold" }]}>{fmtDateTime(tournament.created_at)}</Text>
           </Text>
         </View>
 
@@ -1175,13 +1173,14 @@ function TournamentCardMobileBR({
             }
           >
             <Text
-              style={
+              style={[
                 isUpcoming
                   ? styles.upcomingChipText
                   : isLive
                     ? styles.liveChipText
-                    : styles.finishedChipText
-              }
+                    : styles.finishedChipText,
+                { fontFamily: isUpcoming ? "Tektur_700Bold" : "Tektur_400Regular" }
+              ]}
             >
               {isUpcoming ? "Upcoming" : isLive ? "Live" : "Finished"}
             </Text>
@@ -1193,17 +1192,17 @@ function TournamentCardMobileBR({
               isOwner ? (
                 canStart ? (
                   <View style={[styles.joinedChip]}>
-                    <Text style={styles.joinedChipText}>Ready to start challenge</Text>
+                    <Text style={[styles.joinedChipText, { fontFamily: "Tektur_700Bold" }]}>Ready to start challenge</Text>
                   </View>
                 ) : (
                   <View style={styles.joinedChip}>
-                    <Text style={styles.joinedChipText}>Waiting for min participants</Text>
+                    <Text style={[styles.joinedChipText, { fontFamily: "Tektur_400Regular" }]}>Waiting for min participants</Text>
                   </View>
                 )
               ) : (
                 <View style={userHasJoined ? styles.joinedChip : styles.chip}>
                   <Text
-                    style={userHasJoined ? styles.joinedChipText : styles.chipValue}
+                    style={[userHasJoined ? styles.joinedChipText : styles.chipValue, { fontFamily: userHasJoined ? "Tektur_700Bold" : "Tektur_400Regular" }]}
                   >
                     {userHasJoined ? "Joined" : "Open to Join"}
                   </Text>
@@ -1211,19 +1210,16 @@ function TournamentCardMobileBR({
               )
             ) : isFinished ? (
               <View style={youWon ? styles.winnerChip : styles.elimChip}>
-                <Text style={youWon ? styles.winnerChipText : styles.elimChipText}>
+                <Text style={[youWon ? styles.winnerChipText : styles.elimChipText, { fontFamily: youWon ? "Tektur_700Bold" : "Tektur_400Regular" }]}>
                   {`Won by ${winner.full_name}`}
                 </Text>
               </View>
             ) : <View style={styles.liveChip}>
-              <Text style={styles.liveChipText}>Round {rounds.length} in progress</Text>
+              <Text style={[styles.liveChipText, { fontFamily: "Tektur_400Regular" }]}>Round {rounds.length} in progress</Text>
             </View>}
           </View>
         </View>
-
       </TouchableOpacity>
-
-
 
       {/* ----- Collapsible body ----- */}
       {isExpanded && (
@@ -1239,7 +1235,7 @@ function TournamentCardMobileBR({
 
             <TouchableOpacity onPress={() => setFiltersOpen((v) => !v)}>
               <View style={[styles.chip, { alignSelf: "flex-start", alignItems: "stretch", paddingHorizontal: 8, paddingVertical: 8, borderRadius: 16 }]}>
-                <Text style={[styles.chipValue]}>{filtersOpen ? "Hide" : "Show"} Filters</Text>
+                <Text style={[styles.chipValue, { fontFamily: "Tektur_700Bold" }]}>{filtersOpen ? "Hide" : "Show"} Filters</Text>
               </View>
             </TouchableOpacity>
           </View>
@@ -1252,8 +1248,8 @@ function TournamentCardMobileBR({
                   <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                     {filterChips.map((c, idx) => (
                       <View key={idx} style={styles.chip}>
-                        <Text style={styles.chipLabel}>{c.label}:</Text>
-                        <Text style={styles.chipValue}> {c.value}</Text>
+                        <Text style={[styles.chipLabel, { fontFamily: "Tektur_700Bold" }]}>{c.label}:</Text>
+                        <Text style={[styles.chipValue, { fontFamily: "Tektur_700Bold" }]}> {c.value}</Text>
                       </View>
                     ))}
                   </View>
@@ -1325,7 +1321,7 @@ function TournamentCardMobileBR({
                       disabled={busy === "start"}
                       onPress={handleStart}
                     >
-                      <Text style={styles.primaryBtnText}>Start Challenge</Text>
+                      <Text style={[styles.primaryBtnText, { fontFamily: "Tektur_700Bold" }]}>Start Challenge</Text>
                     </TouchableOpacity>
                   ) : null
                 ) : userHasJoined ? null : (
@@ -1336,7 +1332,7 @@ function TournamentCardMobileBR({
                       disabled={busy === "join"}
                       onPress={handleJoin}
                     >
-                      <Text style={styles.primaryBtnText}>Join Challenge</Text>
+                      <Text style={[styles.primaryBtnText, { fontFamily: "Tektur_700Bold" }]}>Join Challenge</Text>
                     </TouchableOpacity>
 
                     {/* Decline appears ONLY if you're still invited AND lobby is open */}
@@ -1346,7 +1342,7 @@ function TournamentCardMobileBR({
                         disabled={busy === "decline"}
                         onPress={handleDecline}
                       >
-                        <Text style={styles.secondaryBtnText}>Decline</Text>
+                        <Text style={[styles.secondaryBtnText, { fontFamily: "Tektur_700Bold" }]}>Decline</Text>
                       </TouchableOpacity>
                     )}
                   </>
@@ -1355,7 +1351,7 @@ function TournamentCardMobileBR({
 
               {/* If invited but lobby not in 'lobby' status, show why Decline isn't available */}
               {isInvitedOnly && !isLobbyOpen && (
-                <Text style={{ textAlign: "center", marginTop: 6, fontSize: 12, color: "#ef4444" }}>
+                <Text style={{ textAlign: "center", marginTop: 6, fontSize: 12, color: "#ef4444", fontFamily: "Tektur_400Regular" }}>
                   Invites can only be declined while the challenge is in lobby.
                 </Text>
               )}
@@ -1376,6 +1372,7 @@ function TournamentCardMobileBR({
 /* -------------------- Lobby arena (status = lobby) -------------------- */
 function LobbyArena({ tournament, acceptedParticipants, pendingParticipants, usersById, heightOverride }) {
   const screenW = Dimensions.get("window").width;
+  const whistle = useAudioPlayer(require("../../assets/sounds/final_whistle.wav"));
   const containerW = screenW - 24 - 24;
   const pitchW = containerW - 4;
   const totalAvatars = (acceptedParticipants?.length || 0) + (pendingParticipants?.length || 0);
@@ -1467,10 +1464,10 @@ function LobbyArena({ tournament, acceptedParticipants, pendingParticipants, use
   return (
     <View style={{ marginTop: 0 }}>
       <View style={{ alignItems: "center", marginBottom: 6, minHeight: TITLE_BLOCK_MIN_H, justifyContent: "center" }}>
-        <Text style={{ fontWeight: "800", color: "#002d68ff", marginBottom: 6 }}>Lobby</Text>
+        <Text style={{ fontWeight: "800", color: "#002d68ff", marginBottom: 6, fontFamily: "Tektur_800ExtraBold" }}>Lobby</Text>
         {ownerLabel && (
           <View style={styles.creatorChip}>
-            <Text style={styles.creatorChipText}>
+            <Text style={[styles.creatorChipText, { fontFamily: "Tektur_400Regular" }]}>
               Challenge Creator: {ownerLabel}
             </Text>
           </View>
@@ -1530,11 +1527,11 @@ function LobbyArena({ tournament, acceptedParticipants, pendingParticipants, use
       >
         <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
           <View style={{ width: 10, height: 10, borderRadius: 10, backgroundColor: "#0077ffff" }} />
-          <Text style={{ color: "#94a3b8", fontSize: 12 }}>Joined</Text>
+          <Text style={{ color: "#94a3b8", fontSize: 12, fontFamily: "Tektur_400Regular" }}>Joined</Text>
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
           <View style={{ width: 10, height: 10, borderRadius: 10, backgroundColor: "#64748b" }} />
-          <Text style={{ color: "#94a3b8", fontSize: 12 }}>Invited</Text>
+          <Text style={{ color: "#94a3b8", fontSize: 12, fontFamily: "Tektur_400Regular" }}>Invited</Text>
         </View>
       </View>
     </View>
@@ -1613,6 +1610,12 @@ function SwipeableArena({
         alertShownRef.current = true;
         await markSeenFinishAlert(tournament.id, userId);
 
+        // Play final whistle exactly when the win/lose alert shows
+        try {
+          whistle.seekTo(0);
+          whistle.play();
+        } catch { }
+
         // Show the required “OK”-only alert
         const title = userId === winnerUserId ? "🏆 Victory!" : "💀 Defeat";
         Alert.alert(title, message, [{ text: "OK" }]);
@@ -1621,8 +1624,6 @@ function SwipeableArena({
 
     return () => { cancelled = true; };
   }, [tournament.status, winnerUserId, userId, participants, usersById, tournament.id, tournament.stake_points]);
-
-
 
   const acceptedCount = participants.filter(
     (p) => (p.invite_status || "").toLowerCase() === "accepted"
@@ -1710,9 +1711,9 @@ function SwipeableArena({
               <View key={`winner-${tournament.id}`} style={containerStyle}>
 
                 <View style={{ alignItems: "center", marginBottom: 6, minHeight: TITLE_BLOCK_MIN_H, justifyContent: "center" }}>
-                  <Text style={{ fontWeight: "800", color: "#a89500ff", marginBottom: 6 }}>Challenge Winner</Text>
+                  <Text style={{ fontWeight: "800", color: "#a89500ff", marginBottom: 6, fontFamily: "Tektur_800ExtraBold" }}>Challenge Winner</Text>
                   <View style={styles.winnerChip}>
-                    <Text style={styles.winnerChipText}>{winner?.full_name}</Text>
+                    <Text style={[styles.winnerChipText, { fontFamily: "Tektur_400Regular" }]}>{winner?.full_name}</Text>
                   </View>
                 </View>
                 <WinnerPitch pulse={pulse} winner={winner} pitchW={containerW - 4} pitchH={unifiedPitchHAll} />
@@ -1723,6 +1724,7 @@ function SwipeableArena({
                       textAlign: "center",
                       fontWeight: "700",
                       lineHeight: 20,
+                      fontFamily: "Tektur_400Regular",
                     }}
                   >
                     {stake > 0 ? `${name} takes the crown!` : `${name} takes the crown!`}
@@ -1940,8 +1942,6 @@ function RoundSlide({
 
   const avatarPositions = placeNonOverlapping();
 
-  const whistle = useAudioPlayer(require("../../assets/sounds/final_whistle.wav"));
-
   // --- NEW: Countdown for live rounds subtitle
   const liveCountdown = useCountdown(!r.closed_at ? r.ends_at : null);
   const countdownEnded = !r.closed_at && !!r.ends_at && liveCountdown === "—";
@@ -1961,7 +1961,7 @@ function RoundSlide({
   const roundEndedNow = !!r.closed_at || allPlayed || countdownEnded;
   const isLatestRound = roundsAsc[roundsAsc.length - 1]?.id === r.id;
 
-  // Fire once when a round ends (any reason): show overlay, whistle, and refresh
+  // Fire once when a round ends (any reason): show overlay and refresh
   useEffect(() => {
     if (isLiveTournament && isLatestRound && roundEndedNow && !endedRef.current) {
       endedRef.current = true;
@@ -1969,12 +1969,6 @@ function RoundSlide({
       // Overlay for ~2.5s
       setShowEndedBanner(true);
       const hideT = setTimeout(() => setShowEndedBanner(false), 2500);
-
-      // Whistle
-      try {
-        whistle.seekTo(0);
-        whistle.play();
-      } catch { }
 
       // Let parent refresh so the next round appears
       onForceRefresh && onForceRefresh();
@@ -1992,6 +1986,7 @@ function RoundSlide({
             fontWeight: "800",
             color: r.is_elimination ? "#8d0000ff" : "#000000ff", // 🔴 red if elimination
             marginBottom: 6,
+            fontFamily: "Tektur_800ExtraBold",
           }}
         >
           Round {r.round_number} {r.is_elimination ? "🪓" : ""}
@@ -2036,18 +2031,19 @@ function RoundSlide({
               elevation: 8,
             }}
           >
-            <Text style={{ fontSize: 34, marginBottom: 6 }}>⏳</Text>
+            <Text style={{ fontSize: 34, marginBottom: 6, fontFamily: "Tektur_400Regular" }}>⏳</Text>
             <Text
               style={{
                 fontSize: 18,
                 fontWeight: "800",
                 color: "#111827",
                 marginBottom: 4,
+                fontFamily: "Tektur_800ExtraBold",
               }}
             >
               Round Ended!
             </Text>
-            <Text style={{ fontSize: 14, color: "#6B7280" }}>
+            <Text style={{ fontSize: 14, color: "#6B7280", textAlign: "center", fontFamily: "Tektur_400Regular" }}>
               Get back to the arena!
             </Text>
           </View>
@@ -2083,15 +2079,15 @@ function RoundSlide({
       >
         <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
           <View style={{ width: 10, height: 10, borderRadius: 10, backgroundColor: "#10b981" }} />
-          <Text style={{ color: "#94a3b8", fontSize: 12 }}>Safe</Text>
+          <Text style={{ color: "#94a3b8", fontSize: 12, fontFamily: "Tektur_400Regular" }}>Safe</Text>
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
           <View style={{ width: 10, height: 10, borderRadius: 10, backgroundColor: "#ef4444" }} />
-          <Text style={{ color: "#94a3b8", fontSize: 12 }}>In danger</Text>
+          <Text style={{ color: "#94a3b8", fontSize: 12, fontFamily: "Tektur_400Regular" }}>In danger</Text>
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-          <Text style={{ fontSize: 14 }}>🔆</Text>
-          <Text style={{ color: "#94a3b8", fontSize: 12 }}>Played</Text>
+          <Text style={{ fontSize: 14, fontFamily: "Tektur_400Regular" }}>🔆</Text>
+          <Text style={{ color: "#94a3b8", fontSize: 12, fontFamily: "Tektur_400Regular" }}>Played</Text>
         </View>
       </View>
 
@@ -2100,14 +2096,14 @@ function RoundSlide({
       <View style={{ marginTop: 8, alignItems: "center", minHeight: BOTTOM_BLOCK_MIN_H, justifyContent: "center" }}>
         {!r.closed_at ? (
           youPlayed ? (
-            <Text style={{ color: "#000000ff", fontSize: 12 }}>Was this enough to keep you from being chopped?</Text>
+            <Text style={{ color: "#000000ff", fontSize: 12, fontFamily: "Tektur_400Regular" }}>Was this enough to keep you from being chopped?</Text>
           ) : youEliminatedRound && youEliminatedRound <= r.round_number ? (
             <View style={styles.elimChip}>
-              <Text style={styles.elimChipText}>Eliminated on Round {youEliminatedRound}</Text>
+              <Text style={[styles.elimChipText, { fontFamily: "Tektur_400Regular" }]}>Eliminated on Round {youEliminatedRound}</Text>
             </View>
           ) : (
             <TouchableOpacity onPress={onPlay} style={[styles.primaryBtn, { alignSelf: "center" }]}>
-              <Text style={styles.primaryBtnText}>Play to Survive</Text>
+              <Text style={[styles.primaryBtnText, { fontFamily: "Tektur_400Regular" }]}>Play to Survive</Text>
             </TouchableOpacity>
           )
         ) : (
@@ -2132,11 +2128,11 @@ function RoundSlide({
                   />
                 )}
                 <View>
-                  <Text style={{ color: "#4e4e4eff", fontWeight: "800" }}>
+                  <Text style={{ color: "#4e4e4eff", fontWeight: "800", fontSize: 14, fontFamily: "Tektur_400Regular" }}>
                     {p?.name || "Round Player"}
                   </Text>
                   {(p?.nationality || p?.position) && (
-                    <Text style={{ color: "#6b7280", fontSize: 12 }}>
+                    <Text style={{ color: "#6b7280", fontSize: 12, fontFamily: "Tektur_400Regular" }}>
                       {[p?.nationality, p?.position].filter(Boolean).join(" • ")}
                     </Text>
                   )}
@@ -2162,7 +2158,7 @@ function RoundSlide({
             backgroundColor: "#0a0f0b",
           }}
         >
-          <Text style={{ color: "#fff", fontWeight: "800" }}>
+          <Text style={{ color: "#fff", fontWeight: "800", fontFamily: "Tektur_400Regular" }}>
             {tableOpen ? "Hide" : "Show"} Round Standings
           </Text>
         </TouchableOpacity>
@@ -2171,27 +2167,27 @@ function RoundSlide({
           <View style={styles.tableWrap}>
             {/* header */}
             <View style={[styles.tableRow, styles.tableHeader]}>
-              <Text style={[styles.tableCellName, { fontWeight: "800" }]}>Name</Text>
-              <Text style={[styles.tableCellSmall, { fontWeight: "800" }]}>Accum.</Text>
-              <Text style={[styles.tableCellSmall, { fontWeight: "800" }]}>Curr.</Text>
-              <Text style={[styles.tableCellSmall, { fontWeight: "800" }]}>Played</Text>
+              <Text style={[styles.tableCellName, { fontWeight: "800", fontFamily: "Tektur_400Regular" }]}>Name</Text>
+              <Text style={[styles.tableCellSmall, { fontWeight: "800", fontFamily: "Tektur_400Regular" }]}>Accum.</Text>
+              <Text style={[styles.tableCellSmall, { fontWeight: "800", fontFamily: "Tektur_400Regular" }]}>Curr.</Text>
+              <Text style={[styles.tableCellSmall, { fontWeight: "800", fontFamily: "Tektur_400Regular" }]}>Played</Text>
             </View>
 
             {/* rows */}
             {tableRows.map((row) => (
               <View key={row.id} style={styles.tableRow}>
-                <Text numberOfLines={1} style={styles.tableCellName}>
+                <Text numberOfLines={1} style={[styles.tableCellName, { fontFamily: "Tektur_400Regular" }]}>
                   {row.name}
                 </Text>
-                <Text style={styles.tableCellSmall}>{row.acc}</Text>
-                <Text style={styles.tableCellSmall}>{row.rnd}</Text>
+                <Text style={[styles.tableCellSmall, { fontFamily: "Tektur_400Regular" }]}>{row.acc}</Text>
+                <Text style={[styles.tableCellSmall, { fontFamily: "Tektur_400Regular" }]}>{row.rnd}</Text>
                 <View style={[styles.tableCellSmall, { alignItems: "flex-end" }]}>
                   {row.played ? (
                     <View style={styles.playedPill}>
-                      <Text style={{ color: "#0b0b0b", fontWeight: "800", fontSize: 10 }}>✔️</Text>
+                      <Text style={{ color: "#0b0b0b", fontWeight: "800", fontSize: 10, fontFamily: "Tektur_400Regular" }}>✔️</Text>
                     </View>
                   ) : (
-                    <Text style={{ color: "#94a3b8", fontSize: 12 }}>⭕</Text>
+                    <Text style={{ color: "#94a3b8", fontSize: 12, fontFamily: "Tektur_400Regular" }}>⭕</Text>
                   )}
                 </View>
               </View>
@@ -2236,6 +2232,7 @@ function WinnerPitch({ pulse, winner, pitchW, pitchH }) {
             marginLeft: -14,
             marginTop: -72,
             fontSize: 28,
+            fontFamily: "Tektur_400Regular",
           }}
         >
           👑
@@ -2372,7 +2369,7 @@ function ArenaPitch({
               {/* ⭐ Star behind the avatar (can extend outside the circle) */}
               {played && (
                 <View pointerEvents="none" style={styles.playedStar}>
-                  <Text style={styles.playedStarGlyph}>🔆</Text>
+                  <Text style={[styles.playedStarGlyph, { fontFamily: "Tektur_400Regular" }]}>🔆</Text>
                 </View>
               )}
 
@@ -2417,12 +2414,12 @@ function ArenaPitch({
                 tooltipStyle || { left: tooltip.x, top: tooltip.y },
               ]}
             >
-              <Text style={styles.tooltipTitle}>{fullName}</Text>
-              <Text style={styles.tooltipRow}>
-                Accummulated: <Text style={styles.tooltipStrong}>{acc}</Text> pts
+              <Text style={[styles.tooltipTitle, { fontFamily: "Tektur_400Regular" }]}>{fullName}</Text>
+              <Text style={[styles.tooltipRow, { fontFamily: "Tektur_400Regular" }]}>
+                Accummulated: <Text style={[styles.tooltipStrong, { fontFamily: "Tektur_400Regular" }]}>{acc}</Text> pts
               </Text>
-              <Text style={styles.tooltipRow}>
-                Curr. round: <Text style={styles.tooltipStrong}>{rp}</Text> pts
+              <Text style={[styles.tooltipRow, { fontFamily: "Tektur_400Regular" }]}>
+                Curr. round: <Text style={[styles.tooltipStrong, { fontFamily: "Tektur_400Regular" }]}>{rp}</Text> pts
               </Text>
             </View>
           );
@@ -2813,6 +2810,7 @@ const styles = StyleSheet.create({
   tooltipTitle: { color: "#e2e8f0", fontWeight: "800", marginBottom: 2 },
   tooltipRow: { color: "#94a3b8", fontSize: 12, marginTop: 2 },
   tooltipStrong: { color: "#e2e8f0", fontWeight: "800" },
+
 });
 
 
@@ -2823,8 +2821,8 @@ function InfoChip({ label, value, tone }) {
   const valueColor = tone === "danger" ? { color: "#fecaca" } : undefined;
   return (
     <View style={[styles.chip, border]}>
-      <Text style={[styles.chipLabel, valueColor]}>{label}</Text>
-      <Text style={[styles.chipValue, valueColor]}> {value}</Text>
+      <Text style={[styles.chipLabel, valueColor, { fontFamily: "Tektur_400Regular" }]}>{label}</Text>
+      <Text style={[styles.chipValue, valueColor, { fontFamily: "Tektur_700Bold" }]}> {value}</Text>
     </View>
   );
 }

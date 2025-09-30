@@ -23,6 +23,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import * as FileSystem from "expo-file-system";
 import { Ionicons } from "@expo/vector-icons";
 import { getCounts } from "../lib/api";
+import { useFonts, Tektur_400Regular, Tektur_700Bold, Tektur_800ExtraBold } from "@expo-google-fonts/tektur";
 
 const BG = "#F0FDF4";
 const SCREEN = Dimensions.get("window");
@@ -67,7 +68,7 @@ export const Header = memo(function Header() {
           style={{ width: 36, height: 36, borderRadius: 8 }}
           resizeMode="contain"
         />
-        <Text style={{ fontSize: 18, fontWeight: "700", color: "#065f46" }}>FootyTrail</Text>
+        <Text style={{ fontSize: 18, fontWeight: "700", color: "#065f46", fontFamily: 'Tektur_700Bold' }}>FootyTrail</Text>
       </View>
       <View style={{ width: 48 }} />
     </View>
@@ -105,7 +106,7 @@ export const Footer = memo(function Footer({ index, goTo, finish }) {
             borderRadius: 12,
           }}
         >
-          <Text style={{ color: "#064E3B", fontWeight: "700" }}>Back</Text>
+          <Text style={{ color: "#064E3B", fontWeight: "700", fontFamily: 'Tektur_700Bold' }}>Back</Text>
         </TouchableOpacity>
 
         {index < 7 ? (
@@ -118,7 +119,7 @@ export const Footer = memo(function Footer({ index, goTo, finish }) {
               borderRadius: 12,
             }}
           >
-            <Text style={{ color: "white", fontWeight: "800" }}>Continue</Text>
+            <Text style={{ color: "white", fontWeight: "800", fontFamily: 'Tektur_700Bold' }}>Continue</Text>
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
@@ -130,7 +131,7 @@ export const Footer = memo(function Footer({ index, goTo, finish }) {
               borderRadius: 12,
             }}
           >
-            <Text style={{ color: "white", fontWeight: "800" }}>Finish</Text>
+            <Text style={{ color: "white", fontWeight: "800", fontFamily: 'Tektur_700Bold' }}>Finish</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -153,7 +154,7 @@ export const Chip = memo(function Chip({ children, onPress, selected = false, va
         style,
       ]}
     >
-      <Text style={{ color: selected ? "#fff" : "#111827", fontSize: 12, fontWeight: "700" }}>
+      <Text style={{ color: selected ? "#fff" : "#111827", fontSize: 12, fontWeight: "700", fontFamily: 'Tektur_700Bold' }}>
         {children}
       </Text>
     </Pressable>
@@ -671,11 +672,15 @@ export default function TutorialScreen() {
     persistNotifs(next);
   };
 
-  if (!slidesReady) {
+  const [fontsLoaded] = useFonts({
+    Tektur_400Regular,
+    Tektur_700Bold,
+    Tektur_800ExtraBold,
+  });
+
+  if (!fontsLoaded || !slidesReady) {
     return (
-      <SafeAreaView
-        style={{ flex: 1, backgroundColor: BG, alignItems: "center", justifyContent: "center" }}
-      >
+      <SafeAreaView style={{ flex: 1, backgroundColor: BG, alignItems: "center", justifyContent: "center" }}>
         <ActivityIndicator />
       </SafeAreaView>
     );
@@ -787,17 +792,17 @@ export default function TutorialScreen() {
         {/* 5) Elimination Challenges */}
         <SlideContainer width={SLIDE_WIDTH}>
           <ScrollView>
-          <Text style={styles.h1}>Elimination Challenges 🪓</Text>
-          <Text style={styles.p}>
-            Stake points, survive round by round, and avoid being the lowest scorer when elimination
-            hits. Private or public—invite friends or join the crowd. Last survivor takes the pot!
-          </Text>
+            <Text style={styles.h1}>Elimination Challenges 🪓</Text>
+            <Text style={styles.p}>
+              Stake points, survive round by round, and avoid being the lowest scorer when elimination
+              hits. Private or public—invite friends or join the crowd. Last survivor takes the pot!
+            </Text>
 
-          <Image
-            source={require("../assets/images/elimination-screenshot.png")}
-            resizeMode="cover"
-            style={{ width: "100%", height: 380, borderRadius: 12, marginTop: 12 }}
-          />
+            <Image
+              source={require("../assets/images/elimination-screenshot.png")}
+              resizeMode="cover"
+              style={{ width: "100%", height: 380, borderRadius: 12, marginTop: 12 }}
+            />
           </ScrollView>
         </SlideContainer>
 
@@ -859,13 +864,13 @@ export default function TutorialScreen() {
                     opacity: uploading ? 0.6 : 1,
                   }}
                 >
-                  <Text style={{ color: "#065F46", fontWeight: "700" }}>
+                  <Text style={{ color: "#065F46", fontWeight: "700", fontFamily: 'Tektur_700Bold' }}>
                     {uploading ? "Uploading…" : "Choose Avatar"}
                   </Text>
                 </TouchableOpacity>
               </View>
 
-              <Text style={{ fontSize: 12, color: "#065f46", marginBottom: 6 }}>Display Name</Text>
+              <Text style={{ fontSize: 12, color: "#065f46", marginBottom: 6, fontFamily: 'Tektur_400Regular' }}>Display Name</Text>
               <TextInput
                 value={displayName}
                 onChangeText={setDisplayName}
@@ -886,7 +891,7 @@ export default function TutorialScreen() {
             <View style={{ height: 12 }} />
             <Text style={styles.h1}>Notifications 🔔</Text>
             <Text style={[styles.p, { marginBottom: 10 }]}>
-              Gentle nudges to keep your streaks alive and heads-up when you’re invited to elimination challenges. 
+              Gentle nudges to keep your streaks alive and heads-up when you’re invited to elimination challenges.
               You can tweak these anytime in Settings.
             </Text>
 
@@ -1197,9 +1202,9 @@ function compactMoney(n) {
 
 /* --------------------------------- Styles -------------------------------- */
 const styles = StyleSheet.create({
-  h1: { fontSize: 20, fontWeight: "800", color: "#064E3B", marginBottom: 8 },
-  p: { fontSize: 14, color: "#065f46", lineHeight: 20 },
-  li: { fontSize: 13, color: "#065f46", marginBottom: 4 },
+  h1: { fontSize: 20, fontWeight: "800", color: "#064E3B", marginBottom: 8, fontFamily: "Tektur_800ExtraBold" },
+  p: { fontSize: 14, color: "#065f46", lineHeight: 20, fontFamily: "Tektur_400Regular" },
+  li: { fontSize: 13, color: "#065f46", marginBottom: 4, fontFamily: "Tektur_400Regular" },
 
   input: {
     backgroundColor: "white",
@@ -1209,11 +1214,11 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 12,
     fontSize: 16,
-
+    fontFamily: "Tektur_400Regular",
   },
 
   rowWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  muted: { color: "#6b7280", marginTop: 8 },
+  muted: { color: "#6b7280", marginTop: 8, fontFamily: "Tektur_400Regular" },
 
   card: {
     backgroundColor: "#fff",
@@ -1228,6 +1233,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#0b3d24",
     marginBottom: 8,
+    fontFamily: "Tektur_400Regular",
   },
 
   chip: {
@@ -1253,6 +1259,7 @@ const styles = StyleSheet.create({
     flex: 1,
     color: "#111827",
     fontWeight: "700",
+    fontFamily: "Tektur_700Bold",
   },
 
   dropdown: {
@@ -1280,6 +1287,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#111827",
     paddingVertical: 4,
+    fontFamily: "Tektur_400Regular",
   },
 
   compRow: {
@@ -1305,8 +1313,8 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginBottom: 12,
   },
-  poolLabel: { fontSize: 14, color: "#92400e", fontWeight: "700" },
-  poolValue: { fontSize: 14, color: "#92400e", fontWeight: "800" },
+  poolLabel: { fontSize: 14, color: "#92400e", fontWeight: "700", fontFamily: "Tektur_700Bold" },
+  poolValue: { fontSize: 14, color: "#92400e", fontWeight: "800", fontFamily: "Tektur_800ExtraBold" },
   optionRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1323,7 +1331,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-  notifLabel: { fontSize: 14, color: "#111827" },
+  notifLabel: { fontSize: 14, color: "#111827", fontFamily: "Tektur_400Regular" },
   divider: {
     height: 1,
     backgroundColor: "#e5e7eb",
@@ -1333,5 +1341,6 @@ const styles = StyleSheet.create({
     marginTop: 8,
     fontSize: 12,
     color: "#6b7280",
+    fontFamily: "Tektur_400Regular",
   },
 });

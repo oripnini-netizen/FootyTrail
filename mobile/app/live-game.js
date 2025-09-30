@@ -452,17 +452,36 @@ export default function LiveGameMobile() {
         const pickPhoto = (r) =>
           r.photo || r.player_photo || r.player_photo_url || r.photo_url || r.avatar || r.image || r.img || null;
 
-        // unique by normalized display
-        const groups = new Map();
-        for (const r of rows) {
-          const display = String(r.player_name ?? r.name ?? r.display ?? r.player_norm_name ?? r.norm ?? '').trim();
-          if (!display) continue;
-          const key = normalize(display);
-          const existing = groups.get(key) || { id: key, display, photo: pickPhoto(r) || null };
-          if (!existing.photo && pickPhoto(r)) existing.photo = pickPhoto(r);
-          groups.set(key, existing);
-        }
-        if (active) setSuggestions(Array.from(groups.values()));
+        // Group by normalized name, collect up to 3 photos for each group
+const groups = new Map();
+for (const r of rows) {
+  const display = String(r.player_name ?? r.name ?? r.display ?? r.player_norm_name ?? r.norm ?? '').trim();
+  if (!display) continue;
+  const key = normalize(display);
+
+  const pickPhoto = (row) =>
+    row.photo ||
+    row.player_photo ||
+    row.player_photo_url ||
+    row.photo_url ||
+    row.avatar ||
+    row.image ||
+    row.img ||
+    null;
+
+  const g = groups.get(key) || { id: key, display, photos: [], total: 0 };
+  g.total += 1;
+
+  const p = pickPhoto(r);
+  if (p && !g.photos.includes(p) && g.photos.length < 3) {
+    g.photos.push(p);
+  }
+
+  groups.set(key, g);
+}
+
+if (active) setSuggestions(Array.from(groups.values()));
+
       } catch {
         if (active) setSuggestions([]);
       } finally {
@@ -819,13 +838,15 @@ export default function LiveGameMobile() {
               Keyboard.dismiss();
             }}
           >
-            {item.photo ? (
-              <Image source={{ uri: item.photo }} style={styles.sugAvatar} />
-            ) : (
-              <View style={styles.sugAvatarFallback}>
-                <Text style={styles.sugAvatarFallbackText}>{(item.display?.[0] || '?').toUpperCase()}</Text>
-              </View>
-            )}
+            {item.photos?.length ? (
+  <AvatarStack photos={item.photos} total={item.total} />
+) : (
+  <View style={styles.sugAvatarFallback}>
+    <Text style={styles.sugAvatarFallbackText}>
+      {(item.display?.[0] || '?').toUpperCase()}
+    </Text>
+  </View>
+)}
             <View style={{ flex: 1 }}>
               <Text numberOfLines={1} style={styles.sugName}>{item.display}</Text>
             </View>
@@ -1230,6 +1251,30 @@ function HintButton({ label, multiplier, onPress, disabled, valueShown, style })
   );
 }
 
+function AvatarStack({ photos = [], total = 0 }) {
+  // Show up to 3 overlapping avatars; if more, show a "+N" pill
+  const shown = photos.slice(0, 3);
+  const extra = Math.max(0, total - shown.length);
+  return (
+    <View style={styles.stackWrap}>
+      {shown.map((uri, idx) => (
+        <Image
+          key={`${uri}-${idx}`}
+          source={{ uri }}
+          style={[styles.stackAvatar, { left: idx * 18, zIndex: 10 + idx }]}
+        />
+      ))}
+      {extra > 0 && (
+        <View style={[styles.stackMore, { left: Math.min(shown.length, 3) * 18 }]}>
+          <Text style={styles.stackMoreText}>
+            {extra > 99 ? '99+' : `+${extra}`}
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
 function TransferSlide({ t, width }) {
   const isFuture = (() => {
     if (!t?.date) return false;
@@ -1559,6 +1604,40 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     fontFamily: 'Tektur_700Bold',
   },
+
+  stackWrap: {
+  width: 90,              // enough room for overlap + "+N"
+  height: 32,
+  marginRight: 8,
+  alignItems: 'center',
+  justifyContent: 'flex-start',
+},
+stackAvatar: {
+  position: 'absolute',
+  width: 32,
+  height: 32,
+  borderRadius: 16,
+  borderWidth: 2,         // white ring so overlaps look clean
+  borderColor: '#fff',
+},
+stackMore: {
+  position: 'absolute',
+  width: 32,
+  height: 32,
+  borderRadius: 16,
+  backgroundColor: '#e5e7eb',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderWidth: 2,
+  borderColor: '#fff',
+  zIndex: 100,
+},
+stackMoreText: {
+  fontSize: 12,
+  fontWeight: '700',
+  color: '#111827',
+  fontFamily: 'Tektur_700Bold',
+},
 
 });
 
