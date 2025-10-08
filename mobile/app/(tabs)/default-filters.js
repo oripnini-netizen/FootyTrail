@@ -179,7 +179,11 @@ export default function DefaultFiltersScreen() {
           /* ignore */
         }
       }
-      arr.forEach((s) => set.add(String(s)));
+      arr.forEach((s) => {
+  if (s && s !== "null" && s !== "undefined") {
+    set.add(String(s));
+  }
+});
     });
 
     const seasons = Array.from(set)
@@ -414,9 +418,6 @@ export default function DefaultFiltersScreen() {
           <Chip onPress={selectTop10} selected={isTop10Selected}>
             Top 10
           </Chip>
-          <Chip onPress={selectAllComps} selected={isAllCompsSelected}>
-            Select All
-          </Chip>
           <Chip onPress={clearComps} variant="outline" selected={isClearComps}>
             Clear All
           </Chip>
@@ -487,12 +488,6 @@ export default function DefaultFiltersScreen() {
             selected={isLast5Seasons}
           >
             Last 5
-          </Chip>
-          <Chip
-            onPress={() => setDefaultSeasons(allSeasons)}
-            selected={isAllSeasons}
-          >
-            Select All
           </Chip>
           <Chip
             onPress={() => setDefaultSeasons([])}
@@ -592,7 +587,7 @@ export default function DefaultFiltersScreen() {
           style={styles.input}
         />
         <View style={styles.rowWrap}>
-          {[0, 5, 10, 15, 20, 25, 30, 50, 100].map((v) => (
+          {[0, 5, 10, 15, 20, 25, 30, 50, 100, 150, 200].map((v) => (
             <Chip
               key={v}
               selected={Number(defaultMinAppearances) === v}

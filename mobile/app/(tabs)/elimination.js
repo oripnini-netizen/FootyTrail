@@ -4,6 +4,7 @@ import {
   View,
   Text,
   ScrollView,
+  FlatList,
   RefreshControl,
   ActivityIndicator,
   Pressable,
@@ -24,6 +25,7 @@ import ReverseTimerBar from "../../components/ReverseTimerBar";
 import { useAudioPlayer } from "expo-audio";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFonts, Tektur_400Regular, Tektur_700Bold, Tektur_800ExtraBold } from "@expo-google-fonts/tektur";
+import { Image as ExpoImage } from "expo-image";
 
 /* ------------------------------- Small utils ------------------------------ */
 function fmtDuration(ms) {
@@ -43,20 +45,31 @@ function fmtDateTime(iso) {
     return "—";
   }
 }
-function useCountdown(endIso) {
-  const [left, setLeft] = useState(() => compute(endIso));
-  useEffect(() => {
-    setLeft(compute(endIso));
-    if (!endIso) return;
-    const id = setInterval(() => setLeft(compute(endIso)), 1000);
-    return () => clearInterval(id);
-  }, [endIso]);
-  return left;
-  function compute(end) {
+function useCountdown(endIso, enabled = true) {
+  const compute = (end) => {
     if (!end) return "—";
     const ms = Math.max(0, new Date(end).getTime() - Date.now());
-    return fmtDuration(ms);
-  }
+    if (!Number.isFinite(ms) || ms <= 0) return "—";
+    const s = Math.floor(ms / 1000);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const ss = s % 60;
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m ${ss}s`;
+    return `${ss}s`;
+  };
+
+  const [left, setLeft] = useState(() => compute(endIso));
+
+  useEffect(() => {
+    // always sync once when deps change
+    setLeft(compute(endIso));
+    if (!endIso || !enabled) return;
+    const id = setInterval(() => setLeft(compute(endIso)), 1000);
+    return () => clearInterval(id);
+  }, [endIso, enabled]);
+
+  return left;
 }
 
 function StatCard({ label, value, valueStyle }) {
@@ -558,27 +571,6 @@ export default function EliminationScreen() {
           if (tid) bumpRtTick(tid);
         }
       )
-
-      // Entries → find the tournament via the round_id and bump only that card
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "elimination_round_entries" },
-        async (payload) => {
-          const rid = payload?.new?.round_id ?? payload?.old?.round_id ?? null;
-          if (!rid) return;
-          // Lightweight lookup of the tournament for this round
-          const { data } = await supabase
-            .from("elimination_rounds")
-            .select("tournament_id")
-            .eq("id", rid)
-            .single();
-          const tid = data?.tournament_id ?? null;
-          if (tid) bumpRtTick(tid);
-        }
-      )
-
-      // point_transactions: noisy → IGNORE at page level. Cards recompute when opened.
-
       .subscribe();
 
     return () => {
@@ -683,9 +675,6 @@ export default function EliminationScreen() {
                 />
               ))}
           </View>
-
-
-
         )}
       </Animated.ScrollView>
     </View>
@@ -717,7 +706,6 @@ export default function EliminationScreen() {
     );
   }
 }
-
 
 /* --------------- Battle-Royale styled tournament card (RN) --------------- */
 function TournamentCardMobileBR({
@@ -796,16 +784,37 @@ function TournamentCardMobileBR({
   // NEW: local tick to trigger a refetch when realtime events land for this card
   const [rtTick, setRtTick] = useState(0);
 
-  // pulsing aura
+  // pulsing aura — only animate when the card is expanded (saves CPU/GPU)
   const pulse = useRef(new Animated.Value(0)).current;
+  const pulseLoopRef = useRef(null);
+
   useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 1200, easing: Easing.out(Easing.quad), useNativeDriver: false }),
-        Animated.timing(pulse, { toValue: 0, duration: 1200, easing: Easing.in(Easing.quad), useNativeDriver: false }),
-      ])
-    ).start();
-  }, [pulse]);
+    // Stop any previous loop
+    if (pulseLoopRef.current?.stop) {
+      pulseLoopRef.current.stop();
+      pulseLoopRef.current = null;
+    }
+    // Only run the loop when expanded
+    if (isExpanded) {
+      const loop = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulse, { toValue: 1, duration: 1200, easing: Easing.out(Easing.quad), useNativeDriver: false }),
+          Animated.timing(pulse, { toValue: 0, duration: 1200, easing: Easing.in(Easing.quad), useNativeDriver: false }),
+        ])
+      );
+      pulseLoopRef.current = loop;
+      loop.start();
+    } else {
+      // reset value so we don't keep a mid-animation state
+      pulse.setValue(0);
+    }
+    return () => {
+      if (pulseLoopRef.current?.stop) {
+        pulseLoopRef.current.stop();
+        pulseLoopRef.current = null;
+      }
+    };
+  }, [isExpanded, pulse]);
 
   useEffect(() => {
     let cancelled = false;
@@ -827,7 +836,6 @@ function TournamentCardMobileBR({
 
         const participantIds = (partRows || []).map((r) => r.user_id);
 
-
         // entries per round — BULK query in one go (removes N+1 round-trips)
         const roundIds = (roundRows || []).map((r) => r.id);
         let entriesMap = {};
@@ -848,7 +856,6 @@ function TournamentCardMobileBR({
         } else {
           entriesMap = {};
         }
-
 
         // round player info — include nationality & position so LiveGame hints work
         const roundPlayerIds = Array.from(
@@ -1307,6 +1314,7 @@ function TournamentCardMobileBR({
                   });
                 }
               }}
+              enablePulse={isExpanded}
             />
           )}
 
@@ -1372,7 +1380,6 @@ function TournamentCardMobileBR({
 /* -------------------- Lobby arena (status = lobby) -------------------- */
 function LobbyArena({ tournament, acceptedParticipants, pendingParticipants, usersById, heightOverride }) {
   const screenW = Dimensions.get("window").width;
-  const whistle = useAudioPlayer(require("../../assets/sounds/final_whistle.wav"));
   const containerW = screenW - 24 - 24;
   const pitchW = containerW - 4;
   const totalAvatars = (acceptedParticipants?.length || 0) + (pendingParticipants?.length || 0);
@@ -1441,7 +1448,9 @@ function LobbyArena({ tournament, acceptedParticipants, pendingParticipants, use
       y: cy - radius,
     }));
   };
-  const avatarPositions = placeNonOverlapping();
+  const avatarPositions = React.useMemo(placeNonOverlapping, [
+    avatars, pitchW, pitchH
+  ]);
 
   // pop-in animation per avatar (nice join effect)
   const scaleMapRef = useRef({});
@@ -1504,10 +1513,17 @@ function LobbyArena({ tournament, acceptedParticipants, pendingParticipants, use
                 ]}
               >
                 {u.profile_photo_url ? (
-                  <Image source={{ uri: u.profile_photo_url }} style={styles.avatarInnerMask} />
+                  <ExpoImage
+                    source={{ uri: u.profile_photo_url }}
+                    style={styles.avatarInnerMask}
+                    cachePolicy="memory-disk"
+                    recyclingKey={String(u.id)}
+                    contentFit="cover"
+                  />
                 ) : (
                   <View style={[styles.userAvatarArena, { backgroundColor: "#17202a" }]} />
                 )}
+
               </Animated.View>
             );
           })}
@@ -1567,8 +1583,17 @@ function SwipeableArena({
   pulse,
   onPlay,
   onForceRefresh,
+  enablePulse,
 }) {
   const screenW = Dimensions.get("window").width;
+  // Local whistle here (only mounted while this arena exists)
+  // This avoids leaking audio handles across other screens/components.
+  const whistle = useAudioPlayer(require("../../assets/sounds/final_whistle.wav"));
+  useEffect(() => {
+    return () => {
+      try { whistle?.unload?.(); } catch { }
+    };
+  }, [whistle]);
 
   const winnerUserId = tournament?.winner_user_id || null;
 
@@ -1687,45 +1712,46 @@ function SwipeableArena({
       <View style={{ width: containerW, alignSelf: "center", marginBottom: 6 }}>
         <PaginationDots total={slides.length} index={page} />
       </View>
-
-      <ScrollView
+      <FlatList
+        data={slides}
+        keyExtractor={(item, index) =>
+          item.type === "round" ? `round-${item.round.id}` : `${item.type}-${index}`
+        }
         horizontal
         pagingEnabled
         showsHorizontalScrollIndicator={false}
-        snapToInterval={containerW}
-        decelerationRate="fast"
-        contentContainerStyle={{ paddingVertical: 4 }}
-        scrollEventThrottle={16}
-        onScroll={({ nativeEvent }) => {
+        initialNumToRender={3}
+        maxToRenderPerBatch={3}
+        windowSize={3}
+        removeClippedSubviews
+        getItemLayout={(_, index) => ({
+          length: containerW,
+          offset: containerW * index,
+          index,
+        })}
+        onMomentumScrollEnd={({ nativeEvent }) => {
           const i = Math.round((nativeEvent.contentOffset?.x || 0) / containerW);
           if (i !== page) setPage(i);
         }}
-      >
-        {slides.map((slide) => {
+        renderItem={({ item, index }) => {
           const containerStyle = { width: containerW };
+          const isActive = index === page;
 
-          if (slide.type === "winner") {
+          if (item.type === "winner") {
             const winner = usersById[winnerUserId] || { id: winnerUserId };
             const name = winner?.full_name || winner?.email || "Winner";
             return (
               <View key={`winner-${tournament.id}`} style={containerStyle}>
-
                 <View style={{ alignItems: "center", marginBottom: 6, minHeight: TITLE_BLOCK_MIN_H, justifyContent: "center" }}>
                   <Text style={{ fontWeight: "800", color: "#a89500ff", marginBottom: 6, fontFamily: "Tektur_800ExtraBold" }}>Challenge Winner</Text>
                   <View style={styles.winnerChip}>
                     <Text style={[styles.winnerChipText, { fontFamily: "Tektur_400Regular" }]}>{winner?.full_name}</Text>
                   </View>
                 </View>
-                <WinnerPitch pulse={pulse} winner={winner} pitchW={containerW - 4} pitchH={unifiedPitchHAll} />
+                <WinnerPitch pulse={pulse} winner={winner} pitchW={containerW - 4} pitchH={unifiedPitchHAll} enablePulse={enablePulse && isActive} />
                 <View style={{ marginTop: 8, alignItems: "center", minHeight: BOTTOM_BLOCK_MIN_H, justifyContent: "center" }}>
                   <Text
-                    style={{
-                      color: "#a89500ff",
-                      textAlign: "center",
-                      fontWeight: "700",
-                      lineHeight: 20,
-                      fontFamily: "Tektur_400Regular",
-                    }}
+                    style={{ color: "#a89500ff", textAlign: "center", fontWeight: "700", lineHeight: 20, fontFamily: "Tektur_400Regular" }}
                   >
                     {stake > 0 ? `${name} takes the crown!` : `${name} takes the crown!`}
                   </Text>
@@ -1734,7 +1760,7 @@ function SwipeableArena({
             );
           }
 
-          if (slide.type === "lobby") {
+          if (item.type === "lobby") {
             return (
               <View key={`lobby-${tournament.id}`} style={containerStyle}>
                 <LobbyArena
@@ -1748,12 +1774,12 @@ function SwipeableArena({
             );
           }
 
-          // ---- Round slide (refactored into its own component to safely use hooks like useCountdown)
-          const r = slide.round;
+          // round slide
+          const r = item.round;
           return (
             <View key={r.id} style={[containerStyle, { position: "relative" }]}>
               <RoundSlide
-                containerStyle={{}} // RoundSlide already wraps with its own containerStyle prop
+                containerStyle={{}}
                 tournament={tournament}
                 userId={userId}
                 round={r}
@@ -1767,11 +1793,12 @@ function SwipeableArena({
                 unifiedPitchHAll={unifiedPitchHAll}
                 onPlay={onPlay}
                 onForceRefresh={onForceRefresh}
+                isVisible={isActive}                 // <<< only the active slide "ticks"
               />
             </View>
           );
-        })}
-      </ScrollView>
+        }}
+      />
     </View>
   );
 }
@@ -1792,6 +1819,7 @@ function RoundSlide({
   unifiedPitchHAll,
   onPlay,
   onForceRefresh,
+  isVisible,
 }) {
   const r = round;
   const isLiveTournament = tournament?.status === "live";
@@ -1818,8 +1846,14 @@ function RoundSlide({
       .map((p) => p.id)
   );
 
-  const roundPts = new Map(entries.map((e) => [e.user_id, Number(e.points_earned) || 0]));
-  const playedThisRound = new Set(entries.filter((e) => !!e.game_record_id).map((e) => e.user_id));
+  const roundPts = React.useMemo(
+    () => new Map(entries.map((e) => [e.user_id, Number(e.points_earned) || 0])),
+    [entries]
+  );
+  const playedThisRound = React.useMemo(
+    () => new Set(entries.filter((e) => !!e.game_record_id).map((e) => e.user_id)),
+    [entries]
+  );
   const youPlayed = userId ? playedThisRound.has(userId) : false;
 
   // ⬇️ Add this inside RoundSlide (near the other consts), so we can use it below
@@ -1831,34 +1865,26 @@ function RoundSlide({
 
   // Build block-aware cumulative points that reset on the FIRST round AFTER an elimination round.
   // We sum from (last elimination round strictly BEFORE this round) + 1  → current round (inclusive).
-  const eb = RoundSlide.__entriesByRound__;
-  const cum = new Map();
-
-  if (eb && Array.isArray(roundsAsc)) {
-    const idxCur = roundsAsc.findIndex((rr) => rr.id === r.id);
-
-    // Find the nearest elimination round strictly BEFORE the current round.
-    // If found at index i, start summing at i+1. If none found, start at 0.
-    let startIdx = 0;
-    for (let i = idxCur - 1; i >= 0; i--) {
-      const rr = roundsAsc[i];
-      if (rr?.is_elimination) {
-        startIdx = i + 1; // reset happens on the first round AFTER an elimination round
-        break;
+  const cumPoints = React.useMemo(() => {
+    const eb = RoundSlide.__entriesByRound__;
+    const cum = new Map();
+    if (eb && Array.isArray(roundsAsc)) {
+      const idxCur = roundsAsc.findIndex((rr) => rr.id === r.id);
+      let startIdx = 0;
+      for (let i = idxCur - 1; i >= 0; i--) {
+        const rr = roundsAsc[i];
+        if (rr?.is_elimination) { startIdx = i + 1; break; }
+      }
+      for (let i = startIdx; i <= idxCur; i++) {
+        const rr = roundsAsc[i];
+        const arr = eb[rr.id] || [];
+        for (const e of arr) {
+          cum.set(e.user_id, (cum.get(e.user_id) || 0) + (Number(e.points_earned) || 0));
+        }
       }
     }
-
-    // Sum from startIdx → idxCur (inclusive)
-    for (let i = startIdx; i <= idxCur; i++) {
-      const rr = roundsAsc[i];
-      const arr = eb[rr.id] || [];
-      for (const e of arr) {
-        cum.set(e.user_id, (cum.get(e.user_id) || 0) + (Number(e.points_earned) || 0));
-      }
-    }
-  }
-
-  const cumPoints = cum;
+    return cum;
+  }, [roundsAsc, r.id]);
 
   const [tableOpen, setTableOpen] = useState(false);
 
@@ -1885,9 +1911,16 @@ function RoundSlide({
     const v = cumPoints.get(uid) || 0;
     if (v < minCum) minCum = v;
   }
-  const lowestCumUsers = new Set(
-    activeUserIds.filter((uid) => (cumPoints.get(uid) || 0) === minCum)
-  );
+  const lowestCumUsers = React.useMemo(() => {
+    const activeUserIds = roundUserIds.filter((uid) => !eliminatedByRound.has(uid));
+    let minCum = Infinity;
+    for (const uid of activeUserIds) {
+      const v = cumPoints.get(uid) || 0;
+      if (v < minCum) minCum = v;
+    }
+    return new Set(activeUserIds.filter((uid) => (cumPoints.get(uid) || 0) === minCum));
+  }, [roundUserIds, eliminatedByRound, cumPoints]);
+
 
   const avatars = roundUserIds.map((uid) => {
     return usersById[uid] || { id: uid, profile_photo_url: "", email: "User" };
@@ -1940,10 +1973,13 @@ function RoundSlide({
     return placed.map(({ id, cx, cy }) => ({ id, x: cx - radius, y: cy - radius }));
   };
 
-  const avatarPositions = placeNonOverlapping();
+  const avatarPositions = React.useMemo(placeNonOverlapping, [
+    avatars, pitchW, pitchH
+  ]);
 
   // --- NEW: Countdown for live rounds subtitle
-  const liveCountdown = useCountdown(!r.closed_at ? r.ends_at : null);
+  const liveCountdown = useCountdown(!r.closed_at ? r.ends_at : null, !!isVisible);
+
   const countdownEnded = !r.closed_at && !!r.ends_at && liveCountdown === "—";
 
   const [showEndedBanner, setShowEndedBanner] = useState(false);
@@ -1980,7 +2016,7 @@ function RoundSlide({
   return (
     <View style={containerStyle}>
       {/* Above the arena: round & survivors left (fixed min-height) */}
-      <View style={{ alignItems: "center", marginBottom: 6, minHeight: TITLE_BLOCK_MIN_H, justifyContent: "center" }}>
+      <View style={{ alignItems: "center", marginBottom: 2, minHeight: TITLE_BLOCK_MIN_H, justifyContent: "center" }}>
         <Text
           style={{
             fontWeight: "800",
@@ -1989,7 +2025,7 @@ function RoundSlide({
             fontFamily: "Tektur_800ExtraBold",
           }}
         >
-          Round {r.round_number} {r.is_elimination ? "🪓" : ""}
+          Round {r.round_number} {r.is_elimination ? "🪓" : "🟢"}
         </Text>
 
         <ReverseTimerBar
@@ -2064,6 +2100,7 @@ function RoundSlide({
         lowestCumUsers={lowestCumUsers}
         playedThisRound={playedThisRound}
         isElimination={r.is_elimination}
+        enablePulse={!!isVisible}
       />
 
       {/* Legend below arena */}
@@ -2204,17 +2241,21 @@ function RoundSlide({
 RoundSlide.__entriesByRound__ = {};
 
 /* ---------------- Winner “pitch” slide (centered avatar + crown above) --------------- */
-function WinnerPitch({ pulse, winner, pitchW, pitchH }) {
+function WinnerPitch({ pulse, winner, pitchW, pitchH, enablePulse }) {
+  const animatedShadow = enablePulse
+    ? {
+      shadowOpacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.08, 0.25] }),
+      shadowRadius: pulse.interpolate({ inputRange: [0, 1], outputRange: [4, 10] }),
+    }
+    : { shadowOpacity: 0.08, shadowRadius: 4 };
+
   return (
     <View style={[styles.arenaContainer, { paddingVertical: 6 }]}>
       <Animated.View
         style={[
           styles.pitch,
           { height: pitchH, borderRadius: 20, position: "relative", width: pitchW },
-          {
-            shadowOpacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.08, 0.25] }),
-            shadowRadius: pulse.interpolate({ inputRange: [0, 1], outputRange: [4, 10] }),
-          },
+          animatedShadow,
         ]}
       >
         {/* Football pitch lines */}
@@ -2258,14 +2299,15 @@ function WinnerPitch({ pulse, winner, pitchW, pitchH }) {
           }}
         >
           {winner?.profile_photo_url ? (
-            <Image
+            <ExpoImage
               source={{ uri: winner.profile_photo_url }}
               style={{ width: "100%", height: "100%" }}
+              cachePolicy="memory-disk"
+              recyclingKey={String(winner.id || "winner")}
+              contentFit="cover"
             />
           ) : (
-            <View
-              style={{ width: "100%", height: "100%", backgroundColor: "#17202a" }}
-            />
+            <View style={{ width: "100%", height: "100%", backgroundColor: "#17202a" }} />
           )}
         </View>
       </Animated.View>
@@ -2274,7 +2316,7 @@ function WinnerPitch({ pulse, winner, pitchW, pitchH }) {
 }
 
 /* ---------------------------- Arena visualization ---------------------------- */
-function ArenaPitch({
+const ArenaPitch = React.memo(function ArenaPitch({
   heightOverride,
   pulse,
   pitchId,
@@ -2286,8 +2328,10 @@ function ArenaPitch({
   cumPointsAtRound,
   lowestCumUsers,
   playedThisRound,
-  isElimination
+  isElimination,
+  enablePulse,
 }) {
+
   const [tooltip, setTooltip] = useState(null); // { id, x, y }
   const [tooltipSize, setTooltipSize] = useState({ w: 0, h: 0 });
 
@@ -2317,23 +2361,39 @@ function ArenaPitch({
     return { left, top };
   })();
 
-  return (
-    <Animated.View style={[styles.arenaContainer, heightOverride ? { paddingVertical: 6 } : null,
-    {
+  const outerShadow = enablePulse
+    ? {
       shadowOpacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.08, 0.85] }),
       shadowRadius: pulse.interpolate({ inputRange: [0, 1], outputRange: [5, 15] }),
-      shadowColor: isElimination ? "#ef4444" : "#a5f8ddff", // 🔴 red pulse if elimination
-      borderColor: isElimination ? "rgba(239,68,68,0.25)" : "rgba(16,185,129,0.25)",
-    },
-    ]}>
+    }
+    : { shadowOpacity: 0.08, shadowRadius: 5 };
+
+  const innerShadow = enablePulse
+    ? {
+      shadowOpacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.08, 0.85] }),
+      shadowRadius: pulse.interpolate({ inputRange: [0, 1], outputRange: [5, 15] }),
+    }
+    : { shadowOpacity: 0.08, shadowRadius: 5 };
+
+  return (
+    <Animated.View
+      style={[
+        styles.arenaContainer,
+        heightOverride ? { paddingVertical: 6 } : null,
+        outerShadow,
+        {
+          shadowColor: isElimination ? "#ef4444" : "#a5f8ddff",
+          borderColor: isElimination ? "rgba(239,68,68,0.25)" : "rgba(16,185,129,0.25)",
+        },
+      ]}
+    >
       <Animated.View
         style={[
           styles.pitch,
           heightOverride ? { height: heightOverride, borderRadius: 20, width: pitchW } : { width: pitchW },
+          innerShadow,
           {
-            shadowOpacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.08, 0.85] }),
-            shadowRadius: pulse.interpolate({ inputRange: [0, 1], outputRange: [5, 15] }),
-            shadowColor: isElimination ? "#ef4444" : "#10b981", // 🔴 red pulse if elimination
+            shadowColor: isElimination ? "#ef4444" : "#10b981",
             borderColor: isElimination ? "rgba(239,68,68,0.25)" : "rgba(16,185,129,0.25)",
           },
         ]}
@@ -2376,10 +2436,17 @@ function ArenaPitch({
               {/* Inner circular mask for the image */}
               <View style={styles.avatarInnerMask}>
                 {u.profile_photo_url ? (
-                  <Image source={{ uri: u.profile_photo_url }} style={[styles.userAvatarArena, { zIndex: 1 }]} />
+                  <ExpoImage
+                    source={{ uri: u.profile_photo_url }}
+                    style={[styles.userAvatarArena, { zIndex: 1 }]}
+                    cachePolicy="memory-disk"
+                    recyclingKey={String(u.id)}
+                    contentFit="cover"
+                  />
                 ) : (
                   <View style={[styles.userAvatarArena, { backgroundColor: "#17202a", zIndex: 1 }]} />
                 )}
+
               </View>
             </TouchableOpacity>
           );
@@ -2427,7 +2494,30 @@ function ArenaPitch({
       </Animated.View>
     </Animated.View>
   );
-}
+}, (prev, next) => {
+  // stable primitives
+  if (
+    prev.heightOverride !== next.heightOverride ||
+    prev.pitchId !== next.pitchId ||
+    prev.pitchW !== next.pitchW ||
+    prev.pitchH !== next.pitchH ||
+    prev.isElimination !== next.isElimination ||
+    prev.enablePulse !== next.enablePulse
+  ) return false;
+
+  // stable references thanks to memoization above
+  if (prev.avatars !== next.avatars) return false;
+  if (prev.avatarPositions !== next.avatarPositions) return false;
+  if (prev.roundPts !== next.roundPts) return false;
+  if (prev.cumPointsAtRound !== next.cumPointsAtRound) return false;
+  if (prev.lowestCumUsers !== next.lowestCumUsers) return false;
+  if (prev.playedThisRound !== next.playedThisRound) return false;
+
+  // pulse Animated.Value identity stays the same for a given card
+  if (prev.pulse !== next.pulse) return false;
+
+  return true; // no re-render
+});
 
 /* --------------------------------- Styles -------------------------------- */
 const styles = StyleSheet.create({

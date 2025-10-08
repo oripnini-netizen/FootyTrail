@@ -1196,9 +1196,6 @@ export default function GameScreen() {
                   <Chip onPress={selectTop10} selected={isTop10Selected}>
                     Top 10
                   </Chip>
-                  <Chip onPress={selectAllComps} selected={isAllCompsSelected}>
-                    Select All
-                  </Chip>
                   <Chip onPress={clearComps} variant="outline" selected={isClearComps}>
                     Clear All
                   </Chip>
@@ -1279,9 +1276,6 @@ export default function GameScreen() {
                   </Chip>
                   <Chip onPress={selectLast5} selected={isLast5Seasons}>
                     Last 5
-                  </Chip>
-                  <Chip onPress={selectAllSeasons} selected={isAllSeasons}>
-                    Select All
                   </Chip>
                   <Chip onPress={clearSeasons} variant="outline" selected={isClearSeasons}>
                     Clear All
@@ -1392,7 +1386,7 @@ export default function GameScreen() {
                   style={styles.input}
                 />
                 <View style={styles.rowWrap}>
-                  {[0, 5, 10, 15, 20, 25, 30, 50, 100].map((v) => (
+                  {[0, 5, 10, 15, 20, 25, 30, 50, 100, 150, 200].map((v) => (
                     <Chip
                       key={v}
                       selected={Number(minAppearances) === v}

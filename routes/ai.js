@@ -345,20 +345,25 @@ Return ONE sentence only, as instructed.`.trim();
 
     let factRaw = pickOutputText(response);
     let fact = normalizeDidYouKnowSentence(factRaw, name);
-    if (!fact || looksLikeApology(fact)) fact = banterFallback(name);
+    let isFallback = false;
+    if (!fact || looksLikeApology(fact)) {
+      fact = banterFallback(name);
+      isFallback = true;
+    }
 
-    return res.json({ fact });
+    return res.json({ fact, isFallback });
+
   } catch (err) {
     const name = req?.body?.player?.name || 'this player';
     if (err && err.message === 'openai-timeout') {
-      return res.status(200).json({ fact: banterFallback(name) });
+      return res.status(200).json({ fact: banterFallback(name), isFallback: true });
     }
     const safe = {
       name: err?.name, status: err?.status, statusText: err?.statusText, code: err?.code,
       message: err?.message, details: err?.response?.data || err?.data || null,
     };
     console.error('[AI fact error]', safe);
-    return res.status(200).json({ fact: banterFallback(name) });
+    return res.status(200).json({ fact: banterFallback(name), isFallback: true });
   }
 });
 
@@ -387,7 +392,7 @@ router.post('/game-outro', async (req, res) => {
       {
         role: 'system',
         content:
-`You are a witty football quiz commentator.
+          `You are a witty football quiz commentator.
 Write EXACTLY ONE sentence reacting to the user's round outcome.
 Address the user by their username (e.g., "Ori") somewhere in the sentence.
 Tone:
@@ -402,7 +407,7 @@ Content constraints:
       {
         role: 'user',
         content:
-`Round summary:
+          `Round summary:
 - Result: ${result}
 - Mode: ${isDaily ? 'Daily Challenge' : 'Regular'}
 - Points: ${points}
@@ -468,7 +473,7 @@ router.post('/generate-game-prompt', async (_req, res) => {
           {
             role: 'user',
             content:
-`You are a hype commentator for a football players guessing game by their transfer history.
+              `You are a hype commentator for a football players guessing game by their transfer history.
 Write one short, punchy, single-sentence prompt (max ~20 words) to motivate the user to start a new round.
 No emojis, no hashtags.`
           }
@@ -505,7 +510,7 @@ router.post('/generate-daily-prompt', async (_req, res) => {
           {
             role: 'user',
             content:
-`Write ONE short, punchy sentence to hype today's Daily Challenge in a football transfer-history guessing game.
+              `Write ONE short, punchy sentence to hype today's Daily Challenge in a football transfer-history guessing game.
 The daily round features a *top-tier* player: think Top 10 leagues worldwide, recent seasons only, and a high market value.
 Keep it energetic, 20 words or fewer, no emojis, no hashtags.`
           }

@@ -33,6 +33,683 @@ const INITIAL_TIME = 120; // 2 minutes
 const AI_FACT_TIMEOUT_MS = 9000;
 const MAX_DOTS = 9; // (no longer used for lists, kept to avoid style churn)
 
+// ---- Local outro catalogue (no API calls) ----
+// Buckets: win/lose × hints(0,1,2,5) × guesses(1..3)
+// ---- Local outro catalogue (24 buckets × 20 lines each) ----
+// Use .replaceAll("{{username}}", displayName) at render time.
+
+const OUTRO_LINES = {
+  win: {
+    h0: {
+      g1: [
+        "No hints and first try — you’re cooking, {{username}}! 🔥",
+        "Blindfolded bullseye, {{username}}. Ridiculous form. 🎯",
+        "Pure instinct, first strike. Chef’s kiss, {{username}}. 👨‍🍳",
+        "You didn’t even blink, {{username}}. Elite stuff. ⚡️",
+        "Ghosted the hints and still scored. Ice cold, {{username}}. 🧊",
+        "Natural born finisher — one look, one hit, {{username}}. 🏹",
+        "That was telepathy, {{username}}. Zero hints, all brain. 🧠",
+        "Clinical. You cut straight through, {{username}}. ✂️",
+        "No warm-up needed — laser from you, {{username}}. 🔫",
+        "Minimal info, maximum flex. Lovely, {{username}}. 💪",
+        "You just speed-ran that, {{username}}. WR vibes. 🏁",
+        "Sniper mode engaged, {{username}}. One shot. 🎯",
+        "You read the game like a book, {{username}}. 📖",
+        "Vintage you, {{username}} — no fuss, just finish. ✅",
+        "That guess aged like fine wine instantly, {{username}}. 🍷",
+        "You saw it before it happened, {{username}}. Visionary. 👁️",
+        "Cold as the other side of the pillow, {{username}}. 🥶",
+        "Efficiency 100%. File that under ‘routine’, {{username}}. 🗂️",
+        "Boss level execution, {{username}}. 👑",
+        "That wasn’t a guess, that was prophecy, {{username}}. 🔮",
+      ],
+      g2: [
+        "Two swings, no hints — still classy, {{username}}. 👏",
+        "Dialed in without peeking. Smooth, {{username}}. 😎",
+        "You kept the visor down and landed it, {{username}}. ⛑️",
+        "No hints, quick adjust, clean finish. Nice, {{username}}. 🧽",
+        "You recalibrated like a pro, {{username}}. 🔧",
+        "Second try supersonic, {{username}}. Boom. 💥",
+        "You found the angle fast, {{username}}. 📐",
+        "Zero clues, plenty of IQ. Love it, {{username}}. 🧠",
+        "Tweaked and sealed it — pro work, {{username}}. 🛠️",
+        "You bullied that solution into place, {{username}}. 💪",
+        "Two taps to glory, {{username}}. Clean. ✅",
+        "No hand-holding, just brains. Top stuff, {{username}}. 🧠",
+        "You read the room and finished, {{username}}. 🏁",
+        "Adapting on the fly — that’s you, {{username}}. 🦅",
+        "A calm correction and bang. Class, {{username}}. 🧘",
+        "Zero hints, high confidence. Love it, {{username}}. ❤️",
+        "You ironed it out in seconds, {{username}}. 🧺",
+        "Second guess masterclass, {{username}}. 🎓",
+        "You kept the nerve and delivered, {{username}}. 🧊",
+        "Textbook adjustment, {{username}}. 📚",
+      ],
+      g3: [
+        "Made it dramatic, still no hints — clutch, {{username}}! 🔥",
+        "Third time charm without clues. Nerves of steel, {{username}}. 🧊",
+        "You wrestled it into the net, {{username}}. Respect. 💪",
+        "No hints and you still closed it late. Winner’s mentality, {{username}}. 🏆",
+        "Edge of the seat but you owned it, {{username}}. 🎢",
+        "You kept believing — and cashed in, {{username}}. 💸",
+        "That was grit, {{username}}. Proper grit. 🪨",
+        "Storm weathered, result delivered, {{username}}. ⛈️→🌤️",
+        "You walked the tightrope and stuck the landing, {{username}}. 🤸",
+        "Drama merchant with a happy ending, {{username}}. 🎬",
+        "Fashionably late, undeniably right, {{username}}. 🕰️",
+        "You hunted it down without a single clue, {{username}}. 🐺",
+        "Pressure? You ate it for breakfast, {{username}}. 🍽️",
+        "That was stubborn brilliance, {{username}}. 🧠",
+        "Final swing heroics from you, {{username}}. 🦸",
+        "You turned chaos into points, {{username}}. ✨",
+        "Third swing, still king. Nice, {{username}}. 👑",
+        "You kept the faith, {{username}} — deserved. 🙌",
+        "No hints, all heart. Love it, {{username}}. 💚",
+        "You closed the chapter like a skipper, {{username}}. 📘",
+      ],
+    },
+    h1: {
+      g1: [
+        "One hint, one hit — tidy, {{username}}. 🧽",
+        "Used a nudge and struck gold, {{username}}. 🪙",
+        "Minimal help, maximum finish. Class, {{username}}. 🎯",
+        "That hint was fuel — you floored it, {{username}}. 🏎️",
+        "Single clue, laser focus, {{username}}. ⚡️",
+        "Scalpel work, {{username}} — one hint, one cut. 🔪",
+        "You squeezed value from a single clue, {{username}}. 🍋",
+        "Smart peek, perfect strike, {{username}}. ✅",
+        "Little help, big brain, {{username}}. 🧠",
+        "You translated the hint instantly, {{username}}. 🔤",
+        "One breadcrumb and you baked a cake, {{username}}. 🎂",
+        "Economy of clues — love that, {{username}}. 💼",
+        "You turned a whisper into a cheer, {{username}}. 📣",
+        "Single spark, full fire, {{username}}. 🔥",
+        "That’s precision play, {{username}}. 🎯",
+        "You didn’t need more. Sharp, {{username}}. ✂️",
+        "Hint-efficient and lethal, {{username}}. ☑️",
+        "You read it once and pounced, {{username}}. 🐆",
+        "Clean move, clean finish, {{username}}. 🧼",
+        "One clue, total control, {{username}}. 🕹️",
+      ],
+      g2: [
+        "One hint set the path — you finished it, {{username}}. 🛣️",
+        "Good read, quick adjust, win secured, {{username}}. 🔧",
+        "You let the hint breathe and then struck, {{username}}. 🌬️",
+        "That was tidy route-planning, {{username}}. 🗺️",
+        "One clue, two taps, top result, {{username}}. ✅",
+        "You built the picture fast, {{username}}. 🧩",
+        "That hint aged well — and so did your guess, {{username}}. 🍷",
+        "Smooth tempo, smart finish, {{username}}. 🎼",
+        "You turned the key and drove home, {{username}}. 🔑",
+        "Measured, composed, decisive — nice, {{username}}. 🧘",
+        "Good intel, better execution, {{username}}. 🎯",
+        "You didn’t rush it — that’s maturity, {{username}}. 🧑‍🍳",
+        "One hint, clean closure, {{username}}. 🧳",
+        "You guided it in like a pilot, {{username}}. ✈️",
+        "Solid tempo, {{username}}. No panic, just points. 🧮",
+        "You trimmed the fat and finished, {{username}}. ✂️",
+        "Blueprint to reality in two, {{username}}. 📐",
+        "Composed correction, sweet end, {{username}}. 🍭",
+        "Hint whisper → correct roar, {{username}}. 🗣️",
+        "Smooth operator vibes, {{username}}. 📞",
+      ],
+      g3: [
+        "One hint, high drama, right answer — showman, {{username}}. 🎭",
+        "You kept cool and closed late, {{username}}. 🧊",
+        "Squeezed all the value from that single hint, {{username}}. 🍊",
+        "You played the long game — and won it, {{username}}. ⏳",
+        "Final-swing precision with just one clue, {{username}}. 🎯",
+        "Stuck the landing, {{username}}. That’s poise. 🤸",
+        "You made it cinematic and correct, {{username}}. 🎬",
+        "One hint, three beats, one hero — {{username}}. 🦸",
+        "You circled, lined up, and struck, {{username}}. 🛰️",
+        "Right at the tape, {{username}}. Winner’s timing. 🏁",
+        "You milked that hint expertly, {{username}}. 🥛",
+        "Patience paid off, {{username}}. 💸",
+        "You rode the wave to shore, {{username}}. 🌊",
+        "Ice veins, {{username}}. Clutch city. 🧊",
+        "You refused the fumble — strong, {{username}}. 🏈",
+        "Drama converted to points — neat, {{username}}. ✨",
+        "Played it like chess, finished like checkers, {{username}}. ♟️",
+        "You engineered a win from scraps, {{username}}. 🔩",
+        "That was calculated bravery, {{username}}. 🧮",
+        "Final guess heroics — chef’s kiss, {{username}}. 👨‍🍳",
+      ],
+    },
+    h2: {
+      g1: [
+        "Few hints, first strike — controlled dominance, {{username}}. 😎",
+        "You turned clues into art in one go, {{username}}. 🎨",
+        "Swift synthesis, perfect hit, {{username}}. 🧪",
+        "You read the room and walked it home, {{username}}. 🚶",
+        "Hints as stepping stones, you sprinted, {{username}}. 🪨🏃",
+        "That was fluent, {{username}}. Clues → answer. 🔁",
+        "You connected the dots instantly, {{username}}. •—•",
+        "First try with setup work — pro behavior, {{username}}. 🧰",
+        "You turned insight into impact, {{username}}. 💡→💥",
+        "Calm, clinical, classy — {{username}}. ✅",
+        "You made it look inevitable, {{username}}. 🧲",
+        "Blueprint to building in one motion, {{username}}. 🏗️",
+        "Clue-crafting masterclass, {{username}}. 🎓",
+        "Processing speed off the charts, {{username}}. 📈",
+        "You just speed-solved that, {{username}}. 🏎️",
+        "Hints well spent — result deserved, {{username}}. 💳",
+        "You front-loaded brainwork and cashed out, {{username}}. 💸",
+        "One-touch brilliance after prep, {{username}}. ⚽️",
+        "You staged it perfectly, {{username}}. 🎬",
+        "First swing authority, {{username}}. 🧠",
+      ],
+      g2: [
+        "Good scaffolding and a clean finish, {{username}}. 🏗️",
+        "You navigated clues like a captain, {{username}}. ⛵️",
+        "Measured steps, sharp end, {{username}}. 📏",
+        "Hints did their job and so did you, {{username}}. 🤝",
+        "Right tempo, right answer, {{username}}. 🎼",
+        "You worked the angles then scored, {{username}}. 📐",
+        "Orderly, tidy, effective — nice, {{username}}. 🧽",
+        "You pieced it together perfectly, {{username}}. 🧩",
+        "Two taps after groundwork — solid, {{username}}. 🧱",
+        "Smooth conversion from clues, {{username}}. 🔄",
+        "You kept control and finished, {{username}}. 🎯",
+        "Hints spent wisely — ROI achieved, {{username}}. 📊",
+        "You tuned the signal and struck, {{username}}. 📻",
+        "No panic, just progress. Lovely, {{username}}. 🧘",
+        "That was textbook assembly, {{username}}. 📚",
+        "You set the table and feasted, {{username}}. 🍽️",
+        "Strong craft, clean close, {{username}}. 🧰",
+        "You unlocked it in stages, {{username}}. 🔓",
+        "Orchestrated to perfection, {{username}}. 🎻",
+        "Quality from start to finish, {{username}}. 🏁",
+      ],
+      g3: [
+        "You ground it out and earned it, {{username}}. ⚙️",
+        "Late finish after proper work — boss, {{username}}. 👔",
+        "You trusted the process and were rewarded, {{username}}. 🧪",
+        "Built patiently, finished decisively, {{username}}. 🧱",
+        "That was a composed marathon, {{username}}. 🏃‍♂️",
+        "You stayed tidy under pressure, {{username}}. 🧼",
+        "You stacked the clues and struck, {{username}}. 📚",
+        "Endgame excellence, {{username}}. ♟️",
+        "You wore the puzzle down, {{username}}. 🪓",
+        "Clutch close with crafted clues, {{username}}. 🔧",
+        "You shepherded it home, {{username}}. 🐑",
+        "Big-brain endurance, {{username}}. 🧠",
+        "You kept the lid on and delivered, {{username}}. 🍲",
+        "Patient hunter vibes, {{username}}. 🐺",
+        "Methodical then merciless — love it, {{username}}. 🗡️",
+        "You starved the doubt and fed the answer, {{username}}. 🍽️",
+        "Final-beat accuracy, {{username}}. 🎯",
+        "You turned pressure into polish, {{username}}. ✨",
+        "That was grown-up puzzling, {{username}}. 🧑‍🏫",
+        "You took the scenic route and still won, {{username}}. 🗺️",
+      ],
+    },
+    h5: {
+      g1: [
+        "Full hint package, instant slam — efficient, {{username}}. ⚡️",
+        "All clues loaded, first-try finish, {{username}}. 🎯",
+        "You used the toolbox and hit top bin, {{username}}. 🧰",
+        "Max assist, max precision, {{username}}. 🛠️",
+        "That was clinical execution with support, {{username}}. ✅",
+        "You turned guidance into greatness fast, {{username}}. 🌟",
+        "Five peeks, zero doubts — boom, {{username}}. 💥",
+        "No time wasted once prepped, {{username}}. ⏱️",
+        "That was plug-and-play excellence, {{username}}. 🔌",
+        "Everything aligned on first swing, {{username}}. 🧭",
+        "You cashed in the clues perfectly, {{username}}. 💳",
+        "Instant payoff from full info, {{username}}. 💸",
+        "You choreographed that, {{username}}. 🩰",
+        "Turbo-charged by intel — love it, {{username}}. 🚀",
+        "No overthinking, just deliver, {{username}}. 📦",
+        "You made the hints sing, {{username}}. 🎤",
+        "That’s how to use resources, {{username}}. 🧠",
+        "Five for foundation, one for finish. You, {{username}}. 🧱",
+        "Prepared and precise, {{username}}. 🎯",
+        "That was a clinic, {{username}}. 🩺",
+      ],
+      g2: [
+        "Full brief, two taps — neat, {{username}}. 📝",
+        "You turned all the lights green, {{username}}. 🟢",
+        "Hints did the lifting, you did the finishing, {{username}}. 🤝",
+        "Well-orchestrated win, {{username}}. 🎼",
+        "You respected the process and cashed out, {{username}}. 💵",
+        "Composed execution with all the data, {{username}}. 🧮",
+        "You built certainty then sealed it, {{username}}. 🕹️",
+        "Strong foundation, tidy apex, {{username}}. 🏗️",
+        "Information → conversion — smooth, {{username}}. 🔄",
+        "You drove the plan home, {{username}}. 🚚",
+        "No chaos, only control, {{username}}. 🧊",
+        "That was a deliberate two-step, {{username}}. 👣",
+        "All hints, zero panic, sweet finish, {{username}}. 🍬",
+        "You lined it up and posted it, {{username}}. 📮",
+        "Clean two-touch masterclass, {{username}}. ⚽️",
+        "You closed the loop, {{username}}. 🔁",
+        "From brief to goal in two, {{username}}. 📝→🥅",
+        "Measured and inevitable, {{username}}. 🧭",
+        "You didn’t rush — you ruled, {{username}}. 👑",
+        "Premium process, premium result, {{username}}. 🏆",
+      ],
+      g3: [
+        "Max hints, late strike — still counts golden, {{username}}. 🥇",
+        "You saw it through like a captain, {{username}}. ⛵️",
+        "All the intel, all the patience — winner, {{username}}. 🧠",
+        "You marched it over the line, {{username}}. 🥁",
+        "There was never doubt, only timing, {{username}}. ⏳",
+        "You managed the project to done, {{username}}. 📈",
+        "Full toolkit, final-beat finish, {{username}}. 🧰",
+        "You stayed composed to the whistle, {{username}}. 🧊",
+        "Heavy prep, clutch delivery, {{username}}. 📦",
+        "You landed the plane perfectly, {{username}}. ✈️",
+        "That was executive composure, {{username}}. 👔",
+        "You packaged chaos neatly, {{username}}. 📦",
+        "Five hints, zero panic — strong, {{username}}. 💪",
+        "You ran the playbook to the end, {{username}}. 📖",
+        "Sturdy as they come, {{username}}. 🧱",
+        "You did the hard yards and scored, {{username}}. 🏉",
+        "Big finish energy, {{username}}. 🔋",
+        "You took every edge and earned it, {{username}}. ✨",
+        "Whistle-time winner, {{username}}. 🏁",
+        "That was captain’s material, {{username}}. 🎖️",
+      ],
+    },
+  },
+
+  lose: {
+    h0: {
+      // lose → h0 (0 hints) → g0 (gave up before any guess)
+      g0: [
+        "You dipped before the first swing, {{username}}. Next time at least jab once. 🥊",
+        "No hints, no guesses, no worries — tomorrow we press the green button, {{username}}. ▶️",
+        "Gave up on Hard Mode? Try a hint or one swing, {{username}}. 🧠",
+        "You stared it down… then bowed out. One guess won’t bite, {{username}}. 🐶",
+        "Brave to walk away; braver to take a shot, {{username}}. 🎯",
+        "Zero hints, zero guesses — that’s monk mode, {{username}}. Break the vow next time. 🧘",
+        "Skipping the guess is the only guaranteed miss, {{username}}. 🧮",
+        "You benched yourself, {{username}}. Next round, you’re starting eleven. 📝",
+        "Consider this a tactical retreat, {{username}}. We charge tomorrow. 🗺️",
+        "The riddle lives rent-free for now. Evict it tomorrow, {{username}}. 🧠",
+        "No swing, no sting — but no glory, {{username}}. ⚖️",
+        "Hard pass today; soft landing tomorrow, {{username}}. 🪂",
+        "You kept the powder dry — now actually fire it next time, {{username}}. 💥",
+        "You can’t score from the tunnel, {{username}}. Step on the pitch. ⚽️",
+        "Giving up is tidy, winning is messy — choose mess next time, {{username}}. 🧼➡️🧪",
+        "Respect the reset, {{username}}. But take one shot first. 🔁",
+        "Even one guess tells a story, {{username}}. Write a line next time. ✍️",
+        "Today was a timeout, {{username}}. Tomorrow: tip-off. 🏀",
+        "You ghosted the puzzle, {{username}}. Text back tomorrow. 📱",
+        "Zero attempts, zero regrets? We’ll fix at least one of those, {{username}}. 😉",
+      ],
+      g1: [
+        "No hints and a swing — brave, {{username}}. Next one’s yours. 💚",
+        "You went clean and paid the price — regroup, {{username}}. 🔄",
+        "Bold attempt, {{username}}. Add a clue next time. 🧩",
+        "Pure vibes can betray — steady on, {{username}}. ⚖️",
+        "Close but clue-less — chin up, {{username}}. 🙂",
+        "That’s heart, {{username}}. Let’s add brains tomorrow. 🧠",
+        "No nets this time, {{username}}. We go again. 🔁",
+        "You shot from the hip — reload smarter, {{username}}. 🔫",
+        "Respect the swagger, {{username}}. Now respect a hint. 😏",
+        "Fearless try, {{username}}. The puzzle owes you one. 🧩",
+        "Sometimes the gut misfires, {{username}}. Keep swinging. 🥊",
+        "You were nearly poetic — just no rhyme, {{username}}. 📝",
+        "The line was there, not the name. Onwards, {{username}}. ➡️",
+        "Zero hints is hardcore. Next time, sprinkle one, {{username}}. 🧂",
+        "You chased glory the hard way, {{username}}. Valient. 🛡️",
+        "Gutsy miss, {{username}}. Tomorrow bites back. 🌅",
+        "That was fearless — now be cunning, {{username}}. 🦊",
+        "We rate the audacity, {{username}}. Now rate a hint. ⭐",
+        "You rolled the dice without reading the rules, {{username}}. 🎲",
+        "Take a bow for bravery, {{username}}. Then take a hint. 🎭",
+      ],
+      g2: [
+        "Two clean swings, no hints — stubborn, {{username}}. Try a clue. 🧠",
+        "You’re allergic to hints, {{username}}. Consider therapy. 😅",
+        "Strong chin, {{username}}. Maybe add a brain cell or two tomorrow. 🧪",
+        "You tried to solo the raid, {{username}}. Bring support next time. 🛡️",
+        "Honorable miss, {{username}}. The hint button won’t bite. 🐶",
+        "Pride is heavy, {{username}}. Let a hint spot you. 🏋️",
+        "You did it the scenic way and still missed, {{username}}. 🚗",
+        "No clues, no cigar. Spark one, {{username}}. 🚬",
+        "Solid effort, {{username}}. The map helps, promise. 🗺️",
+        "You fought the fog, {{username}}. Consider headlights. 💡",
+        "Hard mode selected — loss unlocked, {{username}}. 🎮",
+        "You gave fate a fair chance, it said no. Next, {{username}}. 🧊",
+        "That was noble stubbornness, {{username}}. 🏰",
+        "Add just one hint and watch, {{username}}. ✨",
+        "You’re a purist — the scoreboard isn’t. Balance, {{username}}. ⚖️",
+        "No training wheels, wobbly landing, {{username}}. 🚲",
+        "You tried telepathy — the player didn’t receive, {{username}}. 📡",
+        "Stood tall, fell short. Happens, {{username}}. 🪵",
+        "Guts 10/10, outcome 0/10. Adjust, {{username}}. 🎚️",
+        "You boxed shadows bravely, {{username}}. 🥊",
+      ],
+      g3: [
+        "Three blind swings, {{username}}. Time to open your eyes… to hints. 👀",
+        "Epic stubborn arc, {{username}}. Respectfully: press the hint. 🔘",
+        "You tried to out-stare the puzzle, {{username}}. It blinked never. 🫠",
+        "Heroic, yes. Productive, no. Mix clues in, {{username}}. 🧪",
+        "You did a marathon in the dark, {{username}}. Take a torch. 🔦",
+        "Legend effort, {{username}}. Add information next time. ℹ️",
+        "That was cinematic suffering, {{username}}. 🎬",
+        "The vibes committee has adjourned. Hints now, {{username}}. 📝",
+        "You ran out of luck, not heart, {{username}}. ❤️",
+        "Stubborn king, crown withheld. Use a hint, {{username}}. 👑",
+        "We admire the grit. We also admire hints, {{username}}. 🧠",
+        "Three swings, no song. Get a tune next round, {{username}}. 🎻",
+        "You arm-wrestled a riddle and lost, {{username}}. 💪🧩",
+        "Bravery badge unlocked, {{username}}. Try the toolbox. 🧰",
+        "Painfully close, painfully clue-less, {{username}}. 😬",
+        "The scoreboard’s a harsh editor, {{username}}. ✏️",
+        "All heart, zero clues — balance it, {{username}}. ⚖️",
+        "That was ‘almost famous’, {{username}}. Be famous next. ⭐",
+        "We move. With hints, {{username}}. ➡️",
+        "Tomorrow, wisdom + courage, {{username}}. 🦁🧠",
+      ],
+    },
+    h1: {
+      // lose → h1 (exactly 1 hint) → g0 (gave up before any guess)
+      g0: [
+        "You paid for a peek then walked away, {{username}}. Use the ticket next time. 🎟️",
+        "One hint in hand, no swing — that’s an unused superpower, {{username}}. 🦸",
+        "You opened the door and didn’t step in, {{username}}. 🚪",
+        "One clue is a spark; you forgot the match, {{username}}. 🔥",
+        "You lined it up and cancelled the shot, {{username}}. 🧊",
+        "That hint wanted a chance, {{username}}. Give it one tomorrow. 🎯",
+        "You read the prologue and quit the book, {{username}}. 📖",
+        "A single breadcrumb and no bite, {{username}}. 🍞",
+        "You had the compass, skipped the trip, {{username}}. 🧭",
+        "One hint is not a commitment ring, {{username}}. Try a guess. 💍",
+        "You set the chessboard and called stalemate, {{username}}. ♟️",
+        "That clue won’t forgive you unless you guess, {{username}}. 😅",
+        "Almost brave, {{username}}. Next time: fully brave. 🦁",
+        "You warmed up and left the gym, {{username}}. 🏋️",
+        "The lane was open — you parked, {{username}}. 🛣️",
+        "One peek is legal; one guess is required, {{username}}. ⚖️",
+        "You prepped the canvas and didn’t paint, {{username}}. 🎨",
+        "Great reconnaissance, {{username}}. No mission though. 🛰️",
+        "You loaded the slingshot, no release, {{username}}. 🪃",
+        "Tomorrow we cash that hint, {{username}}. 💳",
+      ],
+      g1: [
+        "One hint wasn’t the magic word, {{username}}. Try two. 🔮",
+        "Close with a nudge, but not enough, {{username}}. ➕",
+        "You had the breadcrumb, missed the loaf, {{username}}. 🍞",
+        "The compass pointed, you zig-zagged, {{username}}. 🧭",
+        "Great idea, wrong name. Level up the clues, {{username}}. 📈",
+        "One hint is a whisper. You needed a shout, {{username}}. 📣",
+        "You grazed the target, {{username}}. Add intel next time. 🎯",
+        "That clue deserved more glory, {{username}}. 😔",
+        "Almost, {{username}}. Turn one hint into two and fly. 🪽",
+        "You caught the scent but lost the trail, {{username}}. 🐾",
+        "Right track, wrong station, {{username}}. 🚉",
+        "You found the door, not the key, {{username}}. 🗝️",
+        "Good instincts, underfed info. Fixable, {{username}}. 🔧",
+        "You were in the neighborhood, {{username}}. Wrong house. 🏠",
+        "Fine margins beat you today, {{username}}. ⚖️",
+        "You needed one more puzzle piece, {{username}}. 🧩",
+        "Solid read, thin evidence. Stack more, {{username}}. 📚",
+        "That was a nearly, {{username}}. Add volume next. 🔊",
+        "Good bones, no finish — yet, {{username}}. 🦴",
+        "Tomorrow we escalate the clue count, {{username}}. 📈",
+      ],
+      g2: [
+        "One hint stretched thin, {{username}}. Grab another. 🧶",
+        "Your map was 60% complete, {{username}}. Fill the rest. 🗺️",
+        "Balanced try, unbalanced result. Adjust, {{username}}. 🎚️",
+        "You stitched a decent case, {{username}}. Missing thread. 🧵",
+        "The idea was there; the name hid, {{username}}. 🫣",
+        "You hovered over the answer, {{username}}. Land next time. 🛬",
+        "One hint gave a lane; you drifted, {{username}}. 🚗",
+        "You needed one more breadcrumb trail, {{username}}. 🍞",
+        "Solid effort, {{username}}. The second clue unlocks. 🔓",
+        "It teased you, {{username}}. Demand more info. 📣",
+        "Your compass worked, coords didn’t, {{username}}. 🧭",
+        "You painted the edges, not the center, {{username}}. 🎨",
+        "Two guesses, one hint — mismatch, {{username}}. 🔁",
+        "You were circling the name, {{username}}. Expand clues. 🛰️",
+        "Respectable loss, {{username}}. Upgrade ammo. 🧰",
+        "The riddle shrugged; shrug back with hints, {{username}}. 🤷",
+        "Close enough to annoy you — good sign, {{username}}. 😅",
+        "You ran out of runway, {{username}}. Extend with hints. 🛫",
+        "The lock clicked but didn’t open, {{username}}. More pins. 🔐",
+        "You’re one nudge away, {{username}}. ➕",
+      ],
+      g3: [
+        "Stretched that single hint to the limit, {{username}}. Time to double up. ➕",
+        "You gave us a thriller, {{username}}. Sequel needs more clues. 🎬",
+        "You juggled too much with too little, {{username}}. Add one. 🤹",
+        "Endgame slipped. Fuel it with hints next, {{username}}. ⛽️",
+        "One hint in a marathon won’t cut it, {{username}}. 🏃",
+        "You were architect and acrobat — missing tools, {{username}}. 🛠️",
+        "Final guess drama, no pay-off. Upgrade info, {{username}}. 📈",
+        "You boxed clever, came up short, {{username}}. 🥊",
+        "Almost snapped into focus, {{username}}. Sharpen with clues. 🔎",
+        "Right vibe, wrong badge, {{username}}. 🏷️",
+        "You squeezed that hint dry, {{username}}. Need more juice. 🍊",
+        "Close-out lacked grip, {{username}}. Get traction with intel. 🛞",
+        "You tangoed with the name and tripped, {{username}}. 💃",
+        "Decent case file, {{username}}. Missing page. 📄",
+        "You found the chorus, not the lyric, {{username}}. 🎤",
+        "The clock beat you, not the puzzle, {{username}}. ⏰",
+        "You traced the silhouette, not the face, {{username}}. 🖼️",
+        "Cliffhanger ending. Season 2: more hints, {{username}}. 📺",
+        "You nearly pickpocketed the riddle, {{username}}. 🧥",
+        "Next time we bully the mystery with clues, {{username}}. 💪",
+      ],
+    },
+    h2: {
+      // lose → h2 (2–4 hints) → g0 (gave up before any guess)
+      g0: [
+        "You built the scaffolding and walked off site, {{username}}. 🏗️",
+        "So many clues, zero swing — the gods of puzzles are confused, {{username}}. 🫨",
+        "You did the homework and skipped the test, {{username}}. ✍️",
+        "That’s a premium warm-up for no main event, {{username}}. 🎟️",
+        "You tuned the radio and muted the song, {{username}}. 📻",
+        "Four breadcrumbs and no bite, {{username}}. 🍞",
+        "The map was clear; the steps were zero, {{username}}. 🗺️",
+        "All set-up, no punchline — we want jokes, {{username}}. 🎤",
+        "You sharpened the blade and sheathed it, {{username}}. 🗡️",
+        "You aligned the stars and went to sleep, {{username}}. 🌌",
+        "You had advantage and called it off, {{username}}. ⚽️",
+        "Strong prep, soft exit — upgrade the ending, {{username}}. 🎬",
+        "You arranged the choir and cancelled the song, {{username}}. 🎶",
+        "The key was in hand; door stayed shut, {{username}}. 🔑🚪",
+        "You brewed the tea and forgot to sip, {{username}}. 🍵",
+        "All green lights, parked anyway, {{username}}. 🟢🚗",
+        "You stacked evidence, no verdict, {{username}}. ⚖️",
+        "That was a TED Talk with no Q&A, {{username}}. 🎤",
+        "Process A+, courage pending, {{username}}. 🧪",
+        "Next time: same prep, one brave guess, {{username}}. ✅",
+      ],
+      g1: [
+        "Two-plus hints and still a miss — unlucky, {{username}}. 🍀",
+        "You built the scaffolding; the name slipped, {{username}}. 🏗️",
+        "Plenty of clues, not enough click, {{username}}. 🧩",
+        "The answer ducked late, {{username}}. We’ll trap it. 🪤",
+        "Good framework, thin finish, {{username}}. 📐",
+        "You were one spark short, {{username}}. 🔦",
+        "It should’ve landed — football gods said no, {{username}}. ⚽️",
+        "The pieces argued with each other, {{username}}. Mediator needed. 🧑‍⚖️",
+        "Right study, wrong exam, {{username}}. ✍️",
+        "You carved the statue, missed the face, {{username}}. 🗿",
+        "So close you can taste it. Bitter now, sweet later, {{username}}. 🍬",
+        "You played the notes, {{username}}. Tune missed. 🎼",
+        "The model was sound — output wasn’t, {{username}}. 🤖",
+        "That was a chess squeeze gone stale, {{username}}. ♟️",
+        "We’ll reroute the logic next time, {{username}}. 🔁",
+        "You found five doors, wrong building, {{username}}. 🚪",
+        "It happens to the best — which is you, {{username}}. 😉",
+        "Strong evidence, weak verdict, {{username}}. ⚖️",
+        "You had the vibe deck stacked — top card hid, {{username}}. 🃏",
+        "Good prep, bad bounce, {{username}}. 🏀",
+      ],
+      g2: [
+        "Hints were there — the finish ghosted, {{username}}. 👻",
+        "You zigged where the name zagged, {{username}}. 🌀",
+        "You packed the backpack, forgot the map, {{username}}. 🎒",
+        "Solid grind, sour end, {{username}}. 🍋",
+        "The clues lined up… and then didn’t, {{username}}. 🧲",
+        "You argued with reality and lost, {{username}}. 😅",
+        "Great attempt, wrong latch, {{username}}. 🔒",
+        "Data good, conclusion harsh, {{username}}. 📊",
+        "Respectable craft, cruel result, {{username}}. 🪚",
+        "You herded cats and one escaped, {{username}}. 🐈",
+        "Nearly boxed in — gap appeared, {{username}}. 📦",
+        "Two taps weren’t enough today, {{username}}. ➖",
+        "You deserved better. Football says maybe tomorrow, {{username}}. ⏳",
+        "That was a near-solve — not a fail in spirit, {{username}}. 💚",
+        "You got the chorus wrong verse, {{username}}. 🎶",
+        "We’ll bully it with more structure next time, {{username}}. 🧱",
+        "Not a disaster, just unfinished, {{username}}. 🧩",
+        "Tidy process, messy outcome, {{username}}. 🧼",
+        "The door rattled but stayed shut, {{username}}. 🚪",
+        "Leave it to simmer and return, {{username}}. 🍲",
+      ],
+      g3: [
+        "You did the homework and still got curved, {{username}}. 📚",
+        "Final swing fumbled — happens, {{username}}. 🏈",
+        "You poured in effort, reward dodged, {{username}}. 🫥",
+        "High drama, low mercy. Next time, {{username}}. 🎭",
+        "Process perfect, ending cruel, {{username}}. 🎬",
+        "You held composure; luck didn’t, {{username}}. 🎲",
+        "Built like a cathedral, missed like a sparrow, {{username}}. ⛪️🕊️",
+        "You were masterful till the finish, {{username}}. We move. ➡️",
+        "The last turn betrayed you, {{username}}. 🔄",
+        "You nearly scripted a miracle, {{username}}. 📝",
+        "That was gladiator effort, {{username}}. 🗡️",
+        "Clock conspired; we ignore it tomorrow, {{username}}. ⏰",
+        "You squeezed every clue dry, {{username}}. 🍋",
+        "Heart says win; scoreboard says later, {{username}}. ⌛️",
+        "Endings are rude sometimes, {{username}}. 🙃",
+        "You were inches off, {{username}}. Next inch is ours. 📏",
+        "Big swing, thin contact. Reset, {{username}}. 🔁",
+        "Agony is proof you were close, {{username}}. 💚",
+        "You chased the ghost bravely, {{username}}. 👻",
+        "Captain’s effort; unlucky tide, {{username}}. 🌊",
+      ],
+    },
+    h5: {
+
+      // lose → h5 (all 5 hints) → g0 (gave up before any guess)
+      g0: [
+        "Max hints and no attempt — that’s a Greek tragedy, {{username}}. 🎭",
+        "You toured the museum and missed the gift shop, {{username}}. 🏛️",
+        "Five peeks, zero punch — we want the swing, {{username}}. 🥊",
+        "You collected infinity stones and didn’t snap, {{username}}. 🧤",
+        "That was a full briefing with no mission, {{username}}. 🧳",
+        "All systems go; countdown aborted, {{username}}. 🚀",
+        "You solved the maze and didn’t exit, {{username}}. 🌀",
+        "Five hints, no shot — the puzzle is laughing, {{username}}. 😏",
+        "You wrote the recipe and didn’t cook, {{username}}. 🍳",
+        "That’s deluxe analysis, budget bravery, {{username}}. 💼",
+        "Every light green, no throttle — next time floor it, {{username}}. 🟢🏎️",
+        "You rehearsed the finale and cancelled the show, {{username}}. 🎭",
+        "We cannot VAR a guess that never happened, {{username}}. 📺",
+        "All keys, no door tried, {{username}}. 🔑",
+        "That was a boardroom masterclass with no decision, {{username}}. 👔",
+        "You downloaded the answer pack and didn’t open file, {{username}}. 🗂️",
+        "Five clues beg for one shot, {{username}}. Give them one. 🎯",
+        "You marched to the penalty spot and walked off, {{username}}. 🥅",
+        "Full tank, engine off — start it next time, {{username}}. ⛽️",
+        "Ah, the rare perfect prep, zero attempt. We fix that tomorrow, {{username}}. 🔁",
+      ],
+      g1: [
+        "All hints burned and still slipped — brutal, {{username}}}. 🥶",
+        "You used the whole library; the book hid, {{username}}. 📚",
+        "Max intel, zero mercy — annoying, {{username}}. 😤",
+        "We emptied the toolbox; screw rolled away, {{username}}. 🔩",
+        "You did everything right except win, {{username}}. Happens. 🤝",
+        "That was exhaustive — and exhausting, {{username}}. 🥵",
+        "Even with GPS, the road closed, {{username}}. 🛣️",
+        "You followed the recipe, oven sulked, {{username}}. 🍞",
+        "Five hints, no joy. Next time we storm it, {{username}}. ⚡️",
+        "The map was perfect; the door was hidden, {{username}}. 🗺️",
+        "You interrogated the riddle; it lawyered up, {{username}}. 👨‍⚖️",
+        "Full brief, cruel twist, {{username}}. 🎭",
+        "You did not lose; the answer delayed, {{username}}. ⏳",
+        "All-in and the river bricked, {{username}}. 🃏",
+        "You left nothing behind — respect, {{username}}. 🙇",
+        "The gods of football were petty, {{username}}. ⚽️",
+        "You maxed the hints; luck minimum, {{username}}. 🎲",
+        "Boss effort, bad bounce, {{username}}. 🏀",
+        "We chalk it up and march again, {{username}}. 🥁",
+        "Sturdy spirit, unlucky script, {{username}}. ✍️",
+      ],
+      g2: [
+        "Five hints, still no cigar — foul play by fate, {{username}}. 🚬",
+        "You did the miles; the finish line moved, {{username}}. 🏁",
+        "All cards on table, dealer said no, {{username}}. 🪙",
+        "You chased it with a torch; it hid in daylight, {{username}}. 🌞",
+        "Clinical process, savage ending, {{username}}. 🧊",
+        "You squeezed every drop; barrel was dry, {{username}}. 🍊",
+        "The logic was solid; outcome wasn’t, {{username}}. 🧱",
+        "You threaded the needle then lost the cloth, {{username}}. 🪡",
+        "Max hints, mid luck. Next, {{username}}. 🔁",
+        "You wore the puzzle down; it played dead, {{username}}. 🪦",
+        "Hard to blame you — easy to believe next time, {{username}}. 💚",
+        "You orchestrated; the soloist ghosted, {{username}}. 🎻",
+        "That was professional pain, {{username}}. 😮‍💨",
+        "You deserved a bounce; didn’t get it, {{username}}. 🏀",
+        "Endings can be liars. We rewrite, {{username}}. ✍️",
+        "Five hints, two swings — fate shrugged, {{username}}. 🤷",
+        "Brutal lesson, solid signs, {{username}}. 🧭",
+        "You piloted perfectly; runway got short, {{username}}. ✈️",
+        "Unfair result, fair effort — proud, {{username}}. 🫡",
+        "We reload with the same conviction, {{username}}. 🔄",
+      ],
+      g3: [
+        "Full hints, final swing, still not it — cruel, {{username}}. 🥶",
+        "You marched all the way; gate stayed locked, {{username}}. 🚪",
+        "Everything but the last click, {{username}}. 🔒",
+        "You were exemplary; the end wasn’t, {{username}}. 🧾",
+        "Five hints, long road, empty cup — next time, {{username}}. 🍵",
+        "You carried the weight; luck skipped leg day, {{username}}. 🏋️",
+        "All structure, no payoff — rare, {{username}}. 🧱",
+        "You stared down the puzzle; it smirked, {{username}}. 😑",
+        "That finale hurt — proof you were close, {{username}}. 💔",
+        "We keep the process, change the ending, {{username}}. 🔁",
+        "Captain’s shift, unlucky whistle, {{username}}. 🏴‍☠️",
+        "You couldn’t have tried harder. Respect, {{username}}. 🙇",
+        "Right approach, wrong universe, {{username}}. 🌌",
+        "You reached for the crown; it ducked, {{username}}. 👑",
+        "Tough pill, strong stomach, {{username}}. 💊",
+        "You beat the puzzle on effort; scoreline lied, {{username}}. 📉",
+        "War won in spirit, lost on paper, {{username}}. 📄",
+        "You emptied the tank with pride, {{username}}. ⛽️",
+        "We rally with the same heart, {{username}}. ❤️",
+        "Next time the door opens, {{username}}. 🔓",
+      ],
+    },
+  },
+};
+
+
+// Pick random line from array
+function pickRandom(arr) {
+  if (!Array.isArray(arr) || arr.length === 0) return "";
+  const i = Math.floor(Math.random() * arr.length);
+  return arr[i] || "";
+}
+
+// Determine hint bucket: 0, 1, 2–4, or 5
+function hintBucket(n) {
+  const x = Number(n) || 0;
+  if (x === 0) return "h0";
+  if (x === 1) return "h1";
+  if (x >= 2 && x <= 4) return "h2";
+  return "h5";
+}
+
+// Clamp guesses to 0..3, with a dedicated g0 for “gave up before any guess”
+function guessBucket(n) {
+  const x = Number(n) || 0;
+  if (x <= 0) return "g0";
+  if (x === 1) return "g1";
+  if (x === 2) return "g2";
+  return "g3";
+}
+
+
 function fetchWithTimeout(url, options = {}, ms = AI_FACT_TIMEOUT_MS) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), ms);
@@ -142,18 +819,6 @@ export default function LiveGameMobile() {
     const a = computeAgeFromDate(dob);
     return Number.isFinite(a) && a > 0 ? a : null;
   }, [dobAgeStr]);
-
-  useEffect(() => {
-    console.log('[AGE DEBUG]', {
-      params_player_dob_age: params?.player_dob_age,
-      parsed_dobAge: parsed?.dobAge,
-      fetched_dobAgeStr: dobAgeStr,
-      currentAge,
-      loadingTransfers,
-      disabledUI,
-    });
-  }, [params?.player_dob_age, parsed?.dobAge, dobAgeStr, currentAge, loadingTransfers, disabledUI]);
-
 
   const isDaily = !!parsed.isDaily;
   const filters = parsed.filters || { potentialPoints: 0 };
@@ -360,6 +1025,27 @@ export default function LiveGameMobile() {
     let cancelled = false;
     (async () => {
       try {
+        // 1) Try cached fact from the last 6 months (players_in_seasons)
+        const sixMonthsAgoIso = new Date(Date.now() - 1000 * 60 * 60 * 24 * 30 * 6).toISOString();
+
+        const { data: cached, error: cacheErr } = await supabase
+          .from('players_in_seasons')
+          .select('ai_fact, ai_fact_created_at')
+          .eq('player_id', gameData.id)
+          .not('ai_fact', 'is', null)
+          .gte('ai_fact_created_at', sixMonthsAgoIso)
+          .order('ai_fact_created_at', { ascending: false })
+          .limit(1);
+
+        const cachedFact = (cached?.[0]?.ai_fact || '').trim();
+
+        if (!cancelled && cachedFact) {
+          aiFactRef.current = cachedFact;
+          setAiFact(cachedFact);
+          return; // cached hit — skip API
+        }
+
+        // 2) No fresh cached fact — fall back to existing API call (unchanged)
         const { data: { session } } = await supabase.auth.getSession();
         const resp = await fetchWithTimeout(`${API_BASE}/ai/generate-player-fact`, {
           method: 'POST',
@@ -381,11 +1067,26 @@ export default function LiveGameMobile() {
 
         const j = await resp.json().catch(() => ({}));
         const fact = String(j?.fact || j?.aiGeneratedFact || '').trim();
-        if (!cancelled && fact) { aiFactRef.current = fact; setAiFact(fact); }
-      } catch { }
+        if (!cancelled && fact) {
+          aiFactRef.current = fact;
+          setAiFact(fact);
+
+          // Only persist REAL facts — skip playful fallback banter
+          if (!j?.isFallback) {
+            const { data: rowsUpdated, error: rpcErr } = await supabase.rpc('save_player_ai_fact', {
+              p_player_id: Number(gameData.id),
+              p_fact: fact,
+            });
+
+          } 
+        }
+      } catch {
+        // swallow — no fact shown if both cache and API fail
+      }
     })();
 
     return () => { cancelled = true; };
+
   }, [transferHistory, gameData?.id]);
 
   // Start countdown ONLY after transfers are fully loaded
@@ -406,18 +1107,20 @@ export default function LiveGameMobile() {
             try { scrollRef.current?.scrollTo({ y: 0, animated: true }); } catch { }
             setTimeout(() => setShowEmojiRain(true), 180);
             setTimeout(async () => {
-  const attempts = Math.max(0, 3 - guessesLeft);
-  await saveGameRecord(false, attempts);
-  await writeElimEntryAndAdvance(false, 0);
-  const outroLine = await generateOutro(false, 0, attempts, START_TIME);
-  goPostgame({
-    didWin: false,
-    pointsEarned: 0,
-    elapsed: START_TIME,
-    guessesUsed: attempts,
-    outroLine,
-  });
-}, 1200);
+              const attempts = Math.max(0, 3 - guessesLeft);
+              await saveGameRecord(false, attempts);
+              await writeElimEntryAndAdvance(false, 0);
+              const outroLine = await generateOutro(false, 0, attempts, START_TIME);
+              const renderedOutro = outroLine.replaceAll("{{username}}", displayName);
+              goPostgame({
+                didWin: false,
+                pointsEarned: 0,
+                elapsed: START_TIME,
+                guessesUsed: attempts,
+                outroLine: renderedOutro,
+              });
+
+            }, 1200);
 
           }
         }
@@ -623,17 +1326,18 @@ export default function LiveGameMobile() {
 
       setTimeout(async () => {
         const guessesUsed = Math.min(3, Math.max(0, (3 - guessesLeft) + 1));
-await saveGameRecord(true, guessesUsed);
+        await saveGameRecord(true, guessesUsed);
 
         await writeElimEntryAndAdvance(true, points);
         const elapsed = START_TIME - timeSec;
         const outroLine = await generateOutro(true, points, guessesUsed, elapsed);
+        const renderedOutro = outroLine.replaceAll("{{username}}", displayName);
         goPostgame({
           didWin: true,
           pointsEarned: points,
           elapsed,
           guessesUsed,
-          outroLine,
+          outroLine: renderedOutro,
         });
       }, 1200);
       return;
@@ -657,22 +1361,23 @@ await saveGameRecord(true, guessesUsed);
       setTimeout(() => setShowEmojiRain(true), 180);
 
       setTimeout(async () => {
-  // We just made a wrong guess that ended the game.
-  // Since guessesLeft hasn't been decremented in this branch,
-  // the actual attempts = (3 - guessesLeft) + 1
-  const attempts = Math.min(3, Math.max(0, (3 - guessesLeft) + 1));
-  await saveGameRecord(false, attempts);
-  await writeElimEntryAndAdvance(false, 0);
-  const elapsed = START_TIME - timeSec;
-  const outroLine = await generateOutro(false, 0, attempts, elapsed);
-  goPostgame({
-    didWin: false,
-    pointsEarned: 0,
-    elapsed,
-    guessesUsed: attempts,
-    outroLine,
-  });
-}, 1200);
+        // We just made a wrong guess that ended the game.
+        // Since guessesLeft hasn't been decremented in this branch,
+        // the actual attempts = (3 - guessesLeft) + 1
+        const attempts = Math.min(3, Math.max(0, (3 - guessesLeft) + 1));
+        await saveGameRecord(false, attempts);
+        await writeElimEntryAndAdvance(false, 0);
+        const elapsed = START_TIME - timeSec;
+        const outroLine = await generateOutro(false, 0, attempts, elapsed);
+        const renderedOutro = outroLine.replaceAll("{{username}}", displayName);
+        goPostgame({
+          didWin: false,
+          pointsEarned: 0,
+          elapsed,
+          guessesUsed: attempts,
+          outroLine: renderedOutro,
+        });
+      }, 1200);
 
     } else {
       setGuessesLeft((g) => g - 1);
@@ -696,23 +1401,24 @@ await saveGameRecord(true, guessesUsed);
     setTimeout(() => setShowEmojiRain(true), 180);
 
     setTimeout(async () => {
-  const attempts = Math.max(0, 3 - guessesLeft); // typically 0 on immediate give-up
-  await saveGameRecord(false, attempts);
-  await writeElimEntryAndAdvance(false, 0);
-  const elapsed = START_TIME - timeSec;
-  const outroLine = await generateOutro(false, 0, attempts, elapsed);
-  goPostgame({
-    didWin: false,
-    pointsEarned: 0,
-    elapsed,
-    guessesUsed: attempts,
-    outroLine,
-  });
-}, 1200);
+      const attempts = Math.max(0, 3 - guessesLeft); // typically 0 on immediate give-up
+      await saveGameRecord(false, attempts);
+      await writeElimEntryAndAdvance(false, 0);
+      const elapsed = START_TIME - timeSec;
+      const outroLine = await generateOutro(false, 0, attempts, elapsed);
+      const renderedOutro = outroLine.replaceAll("{{username}}", displayName);
+      goPostgame({
+        didWin: false,
+        pointsEarned: 0,
+        elapsed,
+        guessesUsed: attempts,
+        outroLine: renderedOutro,
+      });
+    }, 1200);
 
   };
 
-const saveGameRecord = async (won, attemptsOverride) => {
+  const saveGameRecord = async (won, attemptsOverride) => {
     try {
       const playerIdNumeric = Number(gameData?.id);
       if (!playerIdNumeric || Number.isNaN(playerIdNumeric)) throw new Error('Missing playerData.id');
@@ -727,20 +1433,20 @@ const saveGameRecord = async (won, attemptsOverride) => {
       };
 
       const attempts =
-    Number.isFinite(attemptsOverride)
-      ? Math.max(0, Math.min(3, attemptsOverride))
-      : Math.max(0, Math.min(3, 3 - guessesLeft + (won ? 1 : 0)));
+        Number.isFinite(attemptsOverride)
+          ? Math.max(0, Math.min(3, attemptsOverride))
+          : Math.max(0, Math.min(3, 3 - guessesLeft + (won ? 1 : 0)));
 
-  const gameStats = {
-    won,
-    points: won ? points : 0,
-    potentialPoints: potentialPointsSource,
-    timeTaken: START_TIME - timeSec,
-    guessesAttempted: attempts,
-    hintsUsed: Object.values(usedHints).filter(Boolean).length,
-    isDaily: !!isDaily,
-    is_elimination_game: !!elimination,
-  };
+      const gameStats = {
+        won,
+        points: won ? points : 0,
+        potentialPoints: potentialPointsSource,
+        timeTaken: START_TIME - timeSec,
+        guessesAttempted: attempts,
+        hintsUsed: Object.values(usedHints).filter(Boolean).length,
+        isDaily: !!isDaily,
+        is_elimination_game: !!elimination,
+      };
 
       if (elimination?.roundId && elimination?.tournamentId) {
         const { data: userInfo } = await supabase.auth.getUser();
@@ -804,31 +1510,17 @@ const saveGameRecord = async (won, attemptsOverride) => {
     }
   };
 
-  const generateOutro = async (won, pts, guessesUsed, elapsedSec) => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const resp = await fetch(`${API_BASE}/ai/game-outro`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-        },
-        body: JSON.stringify({
-          didWin: !!won,
-          points: pts,
-          guesses: guessesUsed,
-          timeSeconds: elapsedSec,
-          playerName: gameData?.name || null,
-          isDaily: !!isDaily,
-          username: displayName,
-        }),
-      });
-      const data = await resp.json();
-      return data?.line || null;
-    } catch {
-      return null;
-    }
+  const generateOutro = (won, pts, guessesUsed, elapsedSec) => {
+    const hintCount = Object.values(usedHints).filter(Boolean).length;
+
+    const hBucket = hintBucket(hintCount);
+    const gBucket = guessBucket(guessesUsed);
+    const mode = won ? "win" : "lose";
+
+    const lines = OUTRO_LINES?.[mode]?.[hBucket]?.[gBucket] ?? [];
+    return pickRandom(lines);
   };
+
 
   const goPostgame = ({ didWin, pointsEarned, elapsed, guessesUsed, outroLine }) => {
     router.replace({

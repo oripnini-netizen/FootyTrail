@@ -41,11 +41,11 @@ import * as FileSystem from 'expo-file-system';
  */
 
 export default function PostgameMobile() {
-    const [fontsLoaded] = useFonts({
-  Tektur_400Regular,
-  Tektur_700Bold,
-  Tektur_800ExtraBold,
-});
+  const [fontsLoaded] = useFonts({
+    Tektur_400Regular,
+    Tektur_700Bold,
+    Tektur_800ExtraBold,
+  });
 
   const router = useRouter();
   const params = useLocalSearchParams();
@@ -167,40 +167,60 @@ export default function PostgameMobile() {
     })();
   }, []);
 
-  // After finishing a game, check if we hit a 7x streak and show a one-time modal
+  // After finishing a game, show a 7×-multiple streak alert ONLY when today qualifies
   useEffect(() => {
     (async () => {
       try {
-        // Only for daily or regular (ignore elimination screens)
-        if (elimination) return;
+        if (elimination) return; // never on elimination screens
 
         const { data: authData } = await supabase.auth.getUser();
         const userId = authData?.user?.id;
         if (!userId) return;
 
-        // Build day map
         const rows = await fetchRecentNonElimRows(userId);
         const dayMap = buildDayMap(rows);
 
-        const kind = isDaily ? "daily" : "regular";
-        const value = isDaily ? computeDailyStreak(dayMap) : computeRegularStreak(dayMap);
+        const todayKey = getUtcDayKey(new Date());
+        const todayRows = dayMap.get(todayKey) || [];
 
-        if (value > 0 && value % 7 === 0 && !didShowStreakRef.current) {
-          didShowStreakRef.current = true;
-          setStreakModal({ visible: true, kind, value });
+        if (isDaily) {
+          // Only consider showing the daily streak if a daily was actually played today
+          const hasDailyToday = todayRows.some(r => r.is_daily_challenge === true);
+          if (!hasDailyToday) return;
+
+          const value = computeDailyStreak(dayMap); // includes today now
+          if (value > 0 && value % 7 === 0 && !didShowStreakRef.current) {
+            didShowStreakRef.current = true;
+            setStreakModal({ visible: true, kind: "daily", value });
+          }
+          return;
         }
 
+        // Regular games: show only when TODAY qualifies (i.e., just completed all regulars today)
+        const dailyWonToday = todayRows.some(r => r.is_daily_challenge === true && r.won === true);
+        const requiredToday = dailyWonToday ? 11 : 10;
+        const regularCountToday = todayRows.filter(r => r.is_daily_challenge !== true).length;
+        const qualifiesToday = regularCountToday >= requiredToday;
+
+        if (!qualifiesToday) return; // prevents re-alerting on the next day before finishing
+
+        const value = computeRegularStreak(dayMap); // will include today because it qualifies
+        if (value > 0 && value % 7 === 0 && !didShowStreakRef.current) {
+          didShowStreakRef.current = true;
+          setStreakModal({ visible: true, kind: "regular", value });
+        }
       } catch {
         // ignore failures – never block postgame
       }
     })();
   }, [elimination, isDaily]);
 
+
   // ---------- Share (capture the card as image) ----------
   const shareText = useMemo(() => {
     const outcome = didWin ? 'succeeded phenomenally' : 'failed miserably';
     const name = player?.name ? ` — ${player.name}` : '';
-    return `Look at the player I just ${outcome} to identify on FootyTrail${name}!\nCome join the fun at https://footy-trail.vercel.app`;
+    return `Look at the player I just ${outcome} to identify on FootyTrail${name}!\nCome join the fun!`;
   }, [didWin, player?.name]);
 
   const cardShotRef = useRef(null);
@@ -363,7 +383,7 @@ export default function PostgameMobile() {
   };
 
   // ---------- UI ----------
-    if (!fontsLoaded) {
+  if (!fontsLoaded) {
     return (
       <SafeAreaView style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' }}>
         <ActivityIndicator />
@@ -413,7 +433,7 @@ export default function PostgameMobile() {
                 <Image source={{ uri: playerPhoto }} style={styles.playerPhoto} />
               ) : (
                 <View style={[styles.playerPhoto, styles.photoFallback]}>
-                  <Text style={{ color: '#9ca3af', fontSize: 28 , fontFamily: 'Tektur_400Regular'}}>👤</Text>
+                  <Text style={{ color: '#9ca3af', fontSize: 28, fontFamily: 'Tektur_400Regular' }}>👤</Text>
                 </View>
               )}
 

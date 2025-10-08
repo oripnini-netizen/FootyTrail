@@ -15,10 +15,21 @@ import {
   StatusBar,
   Pressable,
   Keyboard,
+  ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { supabase } from "../lib/supabase";
+import { getCounts } from "../lib/api";
+
+// ------- utils -------
+function compactMoney(n) {
+  const num = Number(n || 0);
+  if (num >= 1_000_000_000) return `${Math.round(num / 1_000_000_000)}B`;
+  if (num >= 1_000_000) return `${Math.round(num / 1_000_000)}M`;
+  if (num >= 1_000) return `${Math.round(num / 1_000)}K`;
+  return `${num}`;
+}
 
 /**
  * EliminationCreateScreen
@@ -82,6 +93,12 @@ export default function EliminationCreateScreen() {
 
   // Submitting state
   const [submitting, setSubmitting] = useState(false);
+
+  // Player pool counts (only when defaults are OFF)
+const [poolCount, setPoolCount] = useState(0);
+const [totalCount, setTotalCount] = useState(0);
+const [loadingCounts, setLoadingCounts] = useState(false);
+const [countsError, setCountsError] = useState("");
 
   // --- Load user + avatar and DB defaults, competitions & seasons (like game.js) ---
   useEffect(() => {
@@ -589,6 +606,53 @@ const p_join_window_minutes = Math.floor(join_deadline_minutes_raw);
     }
   };
 
+// Recompute Player Pool counts when advanced filters change (only when defaults are OFF)
+useEffect(() => {
+  if (useDefaultFilters || !userId) return;
+
+  let cancelled = false;
+  (async () => {
+    try {
+      setLoadingCounts(true);
+      setCountsError("");
+
+      const payload = {
+        competitions: selectedCompetitionIds,
+        seasons: selectedSeasons,
+        minMarketValue: Number(minMarketValue) || 0,
+        minAppearances: Number(minAppearances) || 0,
+        userId,
+      };
+
+      const res = await getCounts(payload);
+      if (!cancelled) {
+        setPoolCount(res?.poolCount || 0);
+        setTotalCount(res?.totalCount || 0);
+      }
+    } catch (e) {
+      if (!cancelled) {
+        setPoolCount(0);
+        setTotalCount(0);
+        setCountsError(String(e?.message || e));
+      }
+    } finally {
+      if (!cancelled) setLoadingCounts(false);
+    }
+  })();
+
+  return () => {
+    cancelled = true;
+  };
+}, [
+  useDefaultFilters,
+  userId,
+  selectedCompetitionIds,
+  selectedSeasons,
+  minMarketValue,
+  minAppearances,
+]);
+
+
   return (
     <View style={{ flex: 1, backgroundColor: "#fff" }}>
       <SafeAreaView style={{ backgroundColor: "#ffffff" }}>
@@ -737,107 +801,218 @@ const p_join_window_minutes = Math.floor(join_deadline_minutes_raw);
         </View>
 
         {/* Advanced filters (shown only when defaults OFF) */}
-        {!useDefaultFilters && (
-          <View style={styles.advancedBox}>
-            <Text style={styles.sectionTitle}>Filters</Text>
+{!useDefaultFilters && (
+  <View style={{ marginTop: 8 }}>
+    {/* COMPETITIONS (card) */}
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>Competitions</Text>
 
-            {/* Competitions */}
-            <View style={styles.subCard}>
-              <Text style={styles.subTitle}>Competitions</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Search competitions…"
-                value={compQuery}
-                onChangeText={setCompQuery}
-              />
-              <View style={styles.rowWrap}>
-                <Chip onPress={selectTop10} selected={selectedCompetitionIds.length && arraysEqualAsSets(selectedCompetitionIds, top10Ids)}>
-                  Top 10 by value
-                </Chip>
-                <Chip onPress={selectAllComps} selected={allCompetitions.length && selectedCompetitionIds.length === allCompetitions.length}>
-                  Select all
-                </Chip>
-                <Chip onPress={clearComps} selected={selectedCompetitionIds.length === 0}>
-                  Clear
-                </Chip>
-              </View>
-              <View style={{ marginTop: 8 }}>
-                {compsOrderedForDropdown.slice(0, 16).map((c) => {
-                  const selected = selectedCompetitionIds.includes(
-                    String(c.competition_id)
-                  );
-                  return (
-                    <CompetitionRow
-                      key={c.competition_id}
-                      comp={c}
-                      selected={selected}
-                      onToggle={toggleCompetition}
-                    />
-                  );
-                })}
-              </View>
-            </View>
+      <View style={styles.rowWrap}>
+        <Chip onPress={selectTop10} selected={isTop10Selected}>
+          Top 10
+        </Chip>
+        <Chip onPress={clearComps} variant="outline" selected={isClearComps}>
+          Clear All
+        </Chip>
+      </View>
 
-            {/* Seasons */}
-            <View style={styles.subCard}>
-              <Text style={styles.subTitle}>Seasons</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Filter seasons…"
-                value={seasonQuery}
-                onChangeText={setSeasonQuery}
-              />
-              <View style={styles.rowWrap}>
-                <Chip onPress={() => setSelectedSeasons(allSeasons.slice(0, 3))} selected={allSeasons.length >= 3 && selectedSeasons.length === 3 && arraysEqualAsSets(selectedSeasons, allSeasons.slice(0,3))}>
-                  Last 3
-                </Chip>
-                <Chip onPress={() => setSelectedSeasons(allSeasons.slice(0, 5))} selected={allSeasons.length >= 5 && selectedSeasons.length === 5 && arraysEqualAsSets(selectedSeasons, allSeasons.slice(0,5))}>
-                  Last 5
-                </Chip>
-                <Chip onPress={() => setSelectedSeasons(allSeasons)} selected={allSeasons.length > 0 && selectedSeasons.length === allSeasons.length}>
-                  Select all
-                </Chip>
-                <Chip onPress={() => setSelectedSeasons([])} selected={selectedSeasons.length === 0}>
-                  Clear
-                </Chip>
-              </View>
+      <Pressable onPress={() => setCompOpen((v) => !v)} style={styles.selectHeader}>
+        <Ionicons name="flag-outline" size={18} color="#0b3d24" />
+        <Text style={styles.selectHeaderText}>
+          {selectedCompetitionIds.length ? `${selectedCompetitionIds.length} selected` : "Select competitions"}
+        </Text>
+        <Ionicons name={compOpen ? "chevron-up" : "chevron-down"} size={18} color="#111827" />
+      </Pressable>
 
-              <View style={{ marginTop: 8, flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                {seasonsOrderedForDropdown.slice(0, 24).map((s) => {
-                  const selected = selectedSeasons.includes(s);
-                  return (
-                    <Chip key={s} selected={selected} onPress={() => toggleSeason(s)}>
-                      {s}
-                    </Chip>
-                  );
-                })}
-              </View>
-            </View>
-
-            {/* Numeric limits */}
-            <View style={styles.subCard}>
-              <Text style={styles.subTitle}>Minimums</Text>
-              <View style={[styles.row, { justifyContent: "flex-start" }]}>
-                <Text style={[styles.label, { width: 140 }]}>Market value (€)</Text>
-                <TextInput
-                  style={styles.inputSmall}
-                  keyboardType="numeric"
-                  value={String(minMarketValue || 0)}
-                  onChangeText={(t) => setMinMarketValue(Number(t) || 0)}
-                />
-              </View>
-              <View style={[styles.row, { justifyContent: "flex-start" }]}>
-                <Text style={[styles.label, { width: 140 }]}>Appearances</Text>
-                <TextInput
-                  style={styles.inputSmall}
-                  keyboardType="numeric"
-                  value={String(minAppearances || 0)}
-                  onChangeText={(t) => setMinAppearances(Number(t) || 0)}
-                />
-              </View>
-            </View>
+      {compOpen && (
+        <View style={styles.dropdown}>
+          {/* search */}
+          <View style={styles.searchRow}>
+            <Ionicons name="search" size={16} color="#6b7280" style={{ marginRight: 6 }} />
+            <TextInput
+              placeholder="Search by competition or country"
+              value={compQuery}
+              onChangeText={setCompQuery}
+              style={styles.searchInput}
+              autoCorrect={false}
+              autoCapitalize="none"
+            />
+            {compQuery.length > 0 && (
+              <Pressable onPress={() => setCompQuery("")}>
+                <Ionicons name="close-circle" size={18} color="#9ca3af" />
+              </Pressable>
+            )}
           </View>
+
+          <View style={{ maxHeight: 360 }}>
+            <ScrollView>
+              {compsOrderedForDropdown.map((c) => {
+                const id = String(c.competition_id);
+                const selected = selectedCompetitionIds.includes(id);
+                return (
+                  <CompetitionRow
+                    key={id}
+                    comp={c}
+                    selected={selected}
+                    onToggle={toggleCompetition}
+                  />
+                );
+              })}
+              {compsOrderedForDropdown.length === 0 && (
+                <Text style={styles.muted}>No matches.</Text>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      )}
+    </View>
+
+    {/* SEASONS (card) */}
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>Seasons</Text>
+
+      <View style={styles.rowWrap}>
+        <Chip
+          onPress={() => setSelectedSeasons(allSeasons.slice(0, 3))}
+          selected={isLast3Seasons}
+        >
+          Last 3
+        </Chip>
+        <Chip
+          onPress={() => setSelectedSeasons(allSeasons.slice(0, 5))}
+          selected={isLast5Seasons}
+        >
+          Last 5
+        </Chip>
+        <Chip
+          onPress={() => setSelectedSeasons([])}
+          variant="outline"
+          selected={isClearSeasons}
+        >
+          Clear All
+        </Chip>
+      </View>
+
+      <Pressable onPress={() => setSeasonsOpen((v) => !v)} style={styles.selectHeader}>
+        <Ionicons name="calendar-outline" size={18} color="#0b3d24" />
+        <Text style={styles.selectHeaderText}>
+          {selectedSeasons.length ? `${selectedSeasons.length} selected` : "Select seasons"}
+        </Text>
+        <Ionicons name={seasonsOpen ? "chevron-up" : "chevron-down"} size={18} color="#111827" />
+      </Pressable>
+
+      {seasonsOpen && (
+        <View style={styles.dropdown}>
+          <View style={styles.searchRow}>
+            <Ionicons name="search" size={16} color="#6b7280" style={{ marginRight: 6 }} />
+            <TextInput
+              placeholder="Search season (e.g., 2021)"
+              value={seasonQuery}
+              onChangeText={setSeasonQuery}
+              style={styles.searchInput}
+              autoCorrect={false}
+              autoCapitalize="none"
+            />
+            {seasonQuery.length > 0 && (
+              <Pressable onPress={() => setSeasonQuery("")}>
+                <Ionicons name="close-circle" size={18} color="#9ca3af" />
+              </Pressable>
+            )}
+          </View>
+
+          <View style={{ maxHeight: 280 }}>
+            <ScrollView>
+              {seasonsOrderedForDropdown.map((s) => {
+                const selected = selectedSeasons.includes(s);
+                return (
+                  <Pressable
+                    key={s}
+                    style={styles.optionRow}
+                    onPress={() => toggleSeason(s)}
+                  >
+                    <Text style={{ color: "#111827" }}>{s}</Text>
+                    <Ionicons
+                      name={selected ? "checkbox" : "square-outline"}
+                      size={18}
+                      color={selected ? "#14532d" : "#9ca3af"}
+                    />
+                  </Pressable>
+                );
+              })}
+              {seasonsOrderedForDropdown.length === 0 && (
+                <Text style={styles.muted}>No seasons.</Text>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      )}
+    </View>
+
+    {/* MARKET VALUE (card) */}
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>Minimum Market Value (€)</Text>
+      <TextInput
+        keyboardType="number-pad"
+        value={String(minMarketValue ?? 0)}
+        onChangeText={(t) => setMinMarketValue(parseInt(t || "0", 10) || 0)}
+        style={styles.input}
+      />
+      <View style={styles.rowWrap}>
+        {[0, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000].map(
+          (v) => (
+            <Chip
+              key={v}
+              selected={Number(minMarketValue) === v}
+              onPress={() => setMinMarketValue(v)}
+            >
+              {compactMoney(v)}
+            </Chip>
+          )
         )}
+      </View>
+    </View>
+
+    {/* APPEARANCES (card) */}
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>Minimum Appearances</Text>
+      <TextInput
+        keyboardType="number-pad"
+        value={String(minAppearances ?? 0)}
+        onChangeText={(t) => setMinAppearances(parseInt(t || "0", 10) || 0)}
+        style={styles.input}
+      />
+      <View style={styles.rowWrap}>
+        {[0, 5, 10, 15, 20, 25, 30, 50, 100, 150, 200].map((v) => (
+          <Chip
+            key={v}
+            selected={Number(minAppearances) === v}
+            onPress={() => setMinAppearances(v)}
+          >
+            {v}
+          </Chip>
+        ))}
+      </View>
+    </View>
+
+    {/* PLAYER POOL (card) */}
+    <View style={styles.poolCard}>
+      <Text style={styles.poolLabel}>Player Pool:</Text>
+      {loadingCounts ? (
+        <ActivityIndicator size="small" />
+      ) : (
+        <Text style={styles.poolValue}>
+          {poolCount} / {totalCount}
+        </Text>
+      )}
+    </View>
+    {!!countsError && (
+      <Text style={{ color: "#b91c1c", marginTop: -8, marginBottom: 8, fontSize: 12 }}>
+        {countsError}
+      </Text>
+    )}
+  </View>
+)}
+
 
         {/* Stake / Min participants / Round time / Elimination cadence */}
         <View style={[styles.subCard, { marginTop: 8 }]}>
@@ -1019,4 +1194,94 @@ const styles = StyleSheet.create({
 
   addBtn: { marginLeft: 8, backgroundColor: "#14532d", paddingVertical: 10, paddingHorizontal: 14, borderRadius: 8 }, // ensures styles exist
   addBtnText: { color: "#fff", fontWeight: "700" },
+
+    // --- parity with default-filters.js ---
+  screen: { flex: 1, padding: 12, backgroundColor: "#f7faf7" },
+
+  card: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#e5e7eb",
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#0b3d24",
+    marginBottom: 8,
+    fontFamily: "Tektur_700Bold",
+  },
+
+  selectHeader: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: "#d1d5db",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#fff",
+  },
+  selectHeaderText: {
+    flex: 1,
+    color: "#111827",
+    fontWeight: "600",
+    fontFamily: "Tektur_700Bold",
+  },
+  dropdown: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    borderRadius: 10,
+    backgroundColor: "#fff",
+    padding: 8,
+  },
+  searchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 8,
+    backgroundColor: "#fafafa",
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: "#111827",
+    paddingVertical: 4,
+    fontFamily: "Tektur_400Regular",
+  },
+  optionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#f1f5f9",
+    justifyContent: "space-between",
+  },
+  muted: { color: "#6b7280", marginTop: 8, fontFamily: "Tektur_400Regular" },
+
+  poolCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#fef9c3",
+    borderColor: "#fde68a",
+    borderWidth: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    marginBottom: 12,
+  },
+  poolLabel: { fontSize: 14, color: "#92400e", fontWeight: "600", fontFamily: "Tektur_700Bold" },
+  poolValue: { fontSize: 14, color: "#92400e", fontWeight: "800", fontFamily: "Tektur_700Bold" },
+
 });
