@@ -1157,249 +1157,251 @@ export default function GameScreen() {
         )}
 
         {/* ====== Collapsible Filters Wrapper ====== */}
-        <View style={styles.card}>
-          <Pressable
-            onPress={() => setFiltersOpen((v) => !v)}
-            style={styles.filtersHeader}
-          >
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <Ionicons name="filter" size={18} color="#0b3d24" />
-              <Text style={styles.filtersTitle}>Adjust Difficulty Filters</Text>
-            </View>
-            <Ionicons
-              name={filtersOpen ? "chevron-up" : "chevron-down"}
-              size={18}
-              color={"#111827"}
-            />
-          </Pressable>
+        {!reachedLimit && (
+          <View style={styles.card}>
+            <Pressable
+              onPress={() => setFiltersOpen((v) => !v)}
+              style={styles.filtersHeader}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <Ionicons name="filter" size={18} color="#0b3d24" />
+                <Text style={styles.filtersTitle}>Adjust Difficulty Filters</Text>
+              </View>
+              <Ionicons
+                name={filtersOpen ? "chevron-up" : "chevron-down"}
+                size={18}
+                color={"#111827"}
+              />
+            </Pressable>
 
-          {filtersOpen && (
-            <View style={{ marginTop: 10 }}>
-              {/* ---- Defaults pill row ---- */}
-              <View style={[styles.subCard, { paddingVertical: 12 }]}>
-                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                  <Chip
-                    onPress={applyDefaultFilters}
-                    selected={atDBDefaults}
-                    style={atDBDefaults ? null : { backgroundColor: "#fff" }}
+            {filtersOpen && (
+              <View style={{ marginTop: 10 }}>
+                {/* ---- Defaults pill row ---- */}
+                <View style={[styles.subCard, { paddingVertical: 12 }]}>
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                    <Chip
+                      onPress={applyDefaultFilters}
+                      selected={atDBDefaults}
+                      style={atDBDefaults ? null : { backgroundColor: "#fff" }}
+                    >
+                      Apply Default Filters
+                    </Chip>
+                  </View>
+                </View>
+
+                {/* COMPETITIONS */}
+                <View style={[styles.subCard]}>
+                  <Text style={styles.cardTitle}>Competitions</Text>
+
+                  <View style={styles.rowWrap}>
+                    <Chip onPress={selectTop10} selected={isTop10Selected}>
+                      Top 10
+                    </Chip>
+                    <Chip onPress={clearComps} variant="outline" selected={isClearComps}>
+                      Clear All
+                    </Chip>
+                  </View>
+
+                  <Pressable
+                    onPress={() => setCompOpen((v) => !v)}
+                    style={styles.selectHeader}
                   >
-                    Apply Default Filters
-                  </Chip>
-                </View>
-              </View>
+                    <Ionicons name="flag-outline" size={18} color="#0b3d24" />
+                    <Text style={styles.selectHeaderText}>
+                      {selectedCompetitionIds.length
+                        ? `${selectedCompetitionIds.length} selected`
+                        : "Select competitions"}
+                    </Text>
+                    <Ionicons
+                      name={compOpen ? "chevron-up" : "chevron-down"}
+                      size={18}
+                      color={"#111827"}
+                    />
+                  </Pressable>
 
-              {/* COMPETITIONS */}
-              <View style={[styles.subCard]}>
-                <Text style={styles.cardTitle}>Competitions</Text>
-
-                <View style={styles.rowWrap}>
-                  <Chip onPress={selectTop10} selected={isTop10Selected}>
-                    Top 10
-                  </Chip>
-                  <Chip onPress={clearComps} variant="outline" selected={isClearComps}>
-                    Clear All
-                  </Chip>
-                </View>
-
-                <Pressable
-                  onPress={() => setCompOpen((v) => !v)}
-                  style={styles.selectHeader}
-                >
-                  <Ionicons name="flag-outline" size={18} color="#0b3d24" />
-                  <Text style={styles.selectHeaderText}>
-                    {selectedCompetitionIds.length
-                      ? `${selectedCompetitionIds.length} selected`
-                      : "Select competitions"}
-                  </Text>
-                  <Ionicons
-                    name={compOpen ? "chevron-up" : "chevron-down"}
-                    size={18}
-                    color={"#111827"}
-                  />
-                </Pressable>
-
-                {compOpen && (
-                  <View style={styles.dropdown}>
-                    {/* search */}
-                    <View style={styles.searchRow}>
-                      <Ionicons
-                        name="search"
-                        size={16}
-                        color="#6b7280"
-                        style={{ marginRight: 6 }}
-                      />
-                      <TextInput
-                        placeholder="Search by competition or country"
-                        value={compQuery}
-                        onChangeText={setCompQuery}
-                        style={styles.searchInput}
-                        autoCorrect={false}
-                        autoCapitalize="none"
-                      />
-                      {compQuery.length > 0 && (
-                        <Pressable onPress={() => setCompQuery("")}>
-                          <Ionicons name="close-circle" size={18} color="#9ca3af" />
-                        </Pressable>
-                      )}
-                    </View>
-
-                    <View style={{ maxHeight: 360 }}>
-                      <ScrollView>
-                        {compsOrderedForDropdown.map((c) => {
-                          const id = String(c.competition_id);
-                          const selected = selectedCompetitionIds.includes(id);
-                          return (
-                            <CompetitionRow
-                              key={id}
-                              comp={c}
-                              selected={selected}
-                              onToggle={toggleCompetition}
-                            />
-                          );
-                        })}
-                        {compsOrderedForDropdown.length === 0 && (
-                          <Text style={styles.muted}>No matches.</Text>
+                  {compOpen && (
+                    <View style={styles.dropdown}>
+                      {/* search */}
+                      <View style={styles.searchRow}>
+                        <Ionicons
+                          name="search"
+                          size={16}
+                          color="#6b7280"
+                          style={{ marginRight: 6 }}
+                        />
+                        <TextInput
+                          placeholder="Search by competition or country"
+                          value={compQuery}
+                          onChangeText={setCompQuery}
+                          style={styles.searchInput}
+                          autoCorrect={false}
+                          autoCapitalize="none"
+                        />
+                        {compQuery.length > 0 && (
+                          <Pressable onPress={() => setCompQuery("")}>
+                            <Ionicons name="close-circle" size={18} color="#9ca3af" />
+                          </Pressable>
                         )}
-                      </ScrollView>
-                    </View>
-                  </View>
-                )}
-              </View>
+                      </View>
 
-              {/* SEASONS (multi-select) */}
-              <View style={styles.subCard}>
-                <Text style={styles.cardTitle}>Seasons</Text>
-
-                <View style={styles.rowWrap}>
-                  <Chip onPress={selectLast3} selected={isLast3Seasons}>
-                    Last 3
-                  </Chip>
-                  <Chip onPress={selectLast5} selected={isLast5Seasons}>
-                    Last 5
-                  </Chip>
-                  <Chip onPress={clearSeasons} variant="outline" selected={isClearSeasons}>
-                    Clear All
-                  </Chip>
-                </View>
-
-                <Pressable
-                  onPress={() => setSeasonsOpen((v) => !v)}
-                  style={styles.selectHeader}
-                >
-                  <Ionicons name="calendar-outline" size={18} color="#0b3d24" />
-                  <Text style={styles.selectHeaderText}>
-                    {selectedSeasons.length
-                      ? `${selectedSeasons.length} selected`
-                      : "Select seasons"}
-                  </Text>
-                  <Ionicons
-                    name={seasonsOpen ? "chevron-up" : "chevron-down"}
-                    size={18}
-                    color={"#111827"}
-                  />
-                </Pressable>
-
-                {seasonsOpen && (
-                  <View style={styles.dropdown}>
-                    <View style={styles.searchRow}>
-                      <Ionicons
-                        name="search"
-                        size={16}
-                        color="#6b7280"
-                        style={{ marginRight: 6 }}
-                      />
-                      <TextInput
-                        placeholder="Search season (e.g. 2024)"
-                        value={seasonQuery}
-                        onChangeText={setSeasonQuery}
-                        style={styles.searchInput}
-                        autoCorrect={false}
-                        autoCapitalize="none"
-                        keyboardType="numeric"
-                      />
-                      {seasonQuery.length > 0 && (
-                        <Pressable onPress={() => setSeasonQuery("")}>
-                          <Ionicons name="close-circle" size={18} color="#9ca3af" />
-                        </Pressable>
-                      )}
-                    </View>
-
-                    <View style={{ maxHeight: 280 }}>
-                      <ScrollView>
-                        {seasonsOrderedForDropdown.map((s) => {
-                          const selected = selectedSeasons.includes(s);
-                          return (
-                            <Pressable
-                              key={s}
-                              style={styles.optionRow}
-                              onPress={() => toggleSeason(s)}
-                            >
-                              <Text style={{ color: "#111827", fontFamily: "Tektur_400Regular" }}>{s}</Text>
-                              <Ionicons
-                                name={selected ? "checkbox" : "square-outline"}
-                                size={18}
-                                color={selected ? "#14532d" : "#9ca3af"}
+                      <View style={{ maxHeight: 360 }}>
+                        <ScrollView>
+                          {compsOrderedForDropdown.map((c) => {
+                            const id = String(c.competition_id);
+                            const selected = selectedCompetitionIds.includes(id);
+                            return (
+                              <CompetitionRow
+                                key={id}
+                                comp={c}
+                                selected={selected}
+                                onToggle={toggleCompetition}
                               />
-                            </Pressable>
-                          );
-                        })}
-                        {seasonsOrderedForDropdown.length === 0 && (
-                          <Text style={styles.muted}>No seasons.</Text>
-                        )}
-                      </ScrollView>
+                            );
+                          })}
+                          {compsOrderedForDropdown.length === 0 && (
+                            <Text style={styles.muted}>No matches.</Text>
+                          )}
+                        </ScrollView>
+                      </View>
                     </View>
-                  </View>
-                )}
-              </View>
-
-              {/* MARKET VALUE */}
-              <View style={styles.subCard}>
-                <Text style={styles.cardTitle}>Minimum Market Value (€)</Text>
-                <TextInput
-                  keyboardType="number-pad"
-                  value={String(minMarketValue ?? 0)}
-                  onChangeText={(t) => setMinMarketValue(parseInt(t || "0", 10) || 0)}
-                  style={styles.input}
-                />
-                <View style={styles.rowWrap}>
-                  {[0, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000].map(
-                    (v) => (
-                      <Chip
-                        key={v}
-                        selected={Number(minMarketValue) === v}
-                        onPress={() => setMinMarketValue(v)}
-                      >
-                        {compactMoney(v)}
-                      </Chip>
-                    )
                   )}
                 </View>
-              </View>
 
-              {/* APPEARANCES */}
-              <View style={styles.subCard}>
-                <Text style={styles.cardTitle}>Minimum Appearances</Text>
-                <TextInput
-                  keyboardType="number-pad"
-                  value={String(minAppearances ?? 0)}
-                  onChangeText={(t) => setMinAppearances(parseInt(t || "0", 10) || 0)}
-                  style={styles.input}
-                />
-                <View style={styles.rowWrap}>
-                  {[0, 5, 10, 15, 20, 25, 30, 50, 100, 150, 200].map((v) => (
-                    <Chip
-                      key={v}
-                      selected={Number(minAppearances) === v}
-                      onPress={() => setMinAppearances(v)}
-                    >
-                      {v}
+                {/* SEASONS (multi-select) */}
+                <View style={styles.subCard}>
+                  <Text style={styles.cardTitle}>Seasons</Text>
+
+                  <View style={styles.rowWrap}>
+                    <Chip onPress={selectLast3} selected={isLast3Seasons}>
+                      Last 3
                     </Chip>
-                  ))}
+                    <Chip onPress={selectLast5} selected={isLast5Seasons}>
+                      Last 5
+                    </Chip>
+                    <Chip onPress={clearSeasons} variant="outline" selected={isClearSeasons}>
+                      Clear All
+                    </Chip>
+                  </View>
+
+                  <Pressable
+                    onPress={() => setSeasonsOpen((v) => !v)}
+                    style={styles.selectHeader}
+                  >
+                    <Ionicons name="calendar-outline" size={18} color="#0b3d24" />
+                    <Text style={styles.selectHeaderText}>
+                      {selectedSeasons.length
+                        ? `${selectedSeasons.length} selected`
+                        : "Select seasons"}
+                    </Text>
+                    <Ionicons
+                      name={seasonsOpen ? "chevron-up" : "chevron-down"}
+                      size={18}
+                      color={"#111827"}
+                    />
+                  </Pressable>
+
+                  {seasonsOpen && (
+                    <View style={styles.dropdown}>
+                      <View style={styles.searchRow}>
+                        <Ionicons
+                          name="search"
+                          size={16}
+                          color="#6b7280"
+                          style={{ marginRight: 6 }}
+                        />
+                        <TextInput
+                          placeholder="Search season (e.g. 2024)"
+                          value={seasonQuery}
+                          onChangeText={setSeasonQuery}
+                          style={styles.searchInput}
+                          autoCorrect={false}
+                          autoCapitalize="none"
+                          keyboardType="numeric"
+                        />
+                        {seasonQuery.length > 0 && (
+                          <Pressable onPress={() => setSeasonQuery("")}>
+                            <Ionicons name="close-circle" size={18} color="#9ca3af" />
+                          </Pressable>
+                        )}
+                      </View>
+
+                      <View style={{ maxHeight: 280 }}>
+                        <ScrollView>
+                          {seasonsOrderedForDropdown.map((s) => {
+                            const selected = selectedSeasons.includes(s);
+                            return (
+                              <Pressable
+                                key={s}
+                                style={styles.optionRow}
+                                onPress={() => toggleSeason(s)}
+                              >
+                                <Text style={{ color: "#111827", fontFamily: "Tektur_400Regular" }}>{s}</Text>
+                                <Ionicons
+                                  name={selected ? "checkbox" : "square-outline"}
+                                  size={18}
+                                  color={selected ? "#14532d" : "#9ca3af"}
+                                />
+                              </Pressable>
+                            );
+                          })}
+                          {seasonsOrderedForDropdown.length === 0 && (
+                            <Text style={styles.muted}>No seasons.</Text>
+                          )}
+                        </ScrollView>
+                      </View>
+                    </View>
+                  )}
+                </View>
+
+                {/* MARKET VALUE */}
+                <View style={styles.subCard}>
+                  <Text style={styles.cardTitle}>Minimum Market Value (€)</Text>
+                  <TextInput
+                    keyboardType="number-pad"
+                    value={String(minMarketValue ?? 0)}
+                    onChangeText={(t) => setMinMarketValue(parseInt(t || "0", 10) || 0)}
+                    style={styles.input}
+                  />
+                  <View style={styles.rowWrap}>
+                    {[0, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000].map(
+                      (v) => (
+                        <Chip
+                          key={v}
+                          selected={Number(minMarketValue) === v}
+                          onPress={() => setMinMarketValue(v)}
+                        >
+                          {compactMoney(v)}
+                        </Chip>
+                      )
+                    )}
+                  </View>
+                </View>
+
+                {/* APPEARANCES */}
+                <View style={styles.subCard}>
+                  <Text style={styles.cardTitle}>Minimum Appearances</Text>
+                  <TextInput
+                    keyboardType="number-pad"
+                    value={String(minAppearances ?? 0)}
+                    onChangeText={(t) => setMinAppearances(parseInt(t || "0", 10) || 0)}
+                    style={styles.input}
+                  />
+                  <View style={styles.rowWrap}>
+                    {[0, 5, 10, 15, 20, 25, 30, 50, 100, 150, 200].map((v) => (
+                      <Chip
+                        key={v}
+                        selected={Number(minAppearances) === v}
+                        onPress={() => setMinAppearances(v)}
+                      >
+                        {v}
+                      </Chip>
+                    ))}
+                  </View>
                 </View>
               </View>
-            </View>
-          )}
-        </View>
+            )}
+          </View>
+        )}
       </View>
       {/* Spacer */}
       <View style={{ height: 24 }} />

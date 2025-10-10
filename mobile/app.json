@@ -6,13 +6,12 @@
     "orientation": "portrait",
     "icon": "./assets/images/footytrail_icon.png",
     "splash": {
-      "image": "./assets/images/footytrail_splash-icon.png",
+      "image": "./assets/images/footytrail_splash_icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
     "notification": {
       "iosDisplayInForeground": true,
-      "sound": true
     },
     "ios": {
       "supportsTablet": true,
@@ -27,15 +26,11 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "foregroundImage": "./assets/images/footytrail_icon.png",
         "backgroundColor": "#ffffff"
       },
       "package": "co.footytrail.app",
-      "notification": {
-        "sound": true,
-        "color": "#ffffff",
-        "channelId": "default"
-      }
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "bundler": "metro"
@@ -53,7 +48,9 @@
         "expo-notifications",
         {
           "sounds": [
-            "./assets/sounds/who_are_ya.wav"
+            "./assets/sounds/who_are_ya.wav",
+            "./assets/sounds/bells.wav",
+            "./assets/sounds/final_whistle.wav"
           ],
           "color": "#ffffff"
         }

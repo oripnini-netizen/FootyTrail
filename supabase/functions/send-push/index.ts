@@ -6,6 +6,20 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 const EXPO_ENDPOINT = "https://exp.host/--/api/v2/push/send";
 const BATCH_LIMIT = 100;
 const MAX_ATTEMPTS = 5;
+
+// Map each notification kind to a bundled sound filename (no path).
+// Edit freely as you add more sounds under mobile/assets/sounds/.
+const SOUND_MAP: Record<string, string> = {
+  daily_games_progress: "bells.wav",
+  daily_challenge_reminder: "bells.wav",
+  tournament_new_accept: "bells.wav",
+  round_started: "bells.wav",
+  public_elim_created: "bells.wav",
+  private_elim_invited: "bells.wav",
+  // fallback:
+  default: "who_are_ya.wav",
+};
+
 function getAdminClient() {
   const url = Deno.env.get("SUPABASE_URL");
   const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -50,33 +64,50 @@ async function loadDevices(supabase, userId) {
   }
   return out;
 }
+
 function buildExpoMessages(job, devices) {
   const title = String(job.payload?.title ?? "FootyTrail");
   const body = String(job.payload?.body ?? "Open challenge");
-  // Use payload.navigateTo if present, otherwise set a simple default
+
+  // Where to navigate on tap (keeps your current behavior)
   const navigateTo = job.payload?.navigateTo || "/elimination";
-  // IMPORTANT: top-level sound, not boolean, not inside data
-  // Fall back to your custom file if caller didn't set one
-  const soundName = typeof job?.payload?.sound === "string" && job.payload.sound.trim().length > 0 ? job.payload.sound : "who_are_ya.wav";
-  // Preserve all original payload fields in data, but DO NOT put `sound` there
+
+  // 1) Decide the "type" for sound mapping
+  //    Prefer job.kind, fallback to payload.type, finally "default".
+  const type = String(job?.kind ?? job?.payload?.type ?? "default").trim() || "default";
+
+  // 2) If the job explicitly includes payload.sound (string), it overrides the map.
+  //    Otherwise, map by type. Finally, fall back to SOUND_MAP.default.
+  const rawSound =
+    (typeof job?.payload?.sound === "string" && job.payload.sound.trim()) ||
+    SOUND_MAP[type] ||
+    SOUND_MAP.default;
+
+  // 3) Expo expects the bundled filename (registered in app.json). No paths.
+  //    If someone passed "whistle" without extension, normalize to ".wav".
+  const sound = /\./.test(rawSound) ? rawSound : `${rawSound}.wav`;
+
+  // Keep payload in `data`
   const data = {
-    ...job.payload ?? {},
+    ...(job.payload ?? {}),
     navigateTo,
     jobId: job.id,
     kind: job.kind,
-    tournamentId: job.tournament_id
+    tournamentId: job.tournament_id,
   };
-  delete data.sound; // ensure sound is only top-level
-  return devices.map((d)=>({
-      to: d.push_token,
-      title,
-      body,
-      sound: soundName,
-      channelId: "default",
-      priority: "high",
-      data
-    }));
+
+  return devices.map((d) => ({
+    to: d.push_token,
+    title,
+    body,
+    sound,            // 👈 per-type / per-payload sound
+    channelId: "default",
+    priority: "high",
+    data,
+  }));
 }
+
+
 async function sendExpo(messages) {
   if (!messages.length) {
     return {
@@ -87,22 +118,46 @@ async function sendExpo(messages) {
   const res = await fetch(EXPO_ENDPOINT, {
     method: "POST",
     headers: {
-      "content-type": "application/json"
+      "content-type": "application/json",
+      "accept": "application/json"
     },
     body: JSON.stringify(messages)
   });
-  let json = {};
+  const text = await res.text();
+  let parsed = null;
   try {
-    json = await res.json();
+    parsed = JSON.parse(text);
   } catch  {
-  // ignore parse errors; treat as failure
+  // keep text as-is for diagnostics
   }
-  const tickets = Array.isArray(json?.data) ? json.data : [];
+  if (!res.ok) {
+    // Return the raw response body so we can see what Expo didn’t like
+    return {
+      okCount: 0,
+      errors: [
+        `HTTP ${res.status} ${res.statusText}: ${text.slice(0, 500)}`
+      ]
+    };
+  }
+  const tickets = Array.isArray(parsed?.data) ? parsed.data : [];
   let okCount = 0;
   const errors = [];
   for (const t of tickets){
-    if (t?.status === "ok") okCount++;
-    else if (t?.status === "error") errors.push(String(t?.message || "expo error"));
+    if (t?.status === "ok") {
+      okCount++;
+    } else if (t?.status === "error") {
+      const details = [
+        t?.message,
+        t?.details?.error,
+        t?.details?.fault,
+        t?.details?.reason
+      ].filter(Boolean).join(" | ");
+      errors.push(details || "expo error");
+    }
+  }
+  // If Expo responded with no tickets array, surface the body
+  if (!tickets.length && parsed == null) {
+    errors.push(`Unexpected response: ${text.slice(0, 500)}`);
   }
   return {
     okCount,

@@ -23,7 +23,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import ConfettiCannon from 'react-native-confetti-cannon';
+import LottieView from 'lottie-react-native';
 import { useFonts, Tektur_400Regular, Tektur_700Bold } from '@expo-google-fonts/tektur';
 import { supabase } from '../lib/supabase';
 import { saveGameCompleted, getCounts, API_BASE } from '../lib/api';
@@ -1078,7 +1078,7 @@ export default function LiveGameMobile() {
               p_fact: fact,
             });
 
-          } 
+          }
         }
       } catch {
         // swallow — no fact shown if both cache and API fail
@@ -1420,6 +1420,18 @@ export default function LiveGameMobile() {
 
   const saveGameRecord = async (won, attemptsOverride) => {
     try {
+      // --- Resolve auth FIRST and keep it stable for the whole function
+      const [{ data: sess }, { data: authData }] = await Promise.all([
+        supabase.auth.getSession(),
+        supabase.auth.getUser(),
+      ]);
+      const uid = authData?.user?.id || null;
+      if (!uid) {
+        // Don’t hit the server with an empty user — this is what caused {"error":"Missing userId in request"}
+        console.error('[saveGameRecord] No user id available at save time; aborting save to avoid server error.');
+        return null;
+      }
+
       const playerIdNumeric = Number(gameData?.id);
       if (!playerIdNumeric || Number.isNaN(playerIdNumeric)) throw new Error('Missing playerData.id');
 
@@ -1448,10 +1460,8 @@ export default function LiveGameMobile() {
         is_elimination_game: !!elimination,
       };
 
+      // --- Elimination flow: write games_records + RPC with the same uid we resolved above
       if (elimination?.roundId && elimination?.tournamentId) {
-        const { data: userInfo } = await supabase.auth.getUser();
-        const uid = userInfo?.user?.id || null;
-
         const { data: grInsert, error: grErr } = await supabase
           .from('games_records')
           .insert([{
@@ -1483,14 +1493,20 @@ export default function LiveGameMobile() {
         return true;
       }
 
+      // --- Regular/Daily flow: pass the SAME uid into the body (no inline getUser() that can race to null)
       const body = {
-        userId: (await supabase.auth.getUser())?.data?.user?.id || null,
+        userId: uid,
         playerData,
         gameStats,
         is_elimination_game: !!elimination,
       };
+
+      // keep using your helper; it already posts to your API
       const resp = await saveGameCompleted(body);
-      if (resp && resp.error) { console.error('[saveGameCompleted] error:', resp.error); return null; }
+      if (resp && resp.error) {
+        console.error('[saveGameCompleted] error:', resp.error);
+        return null;
+      }
       return true;
     } catch (err) {
       console.error('Error in saveGameRecord:', err);
@@ -1959,20 +1975,28 @@ export default function LiveGameMobile() {
 
       </Modal>
 
-
-
       {/* Confetti (win) */}
       {showConfetti && (
-        <ConfettiCannon
-          count={120}
-          origin={{ x: screenW / 2, y: 0 }}
-          fadeOut
-          autoStart
+        <LottieView
+          source={require('../assets/animations/confetti.json')}
+          autoPlay
+          loop={false}
+          style={StyleSheet.absoluteFill}
+          pointerEvents="none"
         />
       )}
 
-      {/* Emoji Rain (loss) — no parent state updates to avoid useInsertionEffect warning */}
-      {showEmojiRain && <EmojiRain />}
+      {/* Lost animation (lose) */}
+      {showEmojiRain && (
+        <LottieView
+          source={require('../assets/animations/lost.json')}
+          autoPlay
+          loop={false}
+          style={StyleSheet.absoluteFill}
+          pointerEvents="none"
+        />
+      )}
+
     </Animated.View>
   );
 }
@@ -2074,66 +2098,6 @@ function ClubPill({ logo, name, flag }) {
         {flag ? <Image source={{ uri: flag }} style={styles.clubFlag} /> : null}
       </View>
       <Text numberOfLines={1} style={styles.clubName}>{name || 'Unknown'}</Text>
-    </View>
-  );
-}
-
-/** Emoji Rain overlay (loss effect) - JS-only, no parent state updates */
-function EmojiRain() {
-  const { width, height } = Dimensions.get('window');
-  const EMOJIS = ['😭', '💀', '☠️', '😫', '🤬', '😢'];
-  const COUNT = 26;
-
-  const items = useRef(
-    Array.from({ length: COUNT }).map(() => ({
-      x: Math.random() * (width - 30) + 15,
-      delay: Math.floor(Math.random() * 800),
-      size: Math.floor(Math.random() * 10) + 22, // 22-32
-      fall: new Animated.Value(0),
-      rotDir: Math.random() > 0.5 ? 1 : -1,
-    }))
-  ).current;
-
-  useEffect(() => {
-    const anims = items.map((it) =>
-      Animated.timing(it.fall, {
-        toValue: 1,
-        duration: 2000 + Math.floor(Math.random() * 1200),
-        delay: it.delay,
-        useNativeDriver: true,
-      })
-    );
-    Animated.stagger(70, anims).start();
-  }, [items]);
-
-  return (
-    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-      {items.map((it, idx) => {
-        const translateY = it.fall.interpolate({
-          inputRange: [0, 1],
-          outputRange: [-40, height + 40],
-        });
-        const rotate = it.fall.interpolate({
-          inputRange: [0, 1],
-          outputRange: ['0deg', `${it.rotDir * 360}deg`],
-        });
-        const emoji = EMOJIS[idx % EMOJIS.length];
-        return (
-          <Animated.Text
-            key={idx}
-            style={{
-              position: 'absolute',
-              left: it.x,
-              top: -40,
-              transform: [{ translateY }, { rotate }],
-              fontSize: it.size,
-              fontFamily: 'Tektur_400Regular',
-            }}
-          >
-            {emoji}
-          </Animated.Text>
-        );
-      })}
     </View>
   );
 }

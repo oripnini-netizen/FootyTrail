@@ -16,7 +16,10 @@
       }
     },
     "preview": {
-      "distribution": "store",
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
       "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_API_BASE": "https://footytrail.up.railway.app/api",

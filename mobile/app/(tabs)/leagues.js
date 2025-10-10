@@ -21,7 +21,6 @@ import {
 } from "react-native";
 import { supabase } from "../../lib/supabase";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { KeyboardAwareScrollView } from "react-native-keyboard-aware-scroll-view";
 import { useFonts, Tektur_400Regular, Tektur_700Bold } from "@expo-google-fonts/tektur";
 
 /* =========================
@@ -697,11 +696,10 @@ function CreateLeagueModal({
             </View>
 
             {/* Body (scrollable) */}
-            <KeyboardAwareScrollView
+            <ScrollView
               style={{ paddingHorizontal: 12, paddingVertical: 0 }}
               contentContainerStyle={{ paddingBottom: 4 }}
               keyboardShouldPersistTaps="handled"
-              enableOnAndroid
               showsVerticalScrollIndicator={true}
             >
               <CreateLeaguePanel
@@ -711,7 +709,8 @@ function CreateLeagueModal({
                 search={search}
                 actions={actions}
               />
-            </KeyboardAwareScrollView>
+            </ScrollView>
+
           </View>
         </KeyboardAvoidingView>
 

@@ -712,7 +712,7 @@ export default function TutorialScreen() {
 
           {/* Splash image to make it lively */}
           <Image
-            source={require("../assets/images/footytrail_splash-icon.png")}
+            source={require("../assets/images/footytrail_splash_icon.png")}
             resizeMode="contain"
             style={{ width: "100%", height: 400, marginTop: 12, borderRadius: 16 }}
           />
@@ -729,12 +729,12 @@ export default function TutorialScreen() {
           {/* side-by-side screenshots */}
           <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
             <Image
-              source={require("../assets/images/live-game_screenshot1.png")}
+              source={require("../assets/images/live_game_screenshot1.png")}
               resizeMode="cover"
               style={{ width: "50%", height: 320, borderRadius: 12 }}
             />
             <Image
-              source={require("../assets/images/live-game_screenshot2.png")}
+              source={require("../assets/images/live_game_screenshot2.png")}
               resizeMode="cover"
               style={{ width: "50%", height: 320, borderRadius: 12 }}
             />
@@ -760,12 +760,12 @@ export default function TutorialScreen() {
 
           <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
             <Image
-              source={require("../assets/images/daily-screenshot.png")}
+              source={require("../assets/images/daily_screenshot.png")}
               resizeMode="cover"
               style={{ flex: 1, height: 360, borderRadius: 12 }}
             />
             <Image
-              source={require("../assets/images/leaderboard-screenshot.png")}
+              source={require("../assets/images/leaderboard_screenshot.png")}
               resizeMode="cover"
               style={{ flex: 1, height: 360, borderRadius: 12 }}
             />
@@ -783,7 +783,7 @@ export default function TutorialScreen() {
           </Text>
 
           <Image
-            source={require("../assets/images/dailychallenge-screenshot.png")}
+            source={require("../assets/images/dailychallenge_screenshot.png")}
             resizeMode="cover"
             style={{ width: "100%", height: 380, borderRadius: 12, marginTop: 12 }}
           />
@@ -799,7 +799,7 @@ export default function TutorialScreen() {
             </Text>
 
             <Image
-              source={require("../assets/images/elimination-screenshot.png")}
+              source={require("../assets/images/elimination_screenshot.png")}
               resizeMode="cover"
               style={{ width: "100%", height: 380, borderRadius: 12, marginTop: 12 }}
             />
@@ -815,7 +815,7 @@ export default function TutorialScreen() {
           </Text>
 
           <Image
-            source={require("../assets/images/leagues-screenshot.png")}
+            source={require("../assets/images/leagues_screenshot.png")}
             resizeMode="cover"
             style={{ width: "100%", height: 400, borderRadius: 12, marginTop: 12 }}
           />
