@@ -1,4 +1,4 @@
-# Dependencies
+﻿# Dependencies
 node_modules/
 client/node_modules/
 .pnp/
@@ -52,4 +52,10 @@ out/
 **/node_modules
 
 # Firebase / Google services config
-mobile/google-services.jsonmobile/google-services.json
+mobile/google-services.json
+
+# Local cleanup artifacts
+/bfg.jar
+/bfg-*.jar
+/FootyTrail-clean.git/
+/FootyTrail-clean.git.bfg-report/
