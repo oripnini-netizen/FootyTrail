@@ -50,3 +50,6 @@ Thumbs.db
 out/
 .vercel
 **/node_modules
+
+# Firebase / Google services config
+mobile/google-services.jsonmobile/google-services.json
